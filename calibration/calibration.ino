@@ -10,7 +10,7 @@ float MagMinZ, MagMaxZ;
 long lastDisplayTime;
 
 void setup(void) {
-  Serial.begin(115200);
+  Serial.begin(9600);
   while (!Serial)
     delay(10); // will pause Zero, Leonardo, etc until serial console opens
 
@@ -18,7 +18,7 @@ void setup(void) {
   Serial.println("");
 
   /* Initialise the sensor */
-  if (!mag.begin(MMC56X3_DEFAULT_ADDRESS, &Wire)) {  // I2C mode
+  if (!mag.begin(MMC56X3_DEFAULT_ADDRESS, &Wire1)) {  // I2C mode
     /* There was a problem detecting the MMC5603 ... check your connections */
     Serial.println("Ooops, no MMC5603 detected ... Check your wiring!");
     while (1) delay(10);
@@ -46,8 +46,14 @@ void loop(void)
 
   if ((millis() - lastDisplayTime) > 1000)  // display once/second
   {
-    Serial.print("Mag Minimums: "); Serial.print(MagMinX); Serial.print("  ");Serial.print(MagMinY); Serial.print("  "); Serial.print(MagMinZ); Serial.println();
-    Serial.print("Mag Maximums: "); Serial.print(MagMaxX); Serial.print("  ");Serial.print(MagMaxY); Serial.print("  "); Serial.print(MagMaxZ); Serial.println(); Serial.println();
-    lastDisplayTime = millis();
+      Serial.println("// Calibration values for magnetometer");
+      Serial.print("float magXmax = "); Serial.print(MagMaxX, 2); Serial.println(";");
+      Serial.print("float magYmax = "); Serial.print(MagMaxY, 2); Serial.println(";");
+      Serial.print("float magZmax = "); Serial.print(MagMaxZ, 2); Serial.println(";");
+      Serial.print("float magXmin = "); Serial.print(MagMinX, 2); Serial.println(";");
+      Serial.print("float magYmin = "); Serial.print(MagMinY, 2); Serial.println(";");
+      Serial.print("float magZmin = "); Serial.print(MagMinZ, 2); Serial.println(";");
+      Serial.println();
+      lastDisplayTime = millis();
   }
 }

@@ -29,12 +29,12 @@ GPSReader gps(gpsSerial);
 Adafruit_MMC5603 compass = Adafruit_MMC5603(12345);
 
 // Calibration values for magnetometer
-float magXmax = 0.00;
-float magYmax = 0.00;
-float magZmax = 0.00;
-float magXmin = 0.00;
-float magYmin = 0.00;
-float magZmin = 0.00;
+float magXmax = 31.91;
+float magYmax = 101.72;
+float magZmax = 54.58;
+float magXmin = -73.95;
+float magYmin = -6.86;
+float magZmin = -55.41;
 
 // Calculated offsets (hard iron calibration)
 float magXoffset = (magXmax + magXmin) / 2.0; // -27.015
