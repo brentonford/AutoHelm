@@ -51,6 +51,11 @@ const float DESTINATION_LON = 151.718029;  // Longitude in decimal degrees
 float latest_distance = 0;
 float latest_bearing = 0;
 
+float calculate_distance(float lat1, float lon1, float lat2, float lon2);
+float calculate_bearing(float lat1, float lon1, float lat2, float lon2);
+void draw_arrow(float angle, int center_x, int center_y, int size);
+float read_heading();
+
 void setup() {
   // Initialize serial for debugging
   Serial.begin(9600);
@@ -97,6 +102,7 @@ void setup() {
   display.display();
   delay(2000);
 }
+
 
 void loop() {
   // Clear the display
