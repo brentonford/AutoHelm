@@ -5,6 +5,8 @@
 #include <SoftwareSerial.h>
 #include <math.h>
 #include "GPSParser.h"
+#include "WatersnakeRFController.h"
+
 
 // OLED display configuration
 #define SCREEN_WIDTH 128
@@ -55,6 +57,8 @@ float calculate_distance(float lat1, float lon1, float lat2, float lon2);
 float calculate_bearing(float lat1, float lon1, float lat2, float lon2);
 void draw_arrow(float angle, int center_x, int center_y, int size);
 float read_heading();
+
+WatersnakeRFController remote;
 
 void setup() {
   // Initialize serial for debugging
