@@ -137,9 +137,9 @@ void loop() {
   }
   
   // Update the display
-  updateDisplay(gpsData, heading, latest_distance, latest_bearing);
+  updateDisplay(gps_data, heading, latest_distance, latest_bearing);
 
-  printDebugInfo(gpsData, heading);
+  printDebugInfo(gps_data, heading);
   
   // Update at 10 Hz
   delay(100);
