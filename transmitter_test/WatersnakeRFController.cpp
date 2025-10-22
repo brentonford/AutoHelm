@@ -17,12 +17,17 @@ void WatersnakeRFController::sendBit(bool bit) {
 }
 
 void WatersnakeRFController::sendCode(const char* hexCode) {
+    if (hexCode == nullptr) return;
+    
     digitalWrite(txPin, HIGH);
     delayMicroseconds(SYNC_PULSE);
     digitalWrite(txPin, LOW);
     delayMicroseconds(GAP);
     
-    int hexLen = strlen(hexCode);
+    int hexLen = 0;
+    while (hexCode[hexLen] != '\0' && hexLen < 100) {
+        hexLen++;
+    }
     
     for (int i = 0; i < hexLen; i++) {
         char c = hexCode[i];

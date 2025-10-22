@@ -53,108 +53,118 @@ const float DESTINATION_LON = 151.718029;  // Longitude in decimal degrees
 float latest_distance = 0;
 float latest_bearing = 0;
 
+// Function declarations
 float calculate_distance(float lat1, float lon1, float lat2, float lon2);
 float calculate_bearing(float lat1, float lon1, float lat2, float lon2);
 void draw_arrow(float angle, int center_x, int center_y, int size);
 float read_heading();
-void adjustHeading(float relativeAngle, WatersnakeRFController& remote);
+void adjustHeading(float relativeAngle, WatersnakeRFController* remote);
 void updateDisplay(GPSData gpsData, float heading, float distance, float bearing);
 void printDebugInfo(GPSData gpsData, float heading);
 
-WatersnakeRFController remote;
+WatersnakeRFController* remote = nullptr;
 
 void setup() {
   // Initialize serial for debugging
-  Serial.begin(9600);
-  Serial.println("GPS Navigation Starting...");
-  
+    Serial.begin(9600);
+    delay(100);
+    Serial.println("GPS Navigation Starting...");
+    
   // Initialize I2C and OLED display
-  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-    Serial.println(F("SSD1306 allocation failed"));
+    if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+        Serial.println(F("SSD1306 allocation failed"));
     for(;;); // Don't proceed, loop forever
   } else {
     Serial.println("OLED initialised!");
   }
-  
+    
   // Initialize GPS
-  gpsSerial.begin(9600);
-  
+    gpsSerial.begin(9600);
+    Serial.println("GPS initialised!");
+    
   // Initialize magnetometer
-  if (!compass.begin(MMC56X3_DEFAULT_ADDRESS, &Wire1)) {
-    Serial.println("Ooops, no MMC5603 detected ... Check your wiring!");
-    while (1) delay(10);
+    if (!compass.begin(MMC56X3_DEFAULT_ADDRESS, &Wire1)) {
+        Serial.println("Ooops, no MMC5603 detected ... Check your wiring!");
+        while (1) delay(10);
   } else {
     Serial.println("Magnetometer initialised!");
   }
-  
+    remote = new WatersnakeRFController(7);
+    Serial.println("Transmitter initialised!");
+    
   // Calculate scaling factors for magnetometer
-  float xRange = magXmax - magXmin;
-  float yRange = magYmax - magYmin;
-  float zRange = magZmax - magZmin;
-  
+    float xRange = magXmax - magXmin;
+    float yRange = magYmax - magYmin;
+    float zRange = magZmax - magZmin;
+    
   // Calculate average range for scaling
-  avgDelta = (xRange + yRange + zRange) / 3.0;
-  
+    avgDelta = (xRange + yRange + zRange) / 3.0;
+    
   // Set scales (with safety checks)
-  magXscale = (xRange > 0.1) ? avgDelta / xRange : 1.0;
-  magYscale = (yRange > 0.1) ? avgDelta / yRange : 1.0;
-  magZscale = (zRange > 0.1) ? avgDelta / zRange : 1.0;
-  
+    magXscale = (xRange > 0.1) ? avgDelta / xRange : 1.0;
+    magYscale = (yRange > 0.1) ? avgDelta / yRange : 1.0;
+    magZscale = (zRange > 0.1) ? avgDelta / zRange : 1.0;
+    
   // Clear the display
-  display.clearDisplay();
-  display.display();
-
+    display.clearDisplay();
+    display.display();
+    
   // Show startup message
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(1, 5);
-  display.print("GPS Navigation System");
-  display.setCursor(1, 30);
-  display.print("Initialising...");
-  display.setCursor(1, 45);
-  display.print("Testing transmitter...");
-  display.display();
-
-  Serial.println("Test Transmitter: sendRight...");
-  remote.sendRight();
-  delay(2000);
-  Serial.println("Test Transmitter: sendLeft...");
-  remote.sendLeft();
-
-  delay(5000);
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(1, 5);
+    display.print("GPS Navigation System");
+    display.setCursor(1, 30);
+    display.print("Initialising...");
+    display.setCursor(1, 45);
+    display.print("Testing transmitter...");
+    display.display();
+    
+    Serial.println("Test Transmitter");
+    Serial.println("sending RIGHT...");
+    remote->sendRight();
+    
+    delay(2000);
+    
+    Serial.println("sending LEFT...");
+    remote->sendLeft();
+    
+    delay(2000);
+    
+    Serial.println("Setup complete!");
 }
 
 
 void loop() {
   // Clear the display
-  display.clearDisplay();
-  
+    display.clearDisplay();
+    
   // Get compass heading
-  float heading = read_heading();
+    float heading = read_heading();
   
   // Get current GPS data
-  GPSData gps_data = gps.get_data();
-  
+    GPSData gps_data = gps.get_data();
+    
   // If we have valid GPS data, calculate distance and bearing
-  if (gps_data.has_fix) {
+    if (gps_data.has_fix) {
     // Calculate distance to destination
-    latest_distance = calculate_distance(gps_data.latitude, gps_data.longitude, DESTINATION_LAT, DESTINATION_LON);
+        latest_distance = calculate_distance(gps_data.latitude, gps_data.longitude, DESTINATION_LAT, DESTINATION_LON);
     
     // Calculate bearing to destination
-    latest_bearing = calculate_bearing(gps_data.latitude, gps_data.longitude, DESTINATION_LAT, DESTINATION_LON);
-    
+        latest_bearing = calculate_bearing(gps_data.latitude, gps_data.longitude, DESTINATION_LAT, DESTINATION_LON);
+        
     // Calculate the difference between bearing to destination and current heading
-    float relative_angle = fmod((latest_bearing - heading + 360.0), 360.0);
+        float relative_angle = fmod((latest_bearing - heading + 360.0), 360.0);
 
-    adjustHeading(relative_angle, remote);
+        adjustHeading(relative_angle, remote);
 
-  }
-  
+    }
+    
   // Update the display
-  updateDisplay(gps_data, heading, latest_distance, latest_bearing);
+    updateDisplay(gps_data, heading, latest_distance, latest_bearing);
 
-  printDebugInfo(gps_data, heading);
-  
+    printDebugInfo(gps_data, heading);
+    
   // Update at 10 Hz
-  delay(100);
+    delay(100);
 }
