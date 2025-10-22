@@ -59,6 +59,7 @@ void draw_arrow(float angle, int center_x, int center_y, int size);
 float read_heading();
 void adjustHeading(float relativeAngle, WatersnakeRFController& remote);
 void updateDisplay(GPSData gpsData, float heading, float distance, float bearing);
+void printDebugInfo(GPSData gpsData, float heading);
 
 WatersnakeRFController remote;
 
@@ -133,25 +134,12 @@ void loop() {
 
     adjustHeading(relative_angle, remote);
 
-    updateDisplay(gpsData, heading, latest_distance, latest_bearing);
   }
   
-  // Print debug information to the serial console
-  Serial.print("Satellites: ");
-  Serial.print(gps_data.satellites);
-  Serial.print(", Position: ");
-  Serial.print(gps_data.latitude, 6);
-  Serial.print(", ");
-  Serial.print(gps_data.longitude, 6);
-  Serial.print(", Altitude: ");
-  Serial.print(gps_data.altitude);
-  Serial.print(" m, Fix: ");
-  Serial.print(gps_data.has_fix ? "Yes" : "No");
-  Serial.print(", Heading: ");
-  Serial.println(heading);
-  
   // Update the display
-  display.display();
+  updateDisplay(gpsData, heading, latest_distance, latest_bearing);
+
+  printDebugInfo(gpsData, heading);
   
   // Update at 10 Hz
   delay(100);
