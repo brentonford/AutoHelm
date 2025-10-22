@@ -2,12 +2,12 @@ void updateDisplay(GPSData gpsData, float heading, float distance, float bearing
     display.clearDisplay();
     
     if (!gpsData.has_fix) {
-        display.setTextSize(1);
         display.setTextColor(SSD1306_WHITE);
-        display.setCursor(14, 20);
-        display.print("Waiting for GPS");
-        display.setCursor(44, 35);
-        display.print("No Fix");
+        display.setCursor(44, 5);
+        display.print("NO FIX!");
+        display.setTextSize(1);
+        display.setCursor(10, 30);
+        display.print("Waiting for GPS...");
         display.setCursor(24, 50);
         display.print("Satellites: ");
         display.print(gpsData.satellites);

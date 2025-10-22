@@ -103,11 +103,12 @@ void setup() {
   // Show startup message
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("GPS Navigation System");
-  display.println("Initializing...");
+  display.setCursor(1, 5);
+  display.print("GPS Navigation System");
+  display.setCursor(1, 30);
+  display.print("Initialising...");
   display.display();
-  delay(2000);
+  delay(5000);
 }
 
 
