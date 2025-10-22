@@ -58,6 +58,7 @@ float calculate_bearing(float lat1, float lon1, float lat2, float lon2);
 void draw_arrow(float angle, int center_x, int center_y, int size);
 float read_heading();
 void adjustHeading(float relativeAngle, WatersnakeRFController& remote);
+void updateDisplay(GPSData gpsData, float heading, float distance, float bearing);
 
 WatersnakeRFController remote;
 
@@ -129,70 +130,11 @@ void loop() {
     
     // Calculate the difference between bearing to destination and current heading
     float relative_angle = fmod((latest_bearing - heading + 360.0), 360.0);
-    
-    // Draw the arrow at the center of the display
-    draw_arrow(relative_angle, 30, 26, 26);
-    
-    // Show distance
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    if (latest_distance >= 1000) {
-      display.setCursor(4, 57);
-      display.print(latest_distance/1000, 1);
-      display.print(" km");
-    } else {
-      display.setCursor(4, 57);
-      display.print((int)latest_distance);
-      display.print(" m");
-    }
-    
-    // Show altitude
-    display.setCursor(94, 57);
-    display.print(gps_data.altitude, 1);
-    
-    // Show current coordinates
-    display.setCursor(64, 2);
-    display.print(gps_data.latitude, 6);
-    display.setCursor(64, 12);
-    display.print(gps_data.longitude, 6);
-    
-    // Show destination coordinates
-    display.setCursor(64, 30);
-    display.print(DESTINATION_LAT, 6);
-    display.setCursor(64, 40);
-    display.print(DESTINATION_LON, 6);
-    
-    // Draw the partial octagon around the arrow
-    display.drawLine(47, 0, 58, 11, SSD1306_WHITE);
-    display.drawLine(58, 11, 58, 38, SSD1306_WHITE);
-    display.drawLine(58, 38, 47, 49, SSD1306_WHITE);
-    display.drawLine(0, 11, 11, 0, SSD1306_WHITE);
-    display.drawLine(0, 11, 0, 38, SSD1306_WHITE);          
-    display.drawLine(0, 38, 11, 49, SSD1306_WHITE);
-    
-    // Draw the partial box around altitude
-    display.drawLine(86, 54, 86, 64, SSD1306_WHITE);
-    display.drawLine(86, 54, 128, 54, SSD1306_WHITE);
-    
-    // Draw the line between the current coords and the target
-    display.drawLine(70, 24, 128, 24, SSD1306_WHITE);
-  } else {
-    // No GPS fix - show "Waiting for GPS" and satellite count if available
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(14, 20);
-    display.print("Waiting for GPS");
-    display.setCursor(44, 35);
-    display.print("No Fix");
-    
-    // Show satellite count
-    display.setCursor(24, 50);
-    display.print("Satellites: ");
-    display.print(gps_data.satellites);
-  }
 
-  float relative_angle = fmod((latest_bearing - heading + 360.0), 360.0);
     adjustHeading(relative_angle, remote);
+
+    updateDisplay(gpsData, heading, latest_distance, latest_bearing);
+  }
   
   // Print debug information to the serial console
   Serial.print("Satellites: ");
