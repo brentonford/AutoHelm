@@ -1,5 +1,14 @@
 void printDebugInfo(GPSData gpsData, float heading) {
-    Serial.print("Satellites: ");
+    static unsigned long lastAdjustment = 0;
+    unsigned long currentTime = millis();
+    
+    if (currentTime - lastAdjustment < 2000) {
+        return;
+    }
+
+    Serial.print("Time: ");
+    Serial.print(gpsData.time);
+    Serial.print(", Satellites: ");
     Serial.print(gpsData.satellites);
     Serial.print(", Position: ");
     Serial.print(gpsData.latitude, 6);
@@ -11,4 +20,6 @@ void printDebugInfo(GPSData gpsData, float heading) {
     Serial.print(gpsData.has_fix ? "Yes" : "No");
     Serial.print(", Heading: ");
     Serial.println(heading);
+
+    lastAdjustment = currentTime;
 }
