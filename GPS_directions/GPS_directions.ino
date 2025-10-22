@@ -57,6 +57,7 @@ float calculate_distance(float lat1, float lon1, float lat2, float lon2);
 float calculate_bearing(float lat1, float lon1, float lat2, float lon2);
 void draw_arrow(float angle, int center_x, int center_y, int size);
 float read_heading();
+void adjustHeading(float relativeAngle, WatersnakeRFController& remote);
 
 WatersnakeRFController remote;
 
@@ -189,6 +190,9 @@ void loop() {
     display.print("Satellites: ");
     display.print(gps_data.satellites);
   }
+
+  float relative_angle = fmod((latest_bearing - heading + 360.0), 360.0);
+    adjustHeading(relative_angle, remote);
   
   // Print debug information to the serial console
   Serial.print("Satellites: ");
