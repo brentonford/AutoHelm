@@ -12,7 +12,7 @@ private:
     void sendPattern2();
 
 public:
-    WatersnakeRFController(int transmitPin = A4);
+    WatersnakeRFController(int transmitPin = D4);
     void sendRight(int repetitions = 3);
     void sendLeft(int repetitions = 3);
 };

@@ -72,6 +72,8 @@ void setup() {
   if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("SSD1306 allocation failed"));
     for(;;); // Don't proceed, loop forever
+  } else {
+    Serial.println("OLED initialised!");
   }
   
   // Initialize GPS
@@ -81,6 +83,8 @@ void setup() {
   if (!compass.begin(MMC56X3_DEFAULT_ADDRESS, &Wire1)) {
     Serial.println("Ooops, no MMC5603 detected ... Check your wiring!");
     while (1) delay(10);
+  } else {
+    Serial.println("Magnetometer initialised!");
   }
   
   // Calculate scaling factors for magnetometer
@@ -107,7 +111,16 @@ void setup() {
   display.print("GPS Navigation System");
   display.setCursor(1, 30);
   display.print("Initialising...");
+  display.setCursor(1, 45);
+  display.print("Testing transmitter...");
   display.display();
+
+  Serial.println("Test Transmitter: sendRight...");
+  remote.sendRight();
+  delay(2000);
+  Serial.println("Test Transmitter: sendLeft...");
+  remote.sendLeft();
+
   delay(5000);
 }
 

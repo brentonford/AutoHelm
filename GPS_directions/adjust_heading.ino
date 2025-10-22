@@ -7,14 +7,14 @@ void adjustHeading(float relativeAngle, WatersnakeRFController& remote) {
     }
     
     if (relativeAngle > 5 && relativeAngle < 181) {
-        Serial.print("Adjust Heading: sendRight. ");
+        Serial.println("Adjust Heading: sendRight. ");
         remote.sendRight();
         lastAdjustment = currentTime;
         return;
     }
     
     if (relativeAngle < 355 && relativeAngle > 180) {
-        Serial.print("Adjust Heading: sendLeft. ");
+        Serial.println("Adjust Heading: sendLeft. ");
         remote.sendLeft();
         lastAdjustment = currentTime;
         return;
