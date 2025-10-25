@@ -11,8 +11,8 @@ struct ArduinoNavigationStatus: Codable {
     let currentLon: Double
     let altitude: Double
     let heading: Float
-    let distance: Float
     let bearing: Float
+    let distance: Float
     let targetLat: Double
     let targetLon: Double
     
@@ -224,6 +224,41 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 }
 
+// MARK: - Search Manager
+class SearchManager: ObservableObject {
+    @Published var searchResults: [MKMapItem] = []
+    @Published var isSearching = false
+    
+    func searchForPlaces(query: String, region: MKCoordinateRegion) {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            searchResults = []
+            return
+        }
+        
+        isSearching = true
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = query
+        request.region = region
+        
+        let search = MKLocalSearch(request: request)
+        search.start { [weak self] response, error in
+            DispatchQueue.main.async {
+                self?.isSearching = false
+                if let response = response {
+                    self?.searchResults = response.mapItems
+                } else {
+                    self?.searchResults = []
+                }
+            }
+        }
+    }
+    
+    func clearSearch() {
+        searchResults = []
+        isSearching = false
+    }
+}
+
 // MARK: - Waypoint Model
 struct Waypoint: Identifiable, Codable {
     let id: UUID
@@ -298,6 +333,24 @@ class WaypointManager: ObservableObject {
         saveToStorage()
     }
     
+    func fetchLocationName(for coordinate: CLLocationCoordinate2D, completion: @escaping (String) -> Void) {
+        let location = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        let geocoder = CLGeocoder()
+        
+        geocoder.reverseGeocodeLocation(location) { placemarks, error in
+            if let placemark = placemarks?.first {
+                let name = placemark.locality ?? 
+                          placemark.subLocality ?? 
+                          placemark.thoroughfare ??
+                          placemark.administrativeArea ?? 
+                          "Unknown Location"
+                completion(name)
+            } else {
+                completion("Unknown Location")
+            }
+        }
+    }
+    
     private func saveToStorage() {
         if let encoded = try? JSONEncoder().encode(savedWaypoints) {
             UserDefaults.standard.set(encoded, forKey: "savedWaypoints")
@@ -319,9 +372,12 @@ class OfflineTileManager: ObservableObject {
     @Published var downloadedTilesCount: Int = 0
     @Published var totalTilesCount: Int = 0
     @Published var downloadedRegions: [DownloadedRegion] = []
+    @Published var isUpdatingAll: Bool = false
+    @Published var updateProgress: Double = 0.0
     
     private let fileManager = FileManager.default
     private var downloadTasks: [URLSessionDataTask] = []
+    private let sixMonthsInSeconds: TimeInterval = 180 * 24 * 60 * 60
     
     var tilesDirectory: URL {
         let paths = fileManager.urls(for: .documentDirectory, in: .userDomainMask)
@@ -332,6 +388,7 @@ class OfflineTileManager: ObservableObject {
     init() {
         createTilesDirectoryIfNeeded()
         loadDownloadedRegions()
+        checkForAutomaticUpdates()
     }
     
     private func createTilesDirectoryIfNeeded() {
@@ -340,22 +397,97 @@ class OfflineTileManager: ObservableObject {
         }
     }
     
-    func downloadTiles(region: MKCoordinateRegion, minZoom: Int, maxZoom: Int, completion: @escaping (UUID) -> Void) {
-        isDownloading = true
-        downloadProgress = 0.0
-        downloadedTilesCount = 0
+    private func checkForAutomaticUpdates() {
+        let lastCheck = UserDefaults.standard.object(forKey: "lastUpdateCheck") as? Date ?? Date.distantPast
+        let shouldUpdate = Date().timeIntervalSince(lastCheck) > sixMonthsInSeconds
+        
+        if shouldUpdate && !downloadedRegions.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                self.updateAllMapsAutomatically()
+            }
+        }
+    }
+    
+    func updateAllMaps() {
+        guard !downloadedRegions.isEmpty && !isUpdatingAll else { return }
+        
+        isUpdatingAll = true
+        updateProgress = 0.0
+        let totalRegions = downloadedRegions.count
+        var completedRegions = 0
+        
+        let group = DispatchGroup()
+        
+        for (index, region) in downloadedRegions.enumerated() {
+            group.enter()
+            
+            let kmToDegrees = region.radiusKm / 111.0
+            let mapRegion = MKCoordinateRegion(
+                center: region.center,
+                span: MKCoordinateSpan(latitudeDelta: kmToDegrees, longitudeDelta: kmToDegrees)
+            )
+            
+            downloadTiles(region: mapRegion, minZoom: 10, maxZoom: 15, isUpdate: true) { regionId in
+                completedRegions += 1
+                DispatchQueue.main.async {
+                    self.updateProgress = Double(completedRegions) / Double(totalRegions)
+                    if let regionIndex = self.downloadedRegions.firstIndex(where: { $0.id == region.id }) {
+                        self.downloadedRegions[regionIndex].lastUpdated = Date()
+                    }
+                    self.saveDownloadedRegions()
+                }
+                group.leave()
+            }
+        }
+        
+        group.notify(queue: .main) {
+            self.isUpdatingAll = false
+            self.updateProgress = 1.0
+            UserDefaults.standard.set(Date(), forKey: "lastUpdateCheck")
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.updateProgress = 0.0
+            }
+        }
+    }
+    
+    private func updateAllMapsAutomatically() {
+        let regionsNeedingUpdate = downloadedRegions.filter { region in
+            let timeSinceUpdate = Date().timeIntervalSince(region.lastUpdated)
+            return timeSinceUpdate > sixMonthsInSeconds
+        }
+        
+        guard !regionsNeedingUpdate.isEmpty else {
+            UserDefaults.standard.set(Date(), forKey: "lastUpdateCheck")
+            return
+        }
+        
+        updateAllMaps()
+    }
+    
+    func downloadTiles(region: MKCoordinateRegion, minZoom: Int, maxZoom: Int, isUpdate: Bool = false, completion: @escaping (UUID) -> Void) {
+        if !isUpdate {
+            isDownloading = true
+            downloadProgress = 0.0
+            downloadedTilesCount = 0
+        }
         
         let tiles = calculateTiles(for: region, minZoom: minZoom, maxZoom: maxZoom)
         totalTilesCount = tiles.count
         
-        let newRegion = DownloadedRegion(
-            center: region.center,
-            radiusKm: regionSpanToKm(span: region.span),
-            name: "Loading..."
-        )
-        let regionId = newRegion.id
-        downloadedRegions.append(newRegion)
-        saveDownloadedRegions()
+        var regionId: UUID
+        if isUpdate {
+            regionId = UUID()
+        } else {
+            let newRegion = DownloadedRegion(
+                center: region.center,
+                radiusKm: regionSpanToKm(span: region.span),
+                name: "Loading..."
+            )
+            regionId = newRegion.id
+            downloadedRegions.append(newRegion)
+            saveDownloadedRegions()
+        }
         
         let group = DispatchGroup()
         
@@ -363,7 +495,7 @@ class OfflineTileManager: ObservableObject {
             group.enter()
             downloadTile(z: tile.z, x: tile.x, y: tile.y) { success in
                 DispatchQueue.main.async {
-                    if success {
+                    if success && !isUpdate {
                         self.downloadedTilesCount += 1
                         self.downloadProgress = Double(self.downloadedTilesCount) / Double(self.totalTilesCount)
                     }
@@ -373,8 +505,10 @@ class OfflineTileManager: ObservableObject {
         }
         
         group.notify(queue: .main) {
-            self.isDownloading = false
-            self.downloadProgress = 1.0
+            if !isUpdate {
+                self.isDownloading = false
+                self.downloadProgress = 1.0
+            }
             completion(regionId)
         }
     }
@@ -435,11 +569,6 @@ class OfflineTileManager: ObservableObject {
     private func downloadTile(z: Int, x: Int, y: Int, completion: @escaping (Bool) -> Void) {
         let tilePath = tilePath(z: z, x: x, y: y)
         
-        if fileManager.fileExists(atPath: tilePath.path) {
-            completion(true)
-            return
-        }
-        
         let urlString = "https://tile.openstreetmap.org/\(z)/\(x)/\(y).png"
         guard let url = URL(string: urlString) else {
             completion(false)
@@ -484,6 +613,7 @@ class OfflineTileManager: ObservableObject {
         downloadTasks.forEach { $0.cancel() }
         downloadTasks.removeAll()
         isDownloading = false
+        isUpdatingAll = false
     }
     
     func clearCache() {
@@ -538,6 +668,7 @@ struct DownloadedRegion: Identifiable, Codable {
     let center: CLLocationCoordinate2D
     let radiusKm: Double
     let downloadDate: Date
+    var lastUpdated: Date
     var name: String
     
     init(center: CLLocationCoordinate2D, radiusKm: Double, name: String = "Unnamed Region") {
@@ -545,11 +676,12 @@ struct DownloadedRegion: Identifiable, Codable {
         self.center = center
         self.radiusKm = radiusKm
         self.downloadDate = Date()
+        self.lastUpdated = Date()
         self.name = name
     }
     
     enum CodingKeys: String, CodingKey {
-        case id, centerLat, centerLon, radiusKm, downloadDate, name
+        case id, centerLat, centerLon, radiusKm, downloadDate, lastUpdated, name
     }
     
     init(from decoder: Decoder) throws {
@@ -560,6 +692,7 @@ struct DownloadedRegion: Identifiable, Codable {
         center = CLLocationCoordinate2D(latitude: lat, longitude: lon)
         radiusKm = try container.decode(Double.self, forKey: .radiusKm)
         downloadDate = try container.decode(Date.self, forKey: .downloadDate)
+        lastUpdated = try container.decodeIfPresent(Date.self, forKey: .lastUpdated) ?? downloadDate
         name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Unnamed Region"
     }
     
@@ -570,6 +703,7 @@ struct DownloadedRegion: Identifiable, Codable {
         try container.encode(center.longitude, forKey: .centerLon)
         try container.encode(radiusKm, forKey: .radiusKm)
         try container.encode(downloadDate, forKey: .downloadDate)
+        try container.encode(lastUpdated, forKey: .lastUpdated)
         try container.encode(name, forKey: .name)
     }
 }
@@ -619,29 +753,23 @@ struct ContentView: View {
     
     var body: some View {
         TabView(selection: $selectedTab) {
-            ConnectionView(bluetoothManager: bluetoothManager)
-                .tabItem {
-                    Label("Connect", systemImage: "antenna.radiowaves.left.and.right")
-                }
-                .tag(0)
-            
             WaypointMapView(locationManager: locationManager, bluetoothManager: bluetoothManager, waypointManager: waypointManager)
                 .tabItem {
                     Label("Waypoint", systemImage: "map.fill")
                 }
-                .tag(1)
+                .tag(0)
             
-            ArduinoStatusView(bluetoothManager: bluetoothManager)
+            CombinedStatusView(bluetoothManager: bluetoothManager)
                 .tabItem {
-                    Label("Status", systemImage: "gauge.with.dots.needle.67percent")
+                    Label("Status", systemImage: "antenna.radiowaves.left.and.right")
                 }
-                .tag(2)
+                .tag(1)
             
             OfflineMapsView(locationManager: locationManager, offlineTileManager: offlineTileManager)
                 .tabItem {
                     Label("Offline", systemImage: "arrow.down.circle.fill")
                 }
-                .tag(3)
+                .tag(2)
         }
         .onAppear {
             locationManager.requestAuthorization()
@@ -649,73 +777,186 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Connection View
-struct ConnectionView: View {
+// MARK: - Combined Status View
+struct CombinedStatusView: View {
     @ObservedObject var bluetoothManager: BluetoothManager
+    @State private var isConnectionSectionExpanded = false
     
     var body: some View {
         NavigationView {
-            VStack(spacing: 20) {
-                StatusCard(title: "Status", value: bluetoothManager.connectionStatus, color: bluetoothManager.isConnected ? .green : .gray)
-                
-                if bluetoothManager.isConnected {
-                    StatusCard(title: "Signal", value: "\(bluetoothManager.signalStrength) dBm", color: .blue)
-                    
-                    Button(action: {
-                        bluetoothManager.disconnect()
-                    }) {
-                        Text("Disconnect")
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.red)
-                            .foregroundColor(.white)
-                            .cornerRadius(10)
-                    }
-                    .padding(.horizontal)
-                } else {
-                    List(bluetoothManager.discoveredDevices, id: \.identifier) { device in
-                        Button(action: {
-                            bluetoothManager.connect(to: device)
-                        }) {
-                            HStack {
-                                Image(systemName: "sensor")
-                                Text(device.name ?? "Unknown Device")
-                                Spacer()
-                                Image(systemName: "chevron.right")
+            VStack(spacing: 16) {
+                VStack(spacing: 12) {
+                    HStack {
+                        Text("Connection")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        Spacer()
+                        
+                        if bluetoothManager.isConnected {
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(Color.green)
+                                    .frame(width: 8, height: 8)
+                                Text("Connected")
+                                    .font(.caption)
+                                    .foregroundColor(.green)
+                                Text("(\(bluetoothManager.signalStrength) dBm)")
+                                    .font(.caption2)
                                     .foregroundColor(.gray)
+                            }
+                            
+                            Button(action: {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    isConnectionSectionExpanded.toggle()
+                                }
+                            }) {
+                                Image(systemName: isConnectionSectionExpanded ? "chevron.up" : "chevron.down")
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
                             }
                         }
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
                     
-                    HStack(spacing: 15) {
-                        Button(action: {
-                            bluetoothManager.startScanning()
-                        }) {
-                            Text("Scan")
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(Color.blue)
-                                .foregroundColor(.white)
-                                .cornerRadius(10)
+                    if isConnectionSectionExpanded || !bluetoothManager.isConnected {
+                        ConnectionSectionView(bluetoothManager: bluetoothManager)
+                            .padding(.horizontal, 8)
+                    }
+                }
+                .background(Color.gray.opacity(0.08))
+                .cornerRadius(8)
+                .padding(.horizontal, 12)
+                
+                if bluetoothManager.isConnected {
+                    if let status = bluetoothManager.arduinoStatus {
+                        ScrollView {
+                            VStack(spacing: 12) {
+                                NavigationStatusCard(status: status)
+                                GPSStatusCard(status: status)
+                                TargetStatusCard(status: status)
+                            }
+                            .padding(.horizontal, 12)
                         }
+                    } else {
+                        VStack(spacing: 16) {
+                            Image(systemName: "clock")
+                                .font(.system(size: 48))
+                                .foregroundColor(.gray)
+                            Text("Waiting for Arduino data...")
+                                .font(.callout)
+                                .foregroundColor(.gray)
+                            Text("Make sure the Arduino is powered on and GPS has a fix")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding()
+                    }
+                } else {
+                    VStack(spacing: 16) {
+                        Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                            .font(.system(size: 48))
+                            .foregroundColor(.red)
+                        Text("Arduino not connected")
+                            .font(.callout)
+                            .foregroundColor(.red)
+                        Text("Use the connection controls above to establish connection")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding()
+                    
+                    Spacer()
+                }
+            }
+            .navigationTitle("Status")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+// MARK: - Connection Section View
+struct ConnectionSectionView: View {
+    @ObservedObject var bluetoothManager: BluetoothManager
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            if bluetoothManager.isConnected {
+                Button(action: {
+                    bluetoothManager.disconnect()
+                }) {
+                    HStack {
+                        Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                        Text("Disconnect")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(Color.red)
+                    .foregroundColor(.white)
+                    .cornerRadius(6)
+                }
+            } else {
+                if !bluetoothManager.discoveredDevices.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Available Devices")
+                            .font(.caption)
+                            .foregroundColor(.gray)
                         
-                        Button(action: {
-                            bluetoothManager.stopScanning()
-                        }) {
-                            Text("Stop")
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(Color.orange)
-                                .foregroundColor(.white)
-                                .cornerRadius(10)
+                        ForEach(bluetoothManager.discoveredDevices, id: \.identifier) { device in
+                            Button(action: {
+                                bluetoothManager.connect(to: device)
+                            }) {
+                                HStack {
+                                    Image(systemName: "sensor")
+                                        .foregroundColor(.blue)
+                                    Text(device.name ?? "Unknown Device")
+                                        .foregroundColor(.primary)
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .foregroundColor(.gray)
+                                        .font(.caption)
+                                }
+                                .padding(.vertical, 8)
+                                .padding(.horizontal, 10)
+                                .background(Color.gray.opacity(0.08))
+                                .cornerRadius(6)
+                            }
                         }
                     }
-                    .padding(.horizontal)
                 }
                 
-                Spacer()
+                HStack(spacing: 10) {
+                    Button(action: {
+                        bluetoothManager.startScanning()
+                    }) {
+                        HStack {
+                            Image(systemName: "magnifyingglass")
+                            Text("Scan")
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(6)
+                    }
+                    
+                    Button(action: {
+                        bluetoothManager.stopScanning()
+                    }) {
+                        HStack {
+                            Image(systemName: "stop.circle")
+                            Text("Stop")
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(Color.orange)
+                        .foregroundColor(.white)
+                        .cornerRadius(6)
+                    }
+                }
             }
-            .navigationTitle("Connection")
         }
     }
 }
@@ -725,6 +966,8 @@ struct WaypointMapView: View {
     @ObservedObject var locationManager: LocationManager
     @ObservedObject var bluetoothManager: BluetoothManager
     @ObservedObject var waypointManager: WaypointManager
+    @StateObject private var searchManager = SearchManager()
+    
     @State private var position: MapCameraPosition = .automatic
     @State private var selectedWaypoint: Waypoint?
     @State private var showConfirmation = false
@@ -732,6 +975,10 @@ struct WaypointMapView: View {
     @State private var editingWaypointId: UUID?
     @State private var editingWaypointName: String = ""
     @State private var hasSetInitialPosition = false
+    @State private var searchText = ""
+    @State private var showSearchResults = false
+    @State private var mapStyle: MKMapType = .standard
+    @State private var showMapStylePicker = false
     
     var body: some View {
         NavigationView {
@@ -762,6 +1009,34 @@ struct WaypointMapView: View {
                             }
                         }
                         
+                        ForEach(searchManager.searchResults, id: \.self) { item in
+                            if let coordinate = item.placemark.location?.coordinate {
+                                Annotation("", coordinate: coordinate) {
+                                    VStack(spacing: 0) {
+                                        Image(systemName: "magnifyingglass.circle.fill")
+                                            .font(.system(size: 28))
+                                            .foregroundColor(.blue)
+                                            .background(Color.white)
+                                            .clipShape(Circle())
+                                        Text(item.name ?? "")
+                                            .font(.caption2)
+                                            .foregroundColor(.white)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 3)
+                                            .background(Color.blue.opacity(0.8))
+                                            .cornerRadius(4)
+                                    }
+                                    .onTapGesture {
+                                        let waypoint = Waypoint(coordinate: coordinate, name: item.name ?? "Search Result")
+                                        selectedWaypoint = waypoint
+                                        searchManager.clearSearch()
+                                        searchText = ""
+                                        showSearchResults = false
+                                    }
+                                }
+                            }
+                        }
+                        
                         if let waypoint = selectedWaypoint, !waypoint.isSaved {
                             Annotation("", coordinate: waypoint.coordinate) {
                                 VStack(spacing: 0) {
@@ -776,25 +1051,76 @@ struct WaypointMapView: View {
                             }
                         }
                     }
+                    .mapStyle(mapStyle == .standard ? .standard : .hybrid)
                     .onTapGesture { screenCoordinate in
                         if let coordinate = proxy.convert(screenCoordinate, from: .local) {
-                            selectedWaypoint = Waypoint(coordinate: coordinate)
+                            waypointManager.fetchLocationName(for: coordinate) { locationName in
+                                let waypoint = Waypoint(coordinate: coordinate, name: locationName)
+                                selectedWaypoint = waypoint
+                            }
                         }
                     }
                 }
                 .ignoresSafeArea()
                 
-                VStack(spacing: 15) {
+                VStack(spacing: 0) {
+                    if showSearchResults && !searchManager.searchResults.isEmpty {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(searchManager.searchResults.prefix(5)), id: \.self) { item in
+                                Button(action: {
+                                    if let coordinate = item.placemark.location?.coordinate {
+                                        position = .region(MKCoordinateRegion(
+                                            center: coordinate,
+                                            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+                                        ))
+                                        let waypoint = Waypoint(coordinate: coordinate, name: item.name ?? "Search Result")
+                                        selectedWaypoint = waypoint
+                                        searchManager.clearSearch()
+                                        searchText = ""
+                                        showSearchResults = false
+                                    }
+                                }) {
+                                    HStack {
+                                        Image(systemName: "magnifyingglass")
+                                            .foregroundColor(.blue)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(item.name ?? "Unknown")
+                                                .foregroundColor(.primary)
+                                                .font(.subheadline)
+                                            if let address = item.placemark.title {
+                                                Text(address)
+                                                    .foregroundColor(.gray)
+                                                    .font(.caption)
+                                            }
+                                        }
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                }
+                                Divider()
+                            }
+                        }
+                        .background(Color.white)
+                        .cornerRadius(8, corners: [.bottomLeft, .bottomRight])
+                        .shadow(radius: 2)
+                        .padding(.horizontal, 12)
+                    }
+                    
+                    Spacer()
+                    
                     if let waypoint = selectedWaypoint {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
-                                VStack(alignment: .leading, spacing: 5) {
+                                VStack(alignment: .leading, spacing: 4) {
                                     if waypoint.isSaved {
                                         Text(waypoint.name)
-                                            .font(.headline)
+                                            .font(.callout)
+                                            .fontWeight(.medium)
                                     } else {
                                         Text("Selected Waypoint")
-                                            .font(.headline)
+                                            .font(.callout)
+                                            .fontWeight(.medium)
                                     }
                                     Text("Lat: \(waypoint.coordinate.latitude, specifier: "%.6f")")
                                         .font(.system(.caption, design: .monospaced))
@@ -806,13 +1132,13 @@ struct WaypointMapView: View {
                                     selectedWaypoint = nil
                                 }) {
                                     Image(systemName: "xmark.circle.fill")
-                                        .font(.title2)
+                                        .font(.title3)
                                         .foregroundColor(.gray)
                                 }
                             }
                             
                             if waypoint.isSaved {
-                                HStack(spacing: 10) {
+                                HStack(spacing: 8) {
                                     if bluetoothManager.isConnected {
                                         Button(action: {
                                             bluetoothManager.sendWaypoint(
@@ -829,10 +1155,10 @@ struct WaypointMapView: View {
                                                 Text("Send")
                                             }
                                             .frame(maxWidth: .infinity)
-                                            .padding()
+                                            .padding(.vertical, 8)
                                             .background(Color.green)
                                             .foregroundColor(.white)
-                                            .cornerRadius(10)
+                                            .cornerRadius(8)
                                         }
                                     }
                                     
@@ -845,49 +1171,51 @@ struct WaypointMapView: View {
                                             Text("Delete")
                                         }
                                         .frame(maxWidth: .infinity)
-                                        .padding()
+                                        .padding(.vertical, 8)
                                         .background(Color.red)
                                         .foregroundColor(.white)
-                                        .cornerRadius(10)
+                                        .cornerRadius(8)
                                     }
                                 }
                             } else {
-                                if bluetoothManager.isConnected {
-                                    Button(action: {
-                                        bluetoothManager.sendWaypoint(
-                                            latitude: waypoint.coordinate.latitude,
-                                            longitude: waypoint.coordinate.longitude
-                                        )
-                                        showConfirmation = true
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                                            showConfirmation = false
+                                VStack(spacing: 8) {
+                                    if bluetoothManager.isConnected {
+                                        Button(action: {
+                                            bluetoothManager.sendWaypoint(
+                                                latitude: waypoint.coordinate.latitude,
+                                                longitude: waypoint.coordinate.longitude
+                                            )
+                                            showConfirmation = true
+                                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                                showConfirmation = false
+                                            }
+                                        }) {
+                                            HStack {
+                                                Image(systemName: "paperplane.fill")
+                                                Text("Send to Arduino")
+                                            }
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 8)
+                                            .background(Color.green)
+                                            .foregroundColor(.white)
+                                            .cornerRadius(8)
                                         }
+                                    }
+                                    
+                                    Button(action: {
+                                        waypointManager.saveWaypoint(waypoint)
+                                        selectedWaypoint = waypointManager.savedWaypoints.last
                                     }) {
                                         HStack {
-                                            Image(systemName: "paperplane.fill")
-                                            Text("Send to Arduino")
+                                            Image(systemName: "star.fill")
+                                            Text("Save Waypoint")
                                         }
                                         .frame(maxWidth: .infinity)
-                                        .padding()
-                                        .background(Color.green)
+                                        .padding(.vertical, 8)
+                                        .background(Color.blue)
                                         .foregroundColor(.white)
-                                        .cornerRadius(10)
+                                        .cornerRadius(8)
                                     }
-                                }
-                                
-                                Button(action: {
-                                    waypointManager.saveWaypoint(waypoint)
-                                    selectedWaypoint = waypointManager.savedWaypoints.last
-                                }) {
-                                    HStack {
-                                        Image(systemName: "star.fill")
-                                        Text("Save Waypoint")
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                    .padding()
-                                    .background(Color.blue)
-                                    .foregroundColor(.white)
-                                    .cornerRadius(10)
                                 }
                             }
                             
@@ -905,44 +1233,93 @@ struct WaypointMapView: View {
                                     Text("Waypoint sent!")
                                         .font(.subheadline)
                                 }
-                                .padding(8)
+                                .padding(6)
                                 .background(Color.green.opacity(0.1))
-                                .cornerRadius(8)
+                                .cornerRadius(6)
                             }
                         }
-                        .padding()
+                        .padding(12)
                         .background(Color.white)
-                        .cornerRadius(15)
-                        .shadow(radius: 10)
-                        .padding()
+                        .cornerRadius(12)
+                        .shadow(radius: 8)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8)
                     } else {
-                        VStack(spacing: 10) {
+                        VStack(spacing: 8) {
                             Image(systemName: "hand.tap.fill")
-                                .font(.title)
+                                .font(.title2)
                                 .foregroundColor(.blue)
                             Text("Tap anywhere on the map to set a waypoint")
-                                .font(.subheadline)
+                                .font(.caption)
                                 .multilineTextAlignment(.center)
                         }
-                        .padding()
+                        .padding(12)
                         .background(Color.white)
-                        .cornerRadius(15)
-                        .shadow(radius: 10)
-                        .padding()
+                        .cornerRadius(12)
+                        .shadow(radius: 8)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8)
                     }
                 }
             }
-            .navigationTitle("Waypoint")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: {
-                        showSavedWaypoints.toggle()
-                    }) {
-                        HStack {
-                            Image(systemName: "list.bullet")
-                            Text("\(waypointManager.savedWaypoints.count)")
+                    HStack(spacing: 12) {
+                        Button(action: {
+                            showSavedWaypoints.toggle()
+                        }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "list.bullet")
+                                Text("\(waypointManager.savedWaypoints.count)")
+                            }
+                            .font(.caption)
+                        }
+                        
+                        Button(action: {
+                            showMapStylePicker.toggle()
+                        }) {
+                            Image(systemName: mapStyle == .standard ? "map" : "globe.europe.africa")
+                                .font(.caption)
                         }
                     }
+                }
+                
+                ToolbarItem(placement: .principal) {
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(.gray)
+                            .font(.caption)
+                        
+                        TextField("Search places...", text: $searchText, onEditingChanged: { isEditing in
+                            showSearchResults = isEditing && !searchText.isEmpty
+                        })
+                        .textFieldStyle(PlainTextFieldStyle())
+                        .font(.subheadline)
+                        .onSubmit {
+                            if let region = getCurrentMapRegion() {
+                                searchManager.searchForPlaces(query: searchText, region: region)
+                                showSearchResults = true
+                            }
+                        }
+                        
+                        if !searchText.isEmpty {
+                            Button(action: {
+                                searchText = ""
+                                searchManager.clearSearch()
+                                showSearchResults = false
+                            }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.gray)
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(8)
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -955,11 +1332,26 @@ struct WaypointMapView: View {
                         }
                     }) {
                         Image(systemName: "location.fill")
+                            .font(.caption)
                     }
                 }
             }
             .sheet(isPresented: $showSavedWaypoints) {
                 SavedWaypointsView(waypointManager: waypointManager, bluetoothManager: bluetoothManager, selectedWaypoint: $selectedWaypoint, showSheet: $showSavedWaypoints)
+            }
+            .actionSheet(isPresented: $showMapStylePicker) {
+                ActionSheet(
+                    title: Text("Map Style"),
+                    buttons: [
+                        .default(Text("Standard")) {
+                            mapStyle = .standard
+                        },
+                        .default(Text("Satellite")) {
+                            mapStyle = .satellite
+                        },
+                        .cancel()
+                    ]
+                )
             }
         }
         .onChange(of: locationManager.location) { oldValue, newLocation in
@@ -971,6 +1363,27 @@ struct WaypointMapView: View {
                 hasSetInitialPosition = true
             }
         }
+        .onChange(of: searchText) { oldValue, newValue in
+            if newValue.isEmpty {
+                searchManager.clearSearch()
+                showSearchResults = false
+            } else if newValue.count > 2 {
+                if let region = getCurrentMapRegion() {
+                    searchManager.searchForPlaces(query: newValue, region: region)
+                    showSearchResults = true
+                }
+            }
+        }
+    }
+    
+    private func getCurrentMapRegion() -> MKCoordinateRegion? {
+        if let location = locationManager.location {
+            return MKCoordinateRegion(
+                center: location.coordinate,
+                span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
+            )
+        }
+        return nil
     }
 }
 
@@ -987,9 +1400,9 @@ struct SavedWaypointsView: View {
         NavigationView {
             List {
                 ForEach(Array(waypointManager.savedWaypoints.enumerated()), id: \.element.id) { index, waypoint in
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            VStack(alignment: .leading, spacing: 4) {
+                            VStack(alignment: .leading, spacing: 3) {
                                 if editingWaypointId == waypoint.id {
                                     TextField("Waypoint name", text: $editingWaypointName, onCommit: {
                                         waypointManager.updateWaypoint(id: waypoint.id, name: editingWaypointName)
@@ -998,7 +1411,8 @@ struct SavedWaypointsView: View {
                                     .textFieldStyle(RoundedBorderTextFieldStyle())
                                 } else {
                                     Text(waypoint.name)
-                                        .font(.headline)
+                                        .font(.callout)
+                                        .fontWeight(.medium)
                                 }
                                 Text("Lat: \(waypoint.coordinate.latitude, specifier: "%.6f")")
                                     .font(.system(.caption, design: .monospaced))
@@ -1017,12 +1431,13 @@ struct SavedWaypointsView: View {
                                 }) {
                                     Image(systemName: "pencil")
                                         .foregroundColor(.blue)
+                                        .font(.caption)
                                 }
                                 .buttonStyle(BorderlessButtonStyle())
                             }
                         }
                         
-                        HStack(spacing: 10) {
+                        HStack(spacing: 8) {
                             Button(action: {
                                 selectedWaypoint = waypoint
                                 showSheet = false
@@ -1032,10 +1447,10 @@ struct SavedWaypointsView: View {
                                     Text("View")
                                 }
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 8)
+                                .padding(.vertical, 6)
                                 .background(Color.blue.opacity(0.1))
                                 .foregroundColor(.blue)
-                                .cornerRadius(8)
+                                .cornerRadius(6)
                             }
                             .buttonStyle(BorderlessButtonStyle())
                             
@@ -1051,10 +1466,10 @@ struct SavedWaypointsView: View {
                                         Text("Send")
                                     }
                                     .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 8)
+                                    .padding(.vertical, 6)
                                     .background(Color.green.opacity(0.1))
                                     .foregroundColor(.green)
-                                    .cornerRadius(8)
+                                    .cornerRadius(6)
                                 }
                                 .buttonStyle(BorderlessButtonStyle())
                             }
@@ -1070,6 +1485,7 @@ struct SavedWaypointsView: View {
                             }) {
                                 Image(systemName: "trash")
                                     .foregroundColor(.red)
+                                    .font(.caption)
                             }
                             .buttonStyle(BorderlessButtonStyle())
                         }
@@ -1158,7 +1574,7 @@ struct OfflineMapsView: View {
                                 }
                             }
                         }
-                        .frame(height: 350)
+                        .frame(height: 300)
                         .onTapGesture { screenCoordinate in
                             if let coordinate = proxy.convert(screenCoordinate, from: .local) {
                                 selectedCenter = coordinate
@@ -1183,11 +1599,12 @@ struct OfflineMapsView: View {
                 }
                 
                 ScrollView {
-                    VStack(spacing: 20) {
+                    VStack(spacing: 16) {
                         if let center = selectedCenter {
-                            VStack(alignment: .leading, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 6) {
                                 Text("Selected Location")
-                                    .font(.headline)
+                                    .font(.callout)
+                                    .fontWeight(.medium)
                                 Text("Lat: \(center.latitude, specifier: "%.6f")")
                                     .font(.system(.caption, design: .monospaced))
                                 Text("Lon: \(center.longitude, specifier: "%.6f")")
@@ -1205,20 +1622,58 @@ struct OfflineMapsView: View {
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding()
-                            .background(Color.blue.opacity(0.1))
-                            .cornerRadius(10)
-                            .padding(.horizontal)
+                            .padding(12)
+                            .background(Color.blue.opacity(0.08))
+                            .cornerRadius(8)
+                            .padding(.horizontal, 12)
                         }
                         
                         if !offlineTileManager.downloadedRegions.isEmpty {
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text("Downloaded Regions")
-                                    .font(.headline)
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Text("Downloaded Regions")
+                                        .font(.callout)
+                                        .fontWeight(.medium)
+                                    Spacer()
+                                    if !offlineTileManager.isUpdatingAll && !offlineTileManager.isDownloading {
+                                        Button(action: {
+                                            offlineTileManager.updateAllMaps()
+                                        }) {
+                                            HStack {
+                                                Image(systemName: "arrow.clockwise")
+                                                Text("Update All")
+                                            }
+                                            .font(.caption)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background(Color.blue)
+                                            .foregroundColor(.white)
+                                            .cornerRadius(6)
+                                        }
+                                    }
+                                }
+                                
+                                if offlineTileManager.isUpdatingAll {
+                                    VStack(spacing: 6) {
+                                        HStack {
+                                            Image(systemName: "arrow.clockwise")
+                                                .foregroundColor(.blue)
+                                            Text("Updating all maps...")
+                                                .font(.caption)
+                                                .foregroundColor(.blue)
+                                            Spacer()
+                                        }
+                                        ProgressView(value: offlineTileManager.updateProgress)
+                                            .progressViewStyle(LinearProgressViewStyle(tint: .blue))
+                                    }
+                                    .padding(8)
+                                    .background(Color.blue.opacity(0.08))
+                                    .cornerRadius(6)
+                                }
                                 
                                 ForEach(Array(offlineTileManager.downloadedRegions.enumerated()), id: \.element.id) { index, region in
                                     HStack {
-                                        VStack(alignment: .leading, spacing: 4) {
+                                        VStack(alignment: .leading, spacing: 3) {
                                             if editingRegionId == region.id {
                                                 TextField("Region name", text: $editingRegionName, onCommit: {
                                                     offlineTileManager.updateRegionName(id: region.id, name: editingRegionName)
@@ -1227,15 +1682,20 @@ struct OfflineMapsView: View {
                                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                             } else {
                                                 Text(region.name)
-                                                    .font(.subheadline)
+                                                    .font(.caption)
                                                     .fontWeight(.medium)
                                             }
                                             Text("Radius: \(region.radiusKm, specifier: "%.1f") km")
-                                                .font(.caption)
+                                                .font(.caption2)
                                                 .foregroundColor(.gray)
-                                            Text(region.downloadDate, style: .date)
-                                                .font(.caption)
+                                            Text("Downloaded: \(region.downloadDate, style: .date)")
+                                                .font(.caption2)
                                                 .foregroundColor(.gray)
+                                            if region.lastUpdated != region.downloadDate {
+                                                Text("Last Updated: \(region.lastUpdated, style: .date)")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.blue)
+                                            }
                                         }
                                         Spacer()
                                         if editingRegionId != region.id {
@@ -1245,8 +1705,9 @@ struct OfflineMapsView: View {
                                             }) {
                                                 Image(systemName: "pencil")
                                                     .foregroundColor(.blue)
+                                                    .font(.caption)
                                             }
-                                            .padding(.trailing, 8)
+                                            .padding(.trailing, 6)
                                         }
                                         Button(action: {
                                             offlineTileManager.deleteRegion(at: index)
@@ -1256,39 +1717,42 @@ struct OfflineMapsView: View {
                                         }) {
                                             Image(systemName: "trash")
                                                 .foregroundColor(.red)
+                                                .font(.caption)
                                         }
                                     }
-                                    .padding()
-                                    .background(Color.green.opacity(0.1))
-                                    .cornerRadius(8)
+                                    .padding(8)
+                                    .background(Color.green.opacity(0.08))
+                                    .cornerRadius(6)
                                 }
                             }
-                            .padding()
-                            .background(Color.gray.opacity(0.1))
-                            .cornerRadius(10)
-                            .padding(.horizontal)
+                            .padding(12)
+                            .background(Color.gray.opacity(0.08))
+                            .cornerRadius(8)
+                            .padding(.horizontal, 12)
                         }
                         
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 8) {
                             Text("Cache Information")
-                                .font(.headline)
+                                .font(.callout)
+                                .fontWeight(.medium)
                             
                             HStack {
                                 Text("Cache Size:")
                                     .foregroundColor(.gray)
                                 Spacer()
                                 Text(offlineTileManager.getCacheSize())
-                                    .font(.system(.body, design: .monospaced))
+                                    .font(.system(.callout, design: .monospaced))
                             }
                         }
-                        .padding()
-                        .background(Color.gray.opacity(0.1))
-                        .cornerRadius(10)
-                        .padding(.horizontal)
+                        .padding(12)
+                        .background(Color.gray.opacity(0.08))
+                        .cornerRadius(8)
+                        .padding(.horizontal, 12)
                         
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 8) {
                             Text("Download Radius: \(radiusKm, specifier: "%.1f") km")
-                                .font(.headline)
+                                .font(.callout)
+                                .fontWeight(.medium)
                             
                             Slider(value: $radiusKm, in: 1.0...20.0, step: 1.0)
                             
@@ -1296,13 +1760,13 @@ struct OfflineMapsView: View {
                                 .font(.caption)
                                 .foregroundColor(.gray)
                         }
-                        .padding()
-                        .background(Color.gray.opacity(0.1))
-                        .cornerRadius(10)
-                        .padding(.horizontal)
+                        .padding(12)
+                        .background(Color.gray.opacity(0.08))
+                        .cornerRadius(8)
+                        .padding(.horizontal, 12)
                         
                         if offlineTileManager.isDownloading {
-                            VStack(spacing: 10) {
+                            VStack(spacing: 8) {
                                 ProgressView(value: offlineTileManager.downloadProgress)
                                     .progressViewStyle(LinearProgressViewStyle())
                                 
@@ -1315,16 +1779,16 @@ struct OfflineMapsView: View {
                                 }) {
                                     Text("Cancel Download")
                                         .frame(maxWidth: .infinity)
-                                        .padding()
+                                        .padding(.vertical, 8)
                                         .background(Color.red)
                                         .foregroundColor(.white)
-                                        .cornerRadius(10)
+                                        .cornerRadius(8)
                                 }
                             }
-                            .padding()
-                            .background(Color.gray.opacity(0.1))
-                            .cornerRadius(10)
-                            .padding(.horizontal)
+                            .padding(12)
+                            .background(Color.gray.opacity(0.08))
+                            .cornerRadius(8)
+                            .padding(.horizontal, 12)
                         } else {
                             Button(action: {
                                 showDownloadAlert = true
@@ -1334,13 +1798,13 @@ struct OfflineMapsView: View {
                                     Text("Download Maps for Selected Area")
                                 }
                                 .frame(maxWidth: .infinity)
-                                .padding()
+                                .padding(.vertical, 8)
                                 .background(selectedCenter != nil ? Color.blue : Color.gray)
                                 .foregroundColor(.white)
-                                .cornerRadius(10)
+                                .cornerRadius(8)
                             }
                             .disabled(selectedCenter == nil)
-                            .padding(.horizontal)
+                            .padding(.horizontal, 12)
                         }
                         
                         Button(action: {
@@ -1351,41 +1815,49 @@ struct OfflineMapsView: View {
                                 Text("Clear All Cached Maps")
                             }
                             .frame(maxWidth: .infinity)
-                            .padding()
+                            .padding(.vertical, 8)
                             .background(Color.red.opacity(0.8))
                             .foregroundColor(.white)
-                            .cornerRadius(10)
+                            .cornerRadius(8)
                         }
-                        .padding(.horizontal)
+                        .padding(.horizontal, 12)
                         
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 8) {
                             Text("Information")
-                                .font(.headline)
+                                .font(.callout)
+                                .fontWeight(.medium)
                             
-                            Text("• Tap the map to select download location")
-                                .font(.caption)
-                            Text("• Blue circle shows selected download area")
-                                .font(.caption)
-                            Text("• Green circles show downloaded regions")
-                                .font(.caption)
-                            Text("• Tap pencil icon to rename a region")
-                                .font(.caption)
-                            Text("• Maps are downloaded from OpenStreetMap")
-                                .font(.caption)
-                            Text("• Downloaded maps work without internet")
-                                .font(.caption)
-                            Text("• Zoom levels 10-15 are downloaded")
-                                .font(.caption)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("• Tap the map to select download location")
+                                    .font(.caption)
+                                Text("• Blue circle shows selected download area")
+                                    .font(.caption)
+                                Text("• Green circles show downloaded regions")
+                                    .font(.caption)
+                                Text("• Tap pencil icon to rename a region")
+                                    .font(.caption)
+                                Text("• Use 'Update All' to refresh downloaded maps")
+                                    .font(.caption)
+                                Text("• Maps automatically update every 6 months")
+                                    .font(.caption)
+                                Text("• Maps are downloaded from OpenStreetMap")
+                                    .font(.caption)
+                                Text("• Downloaded maps work without internet")
+                                    .font(.caption)
+                                Text("• Zoom levels 10-15 are downloaded")
+                                    .font(.caption)
+                            }
                         }
-                        .padding()
-                        .background(Color.blue.opacity(0.1))
-                        .cornerRadius(10)
-                        .padding(.horizontal)
+                        .padding(12)
+                        .background(Color.blue.opacity(0.08))
+                        .cornerRadius(8)
+                        .padding(.horizontal, 12)
                     }
-                    .padding(.vertical)
+                    .padding(.vertical, 12)
                 }
             }
             .navigationTitle("Offline Maps")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: {
@@ -1432,93 +1904,45 @@ struct OfflineMapsView: View {
     }
 }
 
-// MARK: - Arduino Status View
-struct ArduinoStatusView: View {
-    @ObservedObject var bluetoothManager: BluetoothManager
-    
-    var body: some View {
-        NavigationView {
-            VStack(spacing: 20) {
-                if bluetoothManager.isConnected {
-                    if let status = bluetoothManager.arduinoStatus {
-                        ScrollView {
-                            VStack(spacing: 15) {
-                                NavigationStatusCard(status: status)
-                                GPSStatusCard(status: status)
-                                TargetStatusCard(status: status)
-                            }
-                            .padding()
-                        }
-                    } else {
-                        VStack(spacing: 20) {
-                            Image(systemName: "clock")
-                                .font(.system(size: 60))
-                                .foregroundColor(.gray)
-                            Text("Waiting for Arduino data...")
-                                .font(.headline)
-                                .foregroundColor(.gray)
-                            Text("Make sure the Arduino is powered on and GPS has a fix")
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                                .multilineTextAlignment(.center)
-                        }
-                        .padding()
-                    }
-                } else {
-                    VStack(spacing: 20) {
-                        Image(systemName: "antenna.radiowaves.left.and.right.slash")
-                            .font(.system(size: 60))
-                            .foregroundColor(.red)
-                        Text("Arduino not connected")
-                            .font(.headline)
-                            .foregroundColor(.red)
-                        Text("Go to Connect tab to establish connection")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                    }
-                    .padding()
-                }
-            }
-            .navigationTitle("Arduino Status")
-        }
-    }
-}
-
 // MARK: - Status Cards
 struct NavigationStatusCard: View {
     let status: ArduinoNavigationStatus
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Navigation")
-                .font(.headline)
+                .font(.callout)
+                .fontWeight(.medium)
             
             HStack {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Image(systemName: "location.north.fill")
                             .foregroundColor(.blue)
                         Text("Heading: \(status.heading, specifier: "%.1f")°")
+                            .font(.caption)
                     }
                     HStack {
                         Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
                             .foregroundColor(.green)
                         Text("Bearing: \(status.bearing, specifier: "%.1f")°")
+                            .font(.caption)
                     }
                     HStack {
                         Image(systemName: "ruler.fill")
                             .foregroundColor(.orange)
                         Text("Distance: \(status.distanceText)")
+                            .font(.caption)
                     }
                 }
                 Spacer()
-                CompassView(heading: status.heading, bearing: status.bearing)
+                EnhancedCompassView(heading: status.heading, bearing: status.bearing)
                     .frame(width: 80, height: 80)
             }
         }
-        .padding()
-        .background(Color.blue.opacity(0.1))
-        .cornerRadius(15)
+        .padding(12)
+        .background(Color.blue.opacity(0.08))
+        .cornerRadius(8)
     }
 }
 
@@ -1526,47 +1950,50 @@ struct GPSStatusCard: View {
     let status: ArduinoNavigationStatus
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("GPS Status")
-                    .font(.headline)
+                    .font(.callout)
+                    .fontWeight(.medium)
                 Spacer()
                 Circle()
                     .fill(status.hasGpsFix ? Color.green : Color.red)
-                    .frame(width: 12, height: 12)
+                    .frame(width: 10, height: 10)
                 Text(status.hasGpsFix ? "Fix" : "No Fix")
                     .font(.caption)
                     .foregroundColor(status.hasGpsFix ? .green : .red)
             }
             
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Image(systemName: "dot.radiowaves.up")
                         .foregroundColor(.blue)
                     Text("Satellites: \(status.satellites)")
+                        .font(.caption)
                 }
                 HStack {
                     Image(systemName: "location.fill")
                         .foregroundColor(.blue)
                     Text("Lat: \(status.currentLat, specifier: "%.6f")")
-                        .font(.system(.body, design: .monospaced))
+                        .font(.system(.caption, design: .monospaced))
                 }
                 HStack {
                     Image(systemName: "location.fill")
                         .foregroundColor(.blue)
                     Text("Lon: \(status.currentLon, specifier: "%.6f")")
-                        .font(.system(.body, design: .monospaced))
+                        .font(.system(.caption, design: .monospaced))
                 }
                 HStack {
                     Image(systemName: "mountain.2.fill")
                         .foregroundColor(.brown)
                     Text("Alt: \(status.altitude, specifier: "%.1f") m")
+                        .font(.caption)
                 }
             }
         }
-        .padding()
-        .background(status.hasGpsFix ? Color.green.opacity(0.1) : Color.red.opacity(0.1))
-        .cornerRadius(15)
+        .padding(12)
+        .background(status.hasGpsFix ? Color.green.opacity(0.08) : Color.red.opacity(0.08))
+        .cornerRadius(8)
     }
 }
 
@@ -1574,95 +2001,146 @@ struct TargetStatusCard: View {
     let status: ArduinoNavigationStatus
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Target Waypoint")
-                .font(.headline)
+                .font(.callout)
+                .fontWeight(.medium)
             
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Image(systemName: "mappin.circle.fill")
                         .foregroundColor(.red)
                     Text("Lat: \(status.targetLat, specifier: "%.6f")")
-                        .font(.system(.body, design: .monospaced))
+                        .font(.system(.caption, design: .monospaced))
                 }
                 HStack {
                     Image(systemName: "mappin.circle.fill")
                         .foregroundColor(.red)
                     Text("Lon: \(status.targetLon, specifier: "%.6f")")
-                        .font(.system(.body, design: .monospaced))
+                        .font(.system(.caption, design: .monospaced))
                 }
             }
         }
-        .padding()
-        .background(Color.red.opacity(0.1))
-        .cornerRadius(15)
+        .padding(12)
+        .background(Color.red.opacity(0.08))
+        .cornerRadius(8)
     }
 }
 
-struct CompassView: View {
+struct EnhancedCompassView: View {
     let heading: Float
     let bearing: Float
+    @State private var animatedHeading: Double = 0
+    @State private var animatedBearing: Double = 0
     
     var body: some View {
         ZStack {
             Circle()
-                .stroke(Color.gray, lineWidth: 2)
+                .stroke(
+                    LinearGradient(
+                        gradient: Gradient(colors: [Color.blue.opacity(0.3), Color.blue.opacity(0.8)]),
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: 2
+                )
+                .background(
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                gradient: Gradient(colors: [Color.white, Color.blue.opacity(0.1)]),
+                                center: .center,
+                                startRadius: 0,
+                                endRadius: 40
+                            )
+                        )
+                )
+                .shadow(color: Color.black.opacity(0.2), radius: 2, x: 0, y: 1)
+            
+            ForEach(0..<8) { i in
+                let angle = Double(i) * 45
+                VStack {
+                    Rectangle()
+                        .fill(i % 2 == 0 ? Color.black : Color.gray)
+                        .frame(width: i % 2 == 0 ? 1.5 : 1, height: i % 2 == 0 ? 8 : 6)
+                    Spacer()
+                }
+                .rotationEffect(.degrees(angle))
+            }
+            
+            VStack {
+                Text("N")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.black)
+                Spacer()
+            }
+            
+            Group {
+                Path { path in
+                    path.move(to: CGPoint(x: 40, y: 40))
+                    let endX = 40 + 28 * sin(animatedHeading * .pi / 180)
+                    let endY = 40 - 28 * cos(animatedHeading * .pi / 180)
+                    path.addLine(to: CGPoint(x: endX, y: endY))
+                }
+                .stroke(Color.blue, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                .shadow(color: Color.blue.opacity(0.3), radius: 1, x: 0, y: 1)
+                
+                Path { path in
+                    path.move(to: CGPoint(x: 40, y: 40))
+                    let endX = 40 + 20 * sin(animatedBearing * .pi / 180)
+                    let endY = 40 - 20 * cos(animatedBearing * .pi / 180)
+                    path.addLine(to: CGPoint(x: endX, y: endY))
+                }
+                .stroke(Color.red, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .shadow(color: Color.red.opacity(0.3), radius: 1, x: 0, y: 1)
+            }
             
             Circle()
-                .fill(Color.white)
-            
-            Text("N")
-                .font(.caption)
-                .offset(y: -30)
-            
-            Path { path in
-                path.move(to: CGPoint(x: 40, y: 40))
-                let angle = Double(heading) * .pi / 180
-                let endX = 40 + 25 * sin(angle)
-                let endY = 40 - 25 * cos(angle)
-                path.addLine(to: CGPoint(x: endX, y: endY))
+                .fill(
+                    RadialGradient(
+                        gradient: Gradient(colors: [Color.white, Color.black]),
+                        center: .center,
+                        startRadius: 0,
+                        endRadius: 3
+                    )
+                )
+                .frame(width: 6, height: 6)
+                .shadow(color: Color.black.opacity(0.5), radius: 1, x: 0, y: 1)
+        }
+        .onAppear {
+            animatedHeading = Double(heading)
+            animatedBearing = Double(bearing)
+        }
+        .onChange(of: heading) { oldValue, newValue in
+            withAnimation(.easeInOut(duration: 0.5)) {
+                animatedHeading = Double(newValue)
             }
-            .stroke(Color.blue, lineWidth: 3)
-            
-            Path { path in
-                path.move(to: CGPoint(x: 40, y: 40))
-                let angle = Double(bearing) * .pi / 180
-                let endX = 40 + 20 * sin(angle)
-                let endY = 40 - 20 * cos(angle)
-                path.addLine(to: CGPoint(x: endX, y: endY))
+        }
+        .onChange(of: bearing) { oldValue, newValue in
+            withAnimation(.easeInOut(duration: 0.5)) {
+                animatedBearing = Double(newValue)
             }
-            .stroke(Color.red, lineWidth: 2)
-            
-            Circle()
-                .fill(Color.black)
-                .frame(width: 4, height: 4)
         }
     }
 }
 
-// MARK: - Status Card Component
-struct StatusCard: View {
-    let title: String
-    let value: String
-    let color: Color
-    
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title)
-                    .font(.caption)
-                    .foregroundColor(.gray)
-                Text(value)
-                    .font(.headline)
-            }
-            Spacer()
-            Circle()
-                .fill(color)
-                .frame(width: 12, height: 12)
-        }
-        .padding()
-        .background(Color.gray.opacity(0.1))
-        .cornerRadius(10)
-        .padding(.horizontal)
+// MARK: - Helper Extensions
+extension View {
+    func cornerRadius(_ radius: CGFloat, corners: UIRectCorner) -> some View {
+        clipShape(RoundedCorner(radius: radius, corners: corners))
+    }
+}
+
+struct RoundedCorner: Shape {
+    var radius: CGFloat = .infinity
+    var corners: UIRectCorner = .allCorners
+
+    func path(in rect: CGRect) -> Path {
+        let path = UIBezierPath(
+            roundedRect: rect,
+            byRoundingCorners: corners,
+            cornerRadii: CGSize(width: radius, height: radius)
+        )
+        return Path(path.cgPath)
     }
 }
