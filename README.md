@@ -1,67 +1,78 @@
-# Watersnake RF Controller & GPS Navigation System
+# AutoHelm - GPS Navigation System
 
-An Arduino-based GPS navigation system that automatically controls a Watersnake Fierce 2 electric motor via 433MHz RF transmission. The system provides compass-guided navigation with real-time GPS tracking, OLED display feedback, and Bluetooth Low Energy waypoint control from a mobile app.
+An Arduino-based GPS navigation system that automatically controls a remote device via 433MHz RF transmission. The system provides compass-guided navigation with real-time GPS tracking and OLED display feedback.
 
 ## Project Overview
 
+**Project Name**: AutoHelm  
+**App Name**: Waypoint  
+**Arduino Device Name**: Helm  
+
 This project consists of three main components:
 
-1. **GPS Navigation System** (`GPS_directions/`) - Complete autonomous navigation with compass, GPS, BLE waypoint receiver, and RF control
+1. **Helm** (`Helm/`) - Complete autonomous navigation system with compass, GPS, BLE waypoint receiver, and RF control
 2. **Magnetometer Calibration** (`calibration/`) - Compass calibration utility
-3. **Transmitter Test** (`transmitter_test/`) - Basic RF transmission testing
+3. **Waypoint** (`Waypoint/`) - Full-featured iOS app with offline maps and BLE waypoint control
+
+The app user can select a position on the map and send GPS coordinates to the Arduino via Bluetooth. The Arduino will then navigate to the waypoint using automatic motor control.
 
 ### Key Features
 
-- **Mobile App Integration** - Receive GPS waypoints via Bluetooth Low Energy
-- Real-time GPS navigation with waypoint guidance
-- Digital compass with magnetometer calibration
-- 128x64 OLED display showing navigation data
-- Automatic motor control via 433MHz RF transmission
-- Distance and bearing calculations using haversine formula
-- Visual arrow pointing toward destination
-- Debug output via serial console
-- Autonomous course correction with configurable tolerance
+- **Mobile App Integration** - iOS app with offline maps and BLE waypoint transmission
+- **Real-time GPS Navigation** - Autonomous waypoint guidance with distance/bearing calculations
+- **Digital Compass** - MMC5603 magnetometer with hard/soft iron calibration
+- **OLED Display** - 128x64 display showing navigation data and directional arrow
+- **RF Motor Control** - 433MHz transmission to Watersnake motor remote
+- **Offline Maps** - Download and cache OpenStreetMap tiles for offline use
+- **BLE Communication** - Wireless waypoint transfer from mobile app to Arduino
 
 ## Hardware Requirements
 
-### Core Components
+### Arduino Components
 
-- **Arduino UNO R4 WiFi** (or Arduino Nano 33 BLE for BLE functionality)
-- **Adafruit RFM69HCW 433MHz Breakout** - RF transmitter
-- **Adafruit MMC5603 Magnetometer** - Digital compass
-- **SSD1306 OLED Display** (128x64, I2C)
-- **GPS Module** (UART compatible, 9600 baud)
-- **433MHz Spring Antenna**
+- **Arduino UNO R4 WiFi** (required for BLE functionality)
+- **Adafruit RFM69HCW 433MHz Breakout** - RF transmitter module
+- **Adafruit MMC5603 Magnetometer** - Digital compass sensor
+- **SSD1306 OLED Display** (128x64, I2C interface)
+- **GPS Module** (UART compatible, 9600 baud rate)
+- **433MHz Spring Antenna** - For RF transmission
 
 ### Target Device
 
-- **Watersnake Fierce 2 Electric Motor** with RF remote control
+- **Watersnake Fierce 2 Electric Motor** with RF remote control capability
 
-## Mobile App Integration
+### Mobile Device
 
-The system receives GPS waypoints via Bluetooth Low Energy from a mobile app. The user can:
+- **iOS Device** (iPhone/iPad) with Bluetooth Low Energy support
+- **iOS 15.0+** required for SwiftUI MapKit features
 
-1. Select a position on a map in the mobile app
-2. Send GPS coordinates to the Arduino via Bluetooth
-3. The Arduino automatically navigates to the waypoint
+## Software Dependencies
 
-### BLE Protocol
+### Arduino Libraries (Install via Library Manager)
 
-**Service UUID**: `0000FFE0-0000-1000-8000-00805F9B34FB`
-**Characteristic UUID**: `0000FFE1-0000-1000-8000-00805F9B34FB`
+```cpp
+#include <Adafruit_GFX.h>          // OLED graphics library
+#include <Adafruit_SSD1306.h>      // OLED display driver
+#include <Adafruit_MMC56x3.h>      // MMC5603 magnetometer driver
+#include <Wire.h>                  // I2C communication
+#include <SoftwareSerial.h>        // GPS UART communication
+#include <RH_RF69.h>               // RadioHead RF69 driver
+#include <ArduinoBLE.h>            // Bluetooth Low Energy
+#include <math.h>                  // Mathematical functions
+```
 
-**Data Format**: `$GPS,latitude,longitude,altitude*\n`
-**Example**: `$GPS,-32.940931,151.718029,45.2*\n`
+### Additional Requirements
 
-The Arduino advertises as "Watersnake" and accepts waypoint data via the BLE characteristic.
+- **RadioHead Library** by Mike McCauley (for RFM69HCW RF transmission)
+- **Xcode 15.0+** (for iOS app compilation)
 
 ## Wiring Diagrams
 
 ### RFM69HCW RF Module
 ```
-RFM69HCW -> Arduino UNO R4
+RFM69HCW -> Arduino UNO R4 WiFi
 VIN      -> 5V
-GND      -> GND
+GND      -> GND  
 SCK      -> D13 (SCK)
 MISO     -> D12 (MISO)
 MOSI     -> D11 (MOSI)
@@ -71,282 +82,371 @@ G0/DIO0  -> D2
 ANT      -> 433MHz spring antenna
 ```
 
-### OLED Display (I2C)
+### OLED Display (I2C on Wire1)
 ```
-SSD1306 -> Arduino UNO R4
+SSD1306 -> Arduino UNO R4 WiFi
 VCC     -> 5V
 GND     -> GND
-SDA     -> SDA (Wire1)
-SCL     -> SCL (Wire1)
+SDA     -> SDA (Wire1 bus)
+SCL     -> SCL (Wire1 bus)
 Address -> 0x3C
 ```
 
-### MMC5603 Magnetometer (I2C)
+### MMC5603 Magnetometer (I2C on Wire1)
 ```
-MMC5603 -> Arduino UNO R4
+MMC5603 -> Arduino UNO R4 WiFi
 VIN     -> 5V
 GND     -> GND
-SDA     -> SDA (Wire1)
-SCL     -> SCL (Wire1)
+SDA     -> SDA (Wire1 bus)
+SCL     -> SCL (Wire1 bus)
 ```
 
-### GPS Module
+### GPS Module (Software Serial)
 ```
-GPS Module -> Arduino UNO R4
+GPS Module -> Arduino UNO R4 WiFi
 VCC        -> 5V
 GND        -> GND
 TX         -> D2 (GPS_RX_PIN)
 RX         -> D3 (GPS_TX_PIN)
+Baud Rate  -> 9600
 ```
 
-## Software Dependencies
+## Mobile App Features
 
-### Required Libraries
+### Waypoint iOS App
 
-Install these libraries via Arduino IDE Library Manager:
+The Waypoint app provides comprehensive navigation and mapping functionality:
 
-```cpp
-#include <Adafruit_GFX.h>          // OLED graphics
-#include <Adafruit_SSD1306.h>      // OLED display driver
-#include <Adafruit_MMC56x3.h>      // Magnetometer driver
-#include <Wire.h>                  // I2C communication
-#include <SoftwareSerial.h>        // GPS serial communication
-#include <RH_RF69.h>               // RadioHead RF69 driver
-#include <ArduinoBLE.h>            // Bluetooth Low Energy
-#include <math.h>                  // Mathematical functions
-```
+#### Core Features
+- **Interactive Map Interface** - Tap anywhere to set waypoints
+- **Bluetooth Low Energy** - Connect to Arduino "Watersnake" device
+- **Real-time Location** - GPS positioning with accuracy indicators
+- **Waypoint Transmission** - Send coordinates directly to Arduino
 
-### Additional Requirements
+#### Offline Maps System
+- **Download Map Tiles** - Cache OpenStreetMap data for offline use
+- **Configurable Areas** - Select download radius (1-20 km)
+- **Region Management** - Name, edit, and delete cached regions
+- **Storage Monitoring** - Track cache size and manage storage
+- **Background Downloads** - Progress tracking with cancel capability
 
-- **RadioHead Library** by Mike McCauley (for RFM69HCW support)
-- Custom GPS parsing functionality (included in project files)
+#### Connection Management  
+- **Device Discovery** - Scan for nearby Arduino devices
+- **Signal Strength** - Monitor BLE connection quality
+- **Status Indicators** - Real-time connection feedback
+- **Auto-reconnect** - Maintain stable connections
 
 ## Setup Instructions
 
-### 1. Magnetometer Calibration
+### 1. Magnetometer Calibration (Required First)
 
-Before using the navigation system, calibrate the magnetometer:
+Before using navigation, calibrate the compass:
 
-1. Upload `calibration/calibration.ino`
+1. Upload `calibration/calibration.ino` to Arduino
 2. Open Serial Monitor (9600 baud)
-3. Rotate the device slowly in all directions for 2-3 minutes
-4. Note the min/max values for X, Y, and Z axes
-5. Copy the final calibration values from Serial Monitor
-6. Update these values in `GPS_directions.ino`:
+3. Rotate device slowly in all directions for 2-3 minutes
+4. Copy final calibration values from Serial output
+5. Update values in `Helm/Helm.ino`:
 
 ```cpp
-// Update these values from calibration output
+// Replace with your calibration values
 float magXmax = 31.91;
-float magYmax = 101.72;
+float magYmax = 101.72; 
 float magZmax = 54.58;
 float magXmin = -73.95;
 float magYmin = -6.86;
 float magZmin = -55.41;
 ```
 
-### 2. Configure Default Destination
+### 2. Arduino Navigation System Setup
 
-Set default target coordinates in `GPS_directions.ino` (can be overridden via mobile app):
+1. Install all required libraries via Arduino IDE Library Manager
+2. Update default destination coordinates in `Helm/Helm.ino`:
 
 ```cpp
-// Default destination coordinates (overridden by BLE waypoints)
+// Default destination (overridden by mobile app waypoints)
 float DESTINATION_LAT = -32.940931;
 float DESTINATION_LON = 151.718029;
 ```
 
-### 3. Test RF Transmission
+3. Upload `Helm/Helm.ino` to Arduino UNO R4 WiFi
+4. Open Serial Monitor to verify GPS fix and component initialization
 
-1. Upload `transmitter_test/transmitter_test.ino`
-2. Open Serial Monitor to see transmission status
-3. Verify RF transmission works with your Watersnake motor
-4. Ensure left/right commands control the motor correctly
+### 3. iOS App Installation
 
-### 4. Upload Main Navigation System
+1. Open `Waypoint/Waypoint.xcodeproj` in Xcode
+2. Update Development Team in project settings
+3. Build and install to iOS device
+4. Grant Location and Bluetooth permissions when prompted
 
-Upload `GPS_directions/GPS_directions.ino` for full autonomous navigation with BLE waypoint capability.
+### 4. System Integration
 
-## RF Protocol Technical Details
+1. Power on Arduino and wait for GPS fix
+2. Launch Waypoint app on iOS device
+3. Go to "Connect" tab and scan for "Watersnake" device
+4. Connect to Arduino (signal strength should appear)
+5. Switch to "Waypoint" tab to set navigation targets
 
-The system uses two different RF implementations:
+## BLE Communication Protocol
 
-### Main Navigation System (RFM69HCW)
+### Service Configuration
+- **Service UUID**: `0000FFE0-0000-1000-8000-00805F9B34FB`
+- **Characteristic UUID**: `0000FFE1-0000-1000-8000-00805F9B34FB`
+- **Device Name**: "Watersnake"
+
+### Data Format
+```
+$GPS,latitude,longitude,altitude*\n
+```
+
+### Example Transmission
+```
+$GPS,-32.940931,151.718029,45.2*\n
+```
+
+The Arduino parses incoming data and extracts coordinates for autonomous navigation.
+
+## RF Control Protocol
+
+### Technical Specifications
 - **Frequency**: 433.032 MHz
-- **Modulation**: FSK with PWM encoding
+- **Modulation**: FSK with PWM encoding  
 - **Deviation**: 22.5 kHz
 - **Bit Rate**: 6400 bps
+- **Data Length**: 90 bits total
 
-### Test System (Simple Digital)
-- **Direct digital pin control** for basic testing
-- **Pulse timing based** RF generation
-
-### Control Codes
+### Control Codes (90-bit format)
 ```cpp
-// RIGHT command (90-bit)
+// RIGHT command
 static const uint64_t RIGHT_CODE_HIGH = 0x8000576d76ULL;  // First 40 bits
 static const uint64_t RIGHT_CODE_LOW = 0xf7e077723ba90ULL; // Last 50 bits
 
-// LEFT command (90-bit)
+// LEFT command  
 static const uint64_t LEFT_CODE_HIGH = 0x8000576d76ULL;   // First 40 bits
 static const uint64_t LEFT_CODE_LOW = 0xf7e077723ea84ULL;  // Last 50 bits
 ```
 
 ### Pulse Timing
-- **Short Pulse**: 50μs HIGH + 52μs LOW (bit 0)
-- **Long Pulse**: 102μs HIGH + 52μs LOW (bit 1)
-- **Sync Pulse**: 170μs HIGH + 114μs LOW
-- **Data Length**: 90 bits total (40 high + 50 low)
+- **Short Pulse**: 50μs HIGH + 52μs LOW (represents bit 0)
+- **Long Pulse**: 102μs HIGH + 52μs LOW (represents bit 1) 
+- **Sync Pulse**: 170μs HIGH + 114μs LOW (frame start)
+- **Gap Duration**: 114μs between transmissions
 
-## Usage Instructions
+## Navigation Algorithm
+
+### Core Navigation Loop
+
+1. **BLE Initialization** - Advertise as "Watersnake" for app connections
+2. **Hardware Startup** - Initialize GPS, compass, OLED display, RF transmitter
+3. **GPS Acquisition** - Wait for satellite lock and valid position data
+4. **Waypoint Reception** - Listen for coordinates from mobile app via BLE
+5. **Navigation Execution**:
+   - Calculate bearing to destination using great-circle formulas
+   - Read current heading from calibrated magnetometer
+   - Determine heading error and required correction
+   - Send LEFT/RIGHT RF commands if error exceeds tolerance
+   - Update OLED display with navigation data and directional arrow
+   - Provide debug output via Serial Monitor
+6. **Arrival Detection** - Stop navigation when within minimum distance threshold
 
 ### Navigation Parameters
 
-Adjust these constants in `GPS_directions.ino` to fine-tune navigation behavior:
+Adjust these constants in `Helm/Helm.ino`:
 
 ```cpp
-const float HEADING_TOLERANCE = 15.0;        // Degrees of acceptable heading error
-const float MIN_CORRECTION_INTERVAL = 2000; // Minimum ms between corrections
-const float MIN_DISTANCE_METERS = 5.0;      // Stop navigation when this close
+const float HEADING_TOLERANCE = 15.0;        // Acceptable heading error (degrees)
+const float MIN_CORRECTION_INTERVAL = 2000; // Minimum time between corrections (ms)
+const float MIN_DISTANCE_METERS = 5.0;      // Stop navigation distance threshold (m)
 ```
 
 ### Display Layout
 
-The 128x64 OLED display shows:
-- **Left Panel**: Navigation arrow and distance to target
-- **Top Right**: Current GPS coordinates (latitude/longitude)
+The 128x64 OLED shows:
+- **Left Panel**: Directional arrow pointing toward target + distance
+- **Top Right**: Current GPS coordinates (lat/lon)  
 - **Middle Right**: Target destination coordinates
-- **Bottom Left**: Distance to destination (meters/kilometers)
+- **Bottom Left**: Distance to target (meters/kilometers)
 - **Bottom Right**: Current altitude
-- **Status**: GPS fix status and satellite count
+- **Status Messages**: GPS fix status and satellite count
+
+## Usage Instructions
 
 ### Mobile App Workflow
 
-1. Arduino advertises as "Watersnake" via BLE
-2. Mobile app connects to Arduino
-3. User selects waypoint on map
-4. App sends GPS coordinates in format: `$GPS,lat,lon,alt*`
-5. Arduino receives waypoint and begins navigation
-6. System navigates autonomously to target location
+1. **Connect to Arduino**:
+   - Open Waypoint app
+   - Go to "Connect" tab
+   - Tap "Scan" to discover devices
+   - Select "Watersnake" device to connect
+   - Verify connection status shows "Connected"
+
+2. **Set Navigation Waypoint**:
+   - Switch to "Waypoint" tab  
+   - Tap anywhere on map to select destination
+   - Coordinates appear in waypoint card
+   - Tap "Send to Arduino" to transmit waypoint
+   - Confirmation message appears when sent
+
+3. **Download Offline Maps** (Optional):
+   - Go to "Offline" tab
+   - Tap map location to select download center
+   - Adjust radius slider (1-20 km)
+   - Tap "Download Maps for Selected Area"  
+   - Monitor download progress
+   - Maps work without internet connection
+
+### Arduino Operation
+
+1. **Startup Sequence**:
+   - Power on Arduino
+   - Wait for component initialization messages
+   - GPS will search for satellite signals (2-5 minutes initially)
+   - Display shows "NO FIX!" until GPS locks
+   - BLE begins advertising for mobile app connections
+
+2. **Navigation Modes**:
+   - **GPS Search**: "Waiting for GPS..." with satellite count
+   - **Ready**: GPS coordinates displayed, awaiting waypoint
+   - **Navigating**: Arrow points toward target, distance shown
+   - **Arrived**: "Destination reached!" when within 5m threshold
+
+3. **Manual Override**:
+   - System sends RF commands automatically
+   - Commands repeat every 2+ seconds if heading error persists
+   - No manual controls on Arduino - use mobile app to set new waypoints
 
 ### Serial Debug Output
 
-Monitor navigation via Serial Console (9600 baud):
-- BLE connection status and waypoint reception
-- GPS fix status and satellite count
-- Current position and altitude
-- Compass heading and calibration data
-- Distance and bearing to target
-- Turning commands and course corrections
-- Navigation status updates
+Monitor system via Serial Console (9600 baud):
+
+```
+GPS Navigation Starting...
+OLED initialised!
+GPS initialised! 
+Magnetometer initialised!
+BLE GPS Receiver initialized successfully
+Test Transmitter
+sending RIGHT...
+sending LEFT...
+Setup complete!
+New waypoint received from mobile app!
+Target: -32.940931, 151.718029
+Time: 12:34:56, Satellites: 8, Position: -32.940500, 151.717800, Altitude: 45.2 m, Fix: Yes, Heading: 127.5
+Turning RIGHT (off by 23.2 degrees)
+On course!
+Destination reached!
+```
 
 ## File Structure
 
 ```
+├── Helm/
+│   ├── Helm.ino                     # Main navigation system
+│   ├── GPSReceiver.cpp              # BLE waypoint receiver implementation  
+│   ├── GPSReceiver.h                # BLE receiver header
+│   ├── WatersnakeRFController.cpp   # RF transmission implementation
+│   ├── WatersnakeRFController.h     # RF controller header
+│   ├── adjust_heading.ino           # Heading correction logic
+│   ├── calculate_bearing.ino        # Great-circle bearing calculations
+│   ├── calculate_distance.ino       # Haversine distance formula
+│   ├── draw_arrow.ino              # OLED directional arrow rendering
+│   ├── print_debug_info.ino        # Serial debug output
+│   ├── read_heading.ino            # Calibrated compass readings
+│   └── update_display.ino          # OLED display management
 ├── calibration/
 │   └── calibration.ino              # Magnetometer calibration utility
-├── GPS_directions/
-│   ├── GPS_directions.ino           # Main navigation system
-│   ├── GPSReceiver.cpp              # BLE waypoint receiver implementation
-│   ├── GPSReceiver.h                # BLE waypoint receiver header
-│   ├── WatersnakeRFController.cpp   # RFM69HCW RF control implementation
-│   ├── WatersnakeRFController.h     # RFM69HCW RF control header
-│   ├── adjust_heading.ino           # Heading correction logic
-│   ├── calculate_bearing.ino        # Bearing calculation (great circle)
-│   ├── calculate_distance.ino       # Distance calculation (Haversine formula)
-│   ├── draw_arrow.ino              # OLED navigation arrow drawing
-│   ├── print_debug_info.ino        # Serial debug output formatting
-│   ├── read_heading.ino            # Magnetometer reading with calibration
-│   └── update_display.ino          # OLED display updates and formatting
-└── transmitter_test/
-    ├── transmitter_test.ino         # Basic RF transmission test
-    ├── WatersnakeRFController.cpp   # Simple digital pin RF control
-    └── WatersnakeRFController.h     # Simple RF control header
+├── Waypoint/
+│   ├── Waypoint/
+│   │   ├── ContentView.swift        # Main iOS app implementation
+│   │   ├── Info.plist              # App permissions and settings
+│   │   └── Assets.xcassets/        # App icons and resources
+│   └── Waypoint.xcodeproj/         # Xcode project files
+└── README.md                        # This documentation
 ```
-
-## Navigation Algorithm
-
-1. **BLE Initialization**: Start advertising as "Watersnake" for mobile app connections
-2. **Hardware Setup**: Initialize GPS, compass, OLED display, and RF transmitter
-3. **Waypoint Reception**: Listen for GPS coordinates from mobile app via BLE
-4. **GPS Acquisition**: Wait for valid GPS signal with satellite lock
-5. **Compass Calibration**: Apply hard/soft iron corrections to magnetometer readings
-6. **Navigation Loop**:
-   - Calculate bearing to destination using great-circle navigation
-   - Read current heading from calibrated magnetometer
-   - Calculate heading error (relative angle)
-   - Send LEFT/RIGHT RF commands if error exceeds tolerance
-   - Update OLED display with navigation data and directional arrow
-   - Output debug information via serial
-7. **Arrival Detection**: Stop navigation when within minimum distance threshold
 
 ## Troubleshooting
 
-### BLE Connection Issues
-- **App won't connect**: Ensure Arduino is advertising and BLE is initialized
-- **No waypoint received**: Check data format matches protocol specification
-- **Connection drops**: Verify power supply stability and BLE range
+### Arduino Issues
 
-### GPS Issues
-- **No GPS fix**: Ensure clear sky view, wait 2-5 minutes for cold start
-- **Poor accuracy**: Check antenna connection and avoid metal interference  
-- **No serial data**: Verify GPS TX/RX wiring and baud rate (9600)
-- **Erratic coordinates**: Ensure stable power supply to GPS module
+**GPS Problems**:
+- **No GPS fix**: Ensure clear sky view, wait 2-5 minutes for satellite acquisition
+- **Poor accuracy**: Check antenna connection, avoid indoor/metal interference
+- **No serial data**: Verify GPS TX→D2, RX→D3 wiring and 9600 baud rate
+- **Erratic coordinates**: Confirm stable 5V power supply to GPS module
 
-### RF Transmission Issues
-- **Motor not responding**: Check antenna connection and frequency (433.032 MHz)
-- **Weak signal**: Verify 5V power supply and antenna positioning
-- **Wrong commands**: Re-analyze RF codes with RTL-SDR if needed
-- **RFM69HCW init failure**: Check SPI wiring and power connections
+**BLE Connection Issues**:
+- **App won't connect**: Verify Arduino is powered and advertising "Watersnake"
+- **No waypoints received**: Check BLE protocol format matches specification
+- **Connection drops**: Ensure stable power supply and maintain <30m range
 
-### Compass Issues
-- **Erratic heading**: Re-run magnetometer calibration away from metal objects
-- **Constant drift**: Check I2C wiring (Wire1 bus) and magnetometer mounting
-- **No compass data**: Verify MMC5603 I2C address and bus configuration
-- **Poor calibration**: Ensure full 3D rotation during calibration process
+**RF Transmission Problems**:
+- **Motor not responding**: Verify antenna connection and 433.032 MHz frequency
+- **Weak signal**: Check 5V power supply stability and antenna positioning  
+- **Wrong direction**: Re-run calibration or verify motor LEFT/RIGHT codes
+- **RFM69HCW init failure**: Check SPI wiring (D10→CS, D9→RST, D2→G0)
 
-### Display Issues
-- **Blank screen**: Check I2C address (0x3C) and OLED power supply
-- **Garbled display**: Verify SDA/SCL connections on Wire1 bus
-- **No arrow**: Ensure GPS fix and valid bearing calculation
-- **Display not updating**: Check display.display() calls in update loop
+**Compass/Display Issues**:
+- **Erratic heading**: Re-calibrate magnetometer away from metal objects
+- **Blank OLED**: Verify I2C address 0x3C and Wire1 bus connections (SDA/SCL)
+- **No compass data**: Check MMC5603 power and I2C wiring
+- **Display not updating**: Ensure display.display() calls in main loop
 
-## Safety and Legal Notes
+### iOS App Issues
 
-- **RF Regulations**: Ensure compliance with local 433MHz transmission regulations
-- **Water Safety**: Test system thoroughly in controlled environment before water deployment
-- **Emergency Override**: Always maintain manual control capability for motor
-- **GPS Accuracy**: Verify GPS precision before trusting autonomous navigation
-- **Battery Management**: Monitor power levels for all components during operation
-- **Backup Navigation**: Keep alternative navigation method available
+**Connection Problems**:
+- **No devices found**: Enable Bluetooth, ensure Arduino is powered and nearby
+- **Connection fails**: Restart both app and Arduino, check distance <10m
+- **Permissions denied**: Grant Bluetooth and Location access in iOS Settings
+
+**Map Issues**:
+- **No location shown**: Enable Location Services for Waypoint app
+- **Map won't load**: Check internet connection for online tile loading
+- **Offline maps not working**: Verify download completed successfully
+- **Poor GPS accuracy**: Use device outdoors with clear sky view
+
+**App Performance**:
+- **Slow map loading**: Clear cache or reduce offline map area size
+- **App crashes**: Restart app, check iOS version compatibility (15.0+)
+- **High storage usage**: Delete unused offline map regions
 
 ## Performance Specifications
 
-- **Update Rate**: 10Hz navigation loop
-- **GPS Accuracy**: Typically 3-5 meters with good satellite reception
-- **Compass Precision**: ±2° with proper calibration
-- **RF Range**: Up to 100+ meters in open water (dependent on conditions)
-- **Battery Life**: Varies with GPS fix time and RF transmission frequency
-- **BLE Range**: Typically 10-30 meters for waypoint setting
+- **Navigation Update Rate**: 10Hz main loop frequency
+- **GPS Accuracy**: 3-5 meters with good satellite reception (8+ satellites)
+- **Compass Precision**: ±2° with proper magnetometer calibration
+- **RF Range**: 100+ meters in open water conditions
+- **BLE Range**: 10-30 meters for waypoint transmission
+- **Battery Life**: Varies with GPS acquisition time and RF transmission frequency
+- **Offline Map Storage**: ~2-5MB per km² depending on zoom levels (10-15)
 
-## Future Enhancements
+## Safety and Legal Considerations
 
-Potential improvements for this system:
-1. **Multi-waypoint Navigation** - Support for route planning with multiple destinations
-2. **Obstacle Avoidance** - Integration with ultrasonic or lidar sensors
-3. **Data Logging** - SD card storage of navigation tracks and performance data
-4. **Web Interface** - WiFi-based configuration and monitoring
-5. **Motor Speed Control** - Variable speed based on distance to target
-6. **Weather Integration** - Wind and current compensation
-7. **Geofencing** - Automatic boundary enforcement for safe operation areas
+- **RF Regulations**: Ensure 433MHz transmission compliance with local regulations
+- **Water Safety**: Test system thoroughly in controlled environment before deployment
+- **Emergency Override**: Always maintain manual motor control capability as backup
+- **GPS Dependency**: Keep alternative navigation methods available
+- **Battery Management**: Monitor power levels during extended operation
+- **Range Limitations**: Maintain visual contact with remote device when possible
 
-## License
+## Future Enhancement Possibilities
 
-This project uses reverse-engineered RF protocols for educational and personal use. Ensure compliance with local RF transmission regulations and device warranty considerations.
+- **Multi-waypoint Routes** - Support sequential navigation through multiple points
+- **Obstacle Avoidance** - Integration with ultrasonic or radar sensors
+- **Data Logging** - SD card storage of navigation tracks and performance metrics
+- **Web Interface** - WiFi-based configuration and remote monitoring
+- **Speed Control** - Variable motor speed based on distance and conditions
+- **Weather Compensation** - Wind and current drift correction algorithms
+- **Geofencing** - Automatic boundary enforcement for operational safety
+
+## License and Compliance
+
+This project uses reverse-engineered RF protocols for educational and personal use. Users must ensure compliance with local RF transmission regulations and respect device warranty considerations. The OpenStreetMap tile usage in the mobile app follows OSM usage policies for personal/educational applications.
 
 ## Contributing
 
-To contribute to this project:
-1. Fork the repository and create feature branches
-2. Test all changes thoroughly with actual hardware
-3. Document any new RF protocols or hardware integrations
+Contributions welcome! Please:
+1. Fork repository and create feature branches  
+2. Test changes thoroughly with actual hardware
+3. Document RF protocol modifications or new hardware integrations
 4. Ensure backward compatibility with existing calibration data
-5. Update documentation for any new features or requirements
+5. Update documentation for new features or requirements

@@ -3,6 +3,265 @@ import CoreBluetooth
 import CoreLocation
 import MapKit
 
+// MARK: - Bluetooth Manager
+class BluetoothManager: NSObject, ObservableObject {
+    @Published var isConnected: Bool = false
+    @Published var discoveredDevices: [CBPeripheral] = []
+    @Published var signalStrength: Int = 0
+    @Published var connectionStatus: String = "Disconnected"
+    
+    private var centralManager: CBCentralManager!
+    private var connectedPeripheral: CBPeripheral?
+    private var gpsCharacteristic: CBCharacteristic?
+    
+    private let serviceUUID = CBUUID(string: "0000FFE0-0000-1000-8000-00805F9B34FB")
+    private let characteristicUUID = CBUUID(string: "0000FFE1-0000-1000-8000-00805F9B34FB")
+    
+    override init() {
+        super.init()
+        centralManager = CBCentralManager(delegate: self, queue: nil)
+    }
+    
+    func startScanning() {
+        if centralManager.state == .poweredOn {
+            discoveredDevices.removeAll()
+            centralManager.scanForPeripherals(withServices: [serviceUUID], options: nil)
+            connectionStatus = "Scanning..."
+        }
+    }
+    
+    func stopScanning() {
+        centralManager.stopScan()
+        connectionStatus = "Scan stopped"
+    }
+    
+    func connect(to peripheral: CBPeripheral) {
+        connectedPeripheral = peripheral
+        centralManager.connect(peripheral, options: nil)
+        connectionStatus = "Connecting..."
+    }
+    
+    func disconnect() {
+        if let peripheral = connectedPeripheral {
+            centralManager.cancelPeripheralConnection(peripheral)
+        }
+    }
+    
+    func sendWaypoint(latitude: Double, longitude: Double) {
+        guard let characteristic = gpsCharacteristic, let peripheral = connectedPeripheral else {
+            return
+        }
+        
+        let dataString = String(format: "$GPS,%.6f,%.6f,0.00*\n", latitude, longitude)
+        if let data = dataString.data(using: .utf8) {
+            peripheral.writeValue(data, for: characteristic, type: .withResponse)
+        }
+    }
+}
+
+// MARK: - CBCentralManagerDelegate
+extension BluetoothManager: CBCentralManagerDelegate {
+    func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        switch central.state {
+        case .poweredOn:
+            connectionStatus = "Ready"
+        case .poweredOff:
+            connectionStatus = "Bluetooth Off"
+        case .unauthorized:
+            connectionStatus = "Unauthorized"
+        case .unsupported:
+            connectionStatus = "Unsupported"
+        default:
+            connectionStatus = "Unknown"
+        }
+    }
+    
+    func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
+        if !discoveredDevices.contains(where: { $0.identifier == peripheral.identifier }) {
+            discoveredDevices.append(peripheral)
+        }
+    }
+    
+    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        isConnected = true
+        connectionStatus = "Connected"
+        peripheral.delegate = self
+        peripheral.discoverServices([serviceUUID])
+        centralManager.stopScan()
+    }
+    
+    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        isConnected = false
+        connectionStatus = "Disconnected"
+        gpsCharacteristic = nil
+    }
+    
+    func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        connectionStatus = "Connection Failed"
+    }
+}
+
+// MARK: - CBPeripheralDelegate
+extension BluetoothManager: CBPeripheralDelegate {
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        guard let services = peripheral.services else {
+            return
+        }
+        
+        for service in services {
+            peripheral.discoverCharacteristics([characteristicUUID], for: service)
+        }
+    }
+    
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        guard let characteristics = service.characteristics else {
+            return
+        }
+        
+        for characteristic in characteristics {
+            if characteristic.uuid == characteristicUUID {
+                gpsCharacteristic = characteristic
+            }
+        }
+    }
+    
+    func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
+        signalStrength = RSSI.intValue
+    }
+}
+
+// MARK: - Location Manager
+class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
+    @Published var location: CLLocation?
+    @Published var authorizationStatus: CLAuthorizationStatus = .notDetermined
+    @Published var accuracy: Double = 0.0
+    
+    private let locationManager = CLLocationManager()
+    
+    override init() {
+        super.init()
+        locationManager.delegate = self
+        locationManager.desiredAccuracy = kCLLocationAccuracyBest
+        locationManager.distanceFilter = 1.0
+    }
+    
+    func requestAuthorization() {
+        locationManager.requestWhenInUseAuthorization()
+    }
+    
+    func startLocationUpdates() {
+        locationManager.startUpdatingLocation()
+    }
+    
+    func stopLocationUpdates() {
+        locationManager.stopUpdatingLocation()
+    }
+    
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let newLocation = locations.last else {
+            return
+        }
+        location = newLocation
+        accuracy = newLocation.horizontalAccuracy
+    }
+    
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        authorizationStatus = manager.authorizationStatus
+        
+        if authorizationStatus == .authorizedWhenInUse || authorizationStatus == .authorizedAlways {
+            startLocationUpdates()
+        }
+    }
+}
+
+// MARK: - Waypoint Model
+struct Waypoint: Identifiable, Codable {
+    let id: UUID
+    let coordinate: CLLocationCoordinate2D
+    let timestamp: Date
+    var name: String
+    var isSaved: Bool
+    
+    init(coordinate: CLLocationCoordinate2D, name: String = "New Waypoint", isSaved: Bool = false) {
+        self.id = UUID()
+        self.coordinate = coordinate
+        self.timestamp = Date()
+        self.name = name
+        self.isSaved = isSaved
+    }
+    
+    enum CodingKeys: String, CodingKey {
+        case id, latitude, longitude, timestamp, name, isSaved
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        let lat = try container.decode(Double.self, forKey: .latitude)
+        let lon = try container.decode(Double.self, forKey: .longitude)
+        coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "New Waypoint"
+        isSaved = try container.decodeIfPresent(Bool.self, forKey: .isSaved) ?? false
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(coordinate.latitude, forKey: .latitude)
+        try container.encode(coordinate.longitude, forKey: .longitude)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encode(name, forKey: .name)
+        try container.encode(isSaved, forKey: .isSaved)
+    }
+}
+
+// MARK: - Waypoint Manager
+class WaypointManager: ObservableObject {
+    @Published var savedWaypoints: [Waypoint] = []
+    
+    init() {
+        loadWaypoints()
+    }
+    
+    func saveWaypoint(_ waypoint: Waypoint) {
+        var savedWaypoint = waypoint
+        savedWaypoint.isSaved = true
+        savedWaypoints.append(savedWaypoint)
+        saveToStorage()
+    }
+    
+    func updateWaypoint(id: UUID, name: String) {
+        if let index = savedWaypoints.firstIndex(where: { $0.id == id }) {
+            savedWaypoints[index].name = name
+            saveToStorage()
+        }
+    }
+    
+    func deleteWaypoint(at index: Int) {
+        savedWaypoints.remove(at: index)
+        saveToStorage()
+    }
+    
+    func deleteWaypoint(id: UUID) {
+        savedWaypoints.removeAll { $0.id == id }
+        saveToStorage()
+    }
+    
+    private func saveToStorage() {
+        if let encoded = try? JSONEncoder().encode(savedWaypoints) {
+            UserDefaults.standard.set(encoded, forKey: "savedWaypoints")
+        }
+    }
+    
+    private func loadWaypoints() {
+        if let data = UserDefaults.standard.data(forKey: "savedWaypoints"),
+           let decoded = try? JSONDecoder().decode([Waypoint].self, from: data) {
+            savedWaypoints = decoded
+        }
+    }
+}
+
 // MARK: - Offline Tile Manager
 class OfflineTileManager: ObservableObject {
     @Published var downloadProgress: Double = 0.0
@@ -290,265 +549,6 @@ class OfflineTileOverlay: MKTileOverlay {
     }
 }
 
-// MARK: - Bluetooth Manager
-class BluetoothManager: NSObject, ObservableObject {
-    @Published var isConnected: Bool = false
-    @Published var discoveredDevices: [CBPeripheral] = []
-    @Published var signalStrength: Int = 0
-    @Published var connectionStatus: String = "Disconnected"
-    
-    private var centralManager: CBCentralManager!
-    private var connectedPeripheral: CBPeripheral?
-    private var gpsCharacteristic: CBCharacteristic?
-    
-    private let serviceUUID = CBUUID(string: "0000FFE0-0000-1000-8000-00805F9B34FB")
-    private let characteristicUUID = CBUUID(string: "0000FFE1-0000-1000-8000-00805F9B34FB")
-    
-    override init() {
-        super.init()
-        centralManager = CBCentralManager(delegate: self, queue: nil)
-    }
-    
-    func startScanning() {
-        if centralManager.state == .poweredOn {
-            discoveredDevices.removeAll()
-            centralManager.scanForPeripherals(withServices: [serviceUUID], options: nil)
-            connectionStatus = "Scanning..."
-        }
-    }
-    
-    func stopScanning() {
-        centralManager.stopScan()
-        connectionStatus = "Scan stopped"
-    }
-    
-    func connect(to peripheral: CBPeripheral) {
-        connectedPeripheral = peripheral
-        centralManager.connect(peripheral, options: nil)
-        connectionStatus = "Connecting..."
-    }
-    
-    func disconnect() {
-        if let peripheral = connectedPeripheral {
-            centralManager.cancelPeripheralConnection(peripheral)
-        }
-    }
-    
-    func sendWaypoint(latitude: Double, longitude: Double) {
-        guard let characteristic = gpsCharacteristic, let peripheral = connectedPeripheral else {
-            return
-        }
-        
-        let dataString = String(format: "$GPS,%.6f,%.6f,0.00*\n", latitude, longitude)
-        if let data = dataString.data(using: .utf8) {
-            peripheral.writeValue(data, for: characteristic, type: .withResponse)
-        }
-    }
-}
-
-// MARK: - CBCentralManagerDelegate
-extension BluetoothManager: CBCentralManagerDelegate {
-    func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        switch central.state {
-        case .poweredOn:
-            connectionStatus = "Ready"
-        case .poweredOff:
-            connectionStatus = "Bluetooth Off"
-        case .unauthorized:
-            connectionStatus = "Unauthorized"
-        case .unsupported:
-            connectionStatus = "Unsupported"
-        default:
-            connectionStatus = "Unknown"
-        }
-    }
-    
-    func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
-        if !discoveredDevices.contains(where: { $0.identifier == peripheral.identifier }) {
-            discoveredDevices.append(peripheral)
-        }
-    }
-    
-    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        isConnected = true
-        connectionStatus = "Connected"
-        peripheral.delegate = self
-        peripheral.discoverServices([serviceUUID])
-        centralManager.stopScan()
-    }
-    
-    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        isConnected = false
-        connectionStatus = "Disconnected"
-        gpsCharacteristic = nil
-    }
-    
-    func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        connectionStatus = "Connection Failed"
-    }
-}
-
-// MARK: - CBPeripheralDelegate
-extension BluetoothManager: CBPeripheralDelegate {
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard let services = peripheral.services else {
-            return
-        }
-        
-        for service in services {
-            peripheral.discoverCharacteristics([characteristicUUID], for: service)
-        }
-    }
-    
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        guard let characteristics = service.characteristics else {
-            return
-        }
-        
-        for characteristic in characteristics {
-            if characteristic.uuid == characteristicUUID {
-                gpsCharacteristic = characteristic
-            }
-        }
-    }
-    
-    func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
-        signalStrength = RSSI.intValue
-    }
-}
-
-// MARK: - Location Manager
-class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
-    @Published var location: CLLocation?
-    @Published var authorizationStatus: CLAuthorizationStatus = .notDetermined
-    @Published var accuracy: Double = 0.0
-    
-    private let locationManager = CLLocationManager()
-    
-    override init() {
-        super.init()
-        locationManager.delegate = self
-        locationManager.desiredAccuracy = kCLLocationAccuracyBest
-        locationManager.distanceFilter = 1.0
-    }
-    
-    func requestAuthorization() {
-        locationManager.requestWhenInUseAuthorization()
-    }
-    
-    func startLocationUpdates() {
-        locationManager.startUpdatingLocation()
-    }
-    
-    func stopLocationUpdates() {
-        locationManager.stopUpdatingLocation()
-    }
-    
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let newLocation = locations.last else {
-            return
-        }
-        location = newLocation
-        accuracy = newLocation.horizontalAccuracy
-    }
-    
-    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        authorizationStatus = manager.authorizationStatus
-        
-        if authorizationStatus == .authorizedWhenInUse || authorizationStatus == .authorizedAlways {
-            startLocationUpdates()
-        }
-    }
-}
-
-// MARK: - Waypoint Model
-struct Waypoint: Identifiable, Codable {
-    let id: UUID
-    let coordinate: CLLocationCoordinate2D
-    let timestamp: Date
-    var name: String
-    var isSaved: Bool
-    
-    init(coordinate: CLLocationCoordinate2D, name: String = "New Waypoint", isSaved: Bool = false) {
-        self.id = UUID()
-        self.coordinate = coordinate
-        self.timestamp = Date()
-        self.name = name
-        self.isSaved = isSaved
-    }
-    
-    enum CodingKeys: String, CodingKey {
-        case id, latitude, longitude, timestamp, name, isSaved
-    }
-    
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(UUID.self, forKey: .id)
-        let lat = try container.decode(Double.self, forKey: .latitude)
-        let lon = try container.decode(Double.self, forKey: .longitude)
-        coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
-        timestamp = try container.decode(Date.self, forKey: .timestamp)
-        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "New Waypoint"
-        isSaved = try container.decodeIfPresent(Bool.self, forKey: .isSaved) ?? false
-    }
-    
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(coordinate.latitude, forKey: .latitude)
-        try container.encode(coordinate.longitude, forKey: .longitude)
-        try container.encode(timestamp, forKey: .timestamp)
-        try container.encode(name, forKey: .name)
-        try container.encode(isSaved, forKey: .isSaved)
-    }
-}
-
-// MARK: - Waypoint Manager
-class WaypointManager: ObservableObject {
-    @Published var savedWaypoints: [Waypoint] = []
-    
-    init() {
-        loadWaypoints()
-    }
-    
-    func saveWaypoint(_ waypoint: Waypoint) {
-        var savedWaypoint = waypoint
-        savedWaypoint.isSaved = true
-        savedWaypoints.append(savedWaypoint)
-        saveToStorage()
-    }
-    
-    func updateWaypoint(id: UUID, name: String) {
-        if let index = savedWaypoints.firstIndex(where: { $0.id == id }) {
-            savedWaypoints[index].name = name
-            saveToStorage()
-        }
-    }
-    
-    func deleteWaypoint(at index: Int) {
-        savedWaypoints.remove(at: index)
-        saveToStorage()
-    }
-    
-    func deleteWaypoint(id: UUID) {
-        savedWaypoints.removeAll { $0.id == id }
-        saveToStorage()
-    }
-    
-    private func saveToStorage() {
-        if let encoded = try? JSONEncoder().encode(savedWaypoints) {
-            UserDefaults.standard.set(encoded, forKey: "savedWaypoints")
-        }
-    }
-    
-    private func loadWaypoints() {
-        if let data = UserDefaults.standard.data(forKey: "savedWaypoints"),
-           let decoded = try? JSONDecoder().decode([Waypoint].self, from: data) {
-            savedWaypoints = decoded
-        }
-    }
-}
-
 // MARK: - Main App
 @main
 struct WaypointApp: App {
@@ -668,10 +668,14 @@ struct ConnectionView: View {
 struct WaypointMapView: View {
     @ObservedObject var locationManager: LocationManager
     @ObservedObject var bluetoothManager: BluetoothManager
-    @ObservedObject var offlineTileManager: OfflineTileManager
+    @ObservedObject var waypointManager: WaypointManager
     @State private var position: MapCameraPosition = .automatic
     @State private var selectedWaypoint: Waypoint?
     @State private var showConfirmation = false
+    @State private var showSavedWaypoints = false
+    @State private var editingWaypointId: UUID?
+    @State private var editingWaypointName: String = ""
+    @State private var hasSetInitialPosition = false
     
     var body: some View {
         NavigationView {
@@ -680,8 +684,30 @@ struct WaypointMapView: View {
                     Map(position: $position) {
                         UserAnnotation()
                         
-                        if let waypoint = selectedWaypoint {
-                            Annotation("Waypoint", coordinate: waypoint.coordinate) {
+                        ForEach(waypointManager.savedWaypoints) { waypoint in
+                            Annotation("", coordinate: waypoint.coordinate) {
+                                VStack(spacing: 0) {
+                                    Image(systemName: "star.circle.fill")
+                                        .font(.system(size: 32))
+                                        .foregroundColor(.yellow)
+                                        .background(Color.white)
+                                        .clipShape(Circle())
+                                    Text(waypoint.name)
+                                        .font(.caption2)
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 3)
+                                        .background(Color.yellow.opacity(0.8))
+                                        .cornerRadius(4)
+                                }
+                                .onTapGesture {
+                                    selectedWaypoint = waypoint
+                                }
+                            }
+                        }
+                        
+                        if let waypoint = selectedWaypoint, !waypoint.isSaved {
+                            Annotation("", coordinate: waypoint.coordinate) {
                                 VStack(spacing: 0) {
                                     Image(systemName: "mappin.circle.fill")
                                         .font(.system(size: 40))
@@ -696,7 +722,7 @@ struct WaypointMapView: View {
                     }
                     .onTapGesture { screenCoordinate in
                         if let coordinate = proxy.convert(screenCoordinate, from: .local) {
-                            selectedWaypoint = Waypoint(coordinate: coordinate, timestamp: Date())
+                            selectedWaypoint = Waypoint(coordinate: coordinate)
                         }
                     }
                 }
@@ -707,8 +733,13 @@ struct WaypointMapView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 VStack(alignment: .leading, spacing: 5) {
-                                    Text("Selected Waypoint")
-                                        .font(.headline)
+                                    if waypoint.isSaved {
+                                        Text(waypoint.name)
+                                            .font(.headline)
+                                    } else {
+                                        Text("Selected Waypoint")
+                                            .font(.headline)
+                                    }
                                     Text("Lat: \(waypoint.coordinate.latitude, specifier: "%.6f")")
                                         .font(.system(.caption, design: .monospaced))
                                     Text("Lon: \(waypoint.coordinate.longitude, specifier: "%.6f")")
@@ -724,28 +755,87 @@ struct WaypointMapView: View {
                                 }
                             }
                             
-                            if bluetoothManager.isConnected {
-                                Button(action: {
-                                    bluetoothManager.sendWaypoint(
-                                        latitude: waypoint.coordinate.latitude,
-                                        longitude: waypoint.coordinate.longitude
-                                    )
-                                    showConfirmation = true
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                                        showConfirmation = false
+                            if waypoint.isSaved {
+                                HStack(spacing: 10) {
+                                    if bluetoothManager.isConnected {
+                                        Button(action: {
+                                            bluetoothManager.sendWaypoint(
+                                                latitude: waypoint.coordinate.latitude,
+                                                longitude: waypoint.coordinate.longitude
+                                            )
+                                            showConfirmation = true
+                                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                                showConfirmation = false
+                                            }
+                                        }) {
+                                            HStack {
+                                                Image(systemName: "paperplane.fill")
+                                                Text("Send")
+                                            }
+                                            .frame(maxWidth: .infinity)
+                                            .padding()
+                                            .background(Color.green)
+                                            .foregroundColor(.white)
+                                            .cornerRadius(10)
+                                        }
                                     }
+                                    
+                                    Button(action: {
+                                        waypointManager.deleteWaypoint(id: waypoint.id)
+                                        selectedWaypoint = nil
+                                    }) {
+                                        HStack {
+                                            Image(systemName: "trash.fill")
+                                            Text("Delete")
+                                        }
+                                        .frame(maxWidth: .infinity)
+                                        .padding()
+                                        .background(Color.red)
+                                        .foregroundColor(.white)
+                                        .cornerRadius(10)
+                                    }
+                                }
+                            } else {
+                                if bluetoothManager.isConnected {
+                                    Button(action: {
+                                        bluetoothManager.sendWaypoint(
+                                            latitude: waypoint.coordinate.latitude,
+                                            longitude: waypoint.coordinate.longitude
+                                        )
+                                        showConfirmation = true
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                            showConfirmation = false
+                                        }
+                                    }) {
+                                        HStack {
+                                            Image(systemName: "paperplane.fill")
+                                            Text("Send to Arduino")
+                                        }
+                                        .frame(maxWidth: .infinity)
+                                        .padding()
+                                        .background(Color.green)
+                                        .foregroundColor(.white)
+                                        .cornerRadius(10)
+                                    }
+                                }
+                                
+                                Button(action: {
+                                    waypointManager.saveWaypoint(waypoint)
+                                    selectedWaypoint = waypointManager.savedWaypoints.last
                                 }) {
                                     HStack {
-                                        Image(systemName: "paperplane.fill")
-                                        Text("Send to Arduino")
+                                        Image(systemName: "star.fill")
+                                        Text("Save Waypoint")
                                     }
                                     .frame(maxWidth: .infinity)
                                     .padding()
-                                    .background(Color.green)
+                                    .background(Color.blue)
                                     .foregroundColor(.white)
                                     .cornerRadius(10)
                                 }
-                            } else {
+                            }
+                            
+                            if !bluetoothManager.isConnected && !waypoint.isSaved {
                                 Text("Connect to Arduino to send waypoint")
                                     .font(.caption)
                                     .foregroundColor(.orange)
@@ -786,8 +876,19 @@ struct WaypointMapView: View {
                     }
                 }
             }
-            .navigationTitle("Set Waypoint")
+            .navigationTitle("Waypoint")
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: {
+                        showSavedWaypoints.toggle()
+                    }) {
+                        HStack {
+                            Image(systemName: "list.bullet")
+                            Text("\(waypointManager.savedWaypoints.count)")
+                        }
+                    }
+                }
+                
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: {
                         if let location = locationManager.location {
@@ -801,13 +902,133 @@ struct WaypointMapView: View {
                     }
                 }
             }
+            .sheet(isPresented: $showSavedWaypoints) {
+                SavedWaypointsView(waypointManager: waypointManager, bluetoothManager: bluetoothManager, selectedWaypoint: $selectedWaypoint, showSheet: $showSavedWaypoints)
+            }
         }
         .onChange(of: locationManager.location) { oldValue, newLocation in
-            if let location = newLocation, selectedWaypoint == nil {
+            if let location = newLocation, !hasSetInitialPosition {
                 position = .region(MKCoordinateRegion(
                     center: location.coordinate,
                     span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
                 ))
+                hasSetInitialPosition = true
+            }
+        }
+    }
+}
+
+// MARK: - Saved Waypoints View
+struct SavedWaypointsView: View {
+    @ObservedObject var waypointManager: WaypointManager
+    @ObservedObject var bluetoothManager: BluetoothManager
+    @Binding var selectedWaypoint: Waypoint?
+    @Binding var showSheet: Bool
+    @State private var editingWaypointId: UUID?
+    @State private var editingWaypointName: String = ""
+    
+    var body: some View {
+        NavigationView {
+            List {
+                ForEach(Array(waypointManager.savedWaypoints.enumerated()), id: \.element.id) { index, waypoint in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                if editingWaypointId == waypoint.id {
+                                    TextField("Waypoint name", text: $editingWaypointName, onCommit: {
+                                        waypointManager.updateWaypoint(id: waypoint.id, name: editingWaypointName)
+                                        editingWaypointId = nil
+                                    })
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                } else {
+                                    Text(waypoint.name)
+                                        .font(.headline)
+                                }
+                                Text("Lat: \(waypoint.coordinate.latitude, specifier: "%.6f")")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundColor(.gray)
+                                Text("Lon: \(waypoint.coordinate.longitude, specifier: "%.6f")")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundColor(.gray)
+                            }
+                            
+                            Spacer()
+                            
+                            if editingWaypointId != waypoint.id {
+                                Button(action: {
+                                    editingWaypointId = waypoint.id
+                                    editingWaypointName = waypoint.name
+                                }) {
+                                    Image(systemName: "pencil")
+                                        .foregroundColor(.blue)
+                                }
+                                .buttonStyle(BorderlessButtonStyle())
+                            }
+                        }
+                        
+                        HStack(spacing: 10) {
+                            Button(action: {
+                                selectedWaypoint = waypoint
+                                showSheet = false
+                            }) {
+                                HStack {
+                                    Image(systemName: "map")
+                                    Text("View")
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                                .background(Color.blue.opacity(0.1))
+                                .foregroundColor(.blue)
+                                .cornerRadius(8)
+                            }
+                            .buttonStyle(BorderlessButtonStyle())
+                            
+                            if bluetoothManager.isConnected {
+                                Button(action: {
+                                    bluetoothManager.sendWaypoint(
+                                        latitude: waypoint.coordinate.latitude,
+                                        longitude: waypoint.coordinate.longitude
+                                    )
+                                }) {
+                                    HStack {
+                                        Image(systemName: "paperplane.fill")
+                                        Text("Send")
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                                    .background(Color.green.opacity(0.1))
+                                    .foregroundColor(.green)
+                                    .cornerRadius(8)
+                                }
+                                .buttonStyle(BorderlessButtonStyle())
+                            }
+                            
+                            Button(action: {
+                                waypointManager.deleteWaypoint(at: index)
+                                if selectedWaypoint?.id == waypoint.id {
+                                    selectedWaypoint = nil
+                                }
+                                if editingWaypointId == waypoint.id {
+                                    editingWaypointId = nil
+                                }
+                            }) {
+                                Image(systemName: "trash")
+                                    .foregroundColor(.red)
+                            }
+                            .buttonStyle(BorderlessButtonStyle())
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            .navigationTitle("Saved Waypoints")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        showSheet = false
+                    }
+                }
             }
         }
     }
