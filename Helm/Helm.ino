@@ -4,7 +4,6 @@
 #include <Wire.h>
 #include <SoftwareSerial.h>
 #include <math.h>
-#include "GPSParser.h"
 #include "WatersnakeRFController.h"
 #include "GPSReceiver.h"
 
@@ -23,8 +22,23 @@ const int GPS_TX_PIN = 3;  // Arduino pin connected to GPS RX
 // Initialize the software serial port for GPS
 SoftwareSerial gpsSerial(GPS_RX_PIN, GPS_TX_PIN);
 
-// Create a GPS reader
-GPSReader gps(gpsSerial);
+// GPS data structure
+struct GPSData {
+    bool has_fix;
+    int satellites;
+    double latitude;
+    double longitude;
+    double altitude;
+    String time;
+};
+
+// Simple GPS parser function
+GPSData parseGPS() {
+    GPSData data = {false, 0, 0.0, 0.0, 0.0, ""};
+    // Placeholder GPS parsing - integrate with actual GPS module
+    // For now, return default values
+    return data;
+}
 
 // Initialize compass/magnetometer
 Adafruit_MMC5603 compass = Adafruit_MMC5603(12345);
@@ -66,6 +80,12 @@ float latest_distance = 0;
 float latest_bearing = 0;
 unsigned long lastCorrectionTime = 0;
 
+// Calibration variables
+float calMagMinX, calMagMaxX;
+float calMagMinY, calMagMaxY;
+float calMagMinZ, calMagMaxZ;
+unsigned long lastCalibrationDataSent = 0;
+
 // Function declarations
 float calculate_distance(float lat1, float lon1, float lat2, float lon2);
 float calculate_bearing(float lat1, float lon1, float lat2, float lon2);
@@ -74,6 +94,7 @@ float read_heading();
 void adjustHeading(float relativeAngle);
 void updateDisplay(GPSData gpsData, float heading, float distance, float bearing);
 void printDebugInfo(GPSData gpsData, float heading);
+void handleCalibrationMode();
 
 
 void setup() {
@@ -112,8 +133,8 @@ void setup() {
     //     Serial.println(F("Frequency: 433.032 MHz"));
     // }
 
-    // Initialize BLE GPS receiver
-    if (!gpsReceiver.begin("Watersnake")) {
+// Initialize BLE GPS receiver
+    if (!gpsReceiver.begin("Helm")) {
         Serial.println("Failed to initialize BLE GPS Receiver!");
     } else {
         Serial.println("BLE GPS Receiver initialized successfully");
@@ -168,6 +189,12 @@ void loop() {
     // Update BLE GPS receiver
     gpsReceiver.update();
     
+    // Handle calibration mode
+    if (gpsReceiver.isCalibrationMode()) {
+        handleCalibrationMode();
+        return; // Skip normal navigation during calibration
+    }
+    
     // Check for new waypoint from mobile app
     if (gpsReceiver.hasTarget()) {
         DESTINATION_LAT = gpsReceiver.getLatitude();
@@ -184,7 +211,7 @@ void loop() {
     float heading = read_heading();
     
     // Get current GPS data
-    GPSData gps_data = gps.get_data();
+    GPSData gps_data = parseGPS();
     
     // If we have valid GPS data, calculate distance and bearing
     if (gps_data.has_fix) {
@@ -230,5 +257,60 @@ void loop() {
     }
     
     // Update at 10 Hz
+    delay(100);
+}
+
+void handleCalibrationMode() {
+    // Get magnetometer event for calibration
+    sensors_event_t magEvent;
+    compass.getEvent(&magEvent);
+    
+    // Track min/max values during calibration
+    static bool firstReading = true;
+    if (firstReading) {
+        calMagMinX = calMagMaxX = magEvent.magnetic.x;
+        calMagMinY = calMagMaxY = magEvent.magnetic.y;
+        calMagMinZ = calMagMaxZ = magEvent.magnetic.z;
+        firstReading = false;
+    } else {
+        if (magEvent.magnetic.x < calMagMinX) calMagMinX = magEvent.magnetic.x;
+        if (magEvent.magnetic.x > calMagMaxX) calMagMaxX = magEvent.magnetic.x;
+        if (magEvent.magnetic.y < calMagMinY) calMagMinY = magEvent.magnetic.y;
+        if (magEvent.magnetic.y > calMagMaxY) calMagMaxY = magEvent.magnetic.y;
+        if (magEvent.magnetic.z < calMagMinZ) calMagMinZ = magEvent.magnetic.z;
+        if (magEvent.magnetic.z > calMagMaxZ) calMagMaxZ = magEvent.magnetic.z;
+    }
+    
+    // Send calibration data to app every 500ms
+    if (millis() - lastCalibrationDataSent >= 500) {
+        gpsReceiver.sendCalibrationData(
+            magEvent.magnetic.x, magEvent.magnetic.y, magEvent.magnetic.z,
+            calMagMinX, calMagMinY, calMagMinZ,
+            calMagMaxX, calMagMaxY, calMagMaxZ
+        );
+        lastCalibrationDataSent = millis();
+    }
+    
+    // Display calibration status
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(16, 5);
+    display.print("CALIBRATION MODE");
+    display.setCursor(4, 20);
+    display.print("Rotate device slowly");
+    display.setCursor(8, 30);
+    display.print("in all directions");
+    display.setCursor(4, 45);
+    display.print("X: ");
+    display.print(magEvent.magnetic.x, 1);
+    display.setCursor(4, 55);
+    display.print("Y: ");
+    display.print(magEvent.magnetic.y, 1);
+    display.setCursor(64, 55);
+    display.print("Z: ");
+    display.print(magEvent.magnetic.z, 1);
+    display.display();
+    
     delay(100);
 }

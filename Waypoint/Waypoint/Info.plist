@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-<dict/>
+<dict>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>This app uses Bluetooth to connect to the Helm navigation device for waypoint transmission and magnetometer calibration.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>This app uses location services to show your current position on the map and for navigation purposes.</string>
+</dict>
 </plist>

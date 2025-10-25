@@ -9,12 +9,15 @@
 GPSReceiver::GPSReceiver() : 
     gpsService("0000FFE0-0000-1000-8000-00805F9B34FB"),
     gpsCharacteristic("0000FFE1-0000-1000-8000-00805F9B34FB", BLEWrite, 256),
-    statusCharacteristic("0000FFE2-0000-1000-8000-00805F9B34FB", BLENotify, 512) {
+    statusCharacteristic("0000FFE2-0000-1000-8000-00805F9B34FB", BLENotify, 512),
+    calibrationCommandCharacteristic("0000FFE3-0000-1000-8000-00805F9B34FB", BLEWrite, 64),
+    calibrationDataCharacteristic("0000FFE4-0000-1000-8000-00805F9B34FB", BLENotify, 256) {
     targetLatitude = 0.0;
     targetLongitude = 0.0;
     targetAltitude = 0.0;
     hasValidTarget = false;
     inputBuffer = "";
+    calibrationMode = false;
 }
 
 bool GPSReceiver::begin(const char* deviceName) {
@@ -27,6 +30,8 @@ bool GPSReceiver::begin(const char* deviceName) {
     BLE.setAdvertisedService(gpsService);
     gpsService.addCharacteristic(gpsCharacteristic);
     gpsService.addCharacteristic(statusCharacteristic);
+    gpsService.addCharacteristic(calibrationCommandCharacteristic);
+    gpsService.addCharacteristic(calibrationDataCharacteristic);
     BLE.addService(gpsService);
     BLE.advertise();
     
@@ -43,6 +48,10 @@ void GPSReceiver::update() {
     BLEDevice central = BLE.central();
     
     if (central) {
+        if (calibrationCommandCharacteristic.written()) {
+            handleCalibrationCommand();
+        }
+        
         if (gpsCharacteristic.written()) {
             int length = gpsCharacteristic.valueLength();
             const uint8_t* value = gpsCharacteristic.value();
@@ -145,4 +154,46 @@ void GPSReceiver::sendNavigationStatus(bool hasGpsFix, int satellites, double cu
     statusJson += "}";
     
     statusCharacteristic.writeValue(statusJson.c_str());
+}
+
+void GPSReceiver::handleCalibrationCommand() {
+    if (!BLE.central()) return;
+    
+    int length = calibrationCommandCharacteristic.valueLength();
+    const uint8_t* value = calibrationCommandCharacteristic.value();
+    
+    if (length > 0) {
+        String command = String((char*)value).substring(0, length);
+        command.trim();
+        
+        if (command == "START_CAL") {
+            calibrationMode = true;
+            Serial.println("Calibration mode started");
+        } else if (command == "STOP_CAL") {
+            calibrationMode = false;
+            Serial.println("Calibration mode stopped");
+        } else if (command.startsWith("SAVE_CAL:")) {
+            // Parse calibration values and save them
+            Serial.println("Calibration values received: " + command);
+            calibrationMode = false;
+        }
+    }
+}
+
+void GPSReceiver::sendCalibrationData(float x, float y, float z, float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
+    if (!BLE.central() || !calibrationMode) return;
+    
+    String calData = "{\"x\":" + String(x, 3) + ",\"y\":" + String(y, 3) + ",\"z\":" + String(z, 3) + ",";
+    calData += "\"minX\":" + String(minX, 3) + ",\"minY\":" + String(minY, 3) + ",\"minZ\":" + String(minZ, 3) + ",";
+    calData += "\"maxX\":" + String(maxX, 3) + ",\"maxY\":" + String(maxY, 3) + ",\"maxZ\":" + String(maxZ, 3) + "}";
+    
+    calibrationDataCharacteristic.writeValue(calData.c_str());
+}
+
+bool GPSReceiver::isCalibrationMode() {
+    return calibrationMode;
+}
+
+void GPSReceiver::setCalibrationMode(bool enabled) {
+    calibrationMode = enabled;
 }

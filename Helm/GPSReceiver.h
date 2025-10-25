@@ -34,6 +34,8 @@ private:
     BLEService gpsService;
     BLECharacteristic gpsCharacteristic;
     BLECharacteristic statusCharacteristic;
+    BLECharacteristic calibrationCommandCharacteristic;
+    BLECharacteristic calibrationDataCharacteristic;
     
     double targetLatitude;
     double targetLongitude;
@@ -57,6 +59,13 @@ public:
     void sendNavigationStatus(bool hasGpsFix, int satellites, double currentLat, double currentLon, 
                              double altitude, float heading, float distance, float bearing, 
                              double targetLat, double targetLon);
+    void handleCalibrationCommand();
+    void sendCalibrationData(float x, float y, float z, float minX, float minY, float minZ, float maxX, float maxY, float maxZ);
+    bool isCalibrationMode();
+    void setCalibrationMode(bool enabled);
+
+private:
+    bool calibrationMode;
 };
 
 #endif

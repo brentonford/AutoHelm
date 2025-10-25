@@ -3,6 +3,19 @@ import CoreBluetooth
 import CoreLocation
 import MapKit
 
+// MARK: - Magnetometer Calibration Model
+struct MagnetometerData: Codable {
+    let x: Float
+    let y: Float
+    let z: Float
+    let minX: Float
+    let minY: Float
+    let minZ: Float
+    let maxX: Float
+    let maxY: Float
+    let maxZ: Float
+}
+
 // MARK: - Arduino Navigation Status Model
 struct ArduinoNavigationStatus: Codable {
     let hasGpsFix: Bool
@@ -32,15 +45,21 @@ class BluetoothManager: NSObject, ObservableObject {
     @Published var signalStrength: Int = 0
     @Published var connectionStatus: String = "Disconnected"
     @Published var arduinoStatus: ArduinoNavigationStatus? = nil
+    @Published var magnetometerData: MagnetometerData? = nil
+    @Published var isCalibrating: Bool = false
     
     private var centralManager: CBCentralManager!
     private var connectedPeripheral: CBPeripheral?
     private var gpsCharacteristic: CBCharacteristic?
     private var statusCharacteristic: CBCharacteristic?
+    private var calibrationCommandCharacteristic: CBCharacteristic?
+    private var calibrationDataCharacteristic: CBCharacteristic?
     
     private let serviceUUID = CBUUID(string: "0000FFE0-0000-1000-8000-00805F9B34FB")
     private let characteristicUUID = CBUUID(string: "0000FFE1-0000-1000-8000-00805F9B34FB")
     private let statusCharacteristicUUID = CBUUID(string: "0000FFE2-0000-1000-8000-00805F9B34FB")
+    private let calibrationCommandUUID = CBUUID(string: "0000FFE3-0000-1000-8000-00805F9B34FB")
+    private let calibrationDataUUID = CBUUID(string: "0000FFE4-0000-1000-8000-00805F9B34FB")
     
     override init() {
         super.init()
@@ -82,6 +101,43 @@ class BluetoothManager: NSObject, ObservableObject {
             peripheral.writeValue(data, for: characteristic, type: .withResponse)
         }
     }
+    
+    func startCalibration() {
+        guard let characteristic = calibrationCommandCharacteristic, let peripheral = connectedPeripheral else {
+            return
+        }
+        
+        let command = "START_CAL"
+        if let data = command.data(using: .utf8) {
+            peripheral.writeValue(data, for: characteristic, type: .withResponse)
+            isCalibrating = true
+        }
+    }
+    
+    func stopCalibration() {
+        guard let characteristic = calibrationCommandCharacteristic, let peripheral = connectedPeripheral else {
+            return
+        }
+        
+        let command = "STOP_CAL"
+        if let data = command.data(using: .utf8) {
+            peripheral.writeValue(data, for: characteristic, type: .withResponse)
+            isCalibrating = false
+        }
+    }
+    
+    func saveCalibration(_ data: MagnetometerData) {
+        guard let characteristic = calibrationCommandCharacteristic, let peripheral = connectedPeripheral else {
+            return
+        }
+        
+        let command = String(format: "SAVE_CAL:%.2f,%.2f,%.2f,%.2f,%.2f,%.2f", 
+                            data.maxX, data.maxY, data.maxZ, data.minX, data.minY, data.minZ)
+        if let commandData = command.data(using: .utf8) {
+            peripheral.writeValue(commandData, for: characteristic, type: .withResponse)
+            isCalibrating = false
+        }
+    }
 }
 
 // MARK: - CBCentralManagerDelegate
@@ -120,7 +176,11 @@ extension BluetoothManager: CBCentralManagerDelegate {
         connectionStatus = "Disconnected"
         gpsCharacteristic = nil
         statusCharacteristic = nil
+        calibrationCommandCharacteristic = nil
+        calibrationDataCharacteristic = nil
         arduinoStatus = nil
+        magnetometerData = nil
+        isCalibrating = false
     }
     
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
@@ -136,7 +196,7 @@ extension BluetoothManager: CBPeripheralDelegate {
         }
         
         for service in services {
-            peripheral.discoverCharacteristics([characteristicUUID, statusCharacteristicUUID], for: service)
+            peripheral.discoverCharacteristics([characteristicUUID, statusCharacteristicUUID, calibrationCommandUUID, calibrationDataUUID], for: service)
         }
     }
     
@@ -150,6 +210,11 @@ extension BluetoothManager: CBPeripheralDelegate {
                 gpsCharacteristic = characteristic
             } else if characteristic.uuid == statusCharacteristicUUID {
                 statusCharacteristic = characteristic
+                peripheral.setNotifyValue(true, for: characteristic)
+            } else if characteristic.uuid == calibrationCommandUUID {
+                calibrationCommandCharacteristic = characteristic
+            } else if characteristic.uuid == calibrationDataUUID {
+                calibrationDataCharacteristic = characteristic
                 peripheral.setNotifyValue(true, for: characteristic)
             }
         }
@@ -174,6 +239,22 @@ extension BluetoothManager: CBPeripheralDelegate {
                     }
                 } catch {
                     print("Failed to decode Arduino status: \(error)")
+                }
+            }
+        } else if characteristic.uuid == calibrationDataUUID {
+            guard let data = characteristic.value,
+                  let jsonString = String(data: data, encoding: .utf8) else {
+                return
+            }
+            
+            if let calibrationData = jsonString.data(using: .utf8) {
+                do {
+                    let magData = try JSONDecoder().decode(MagnetometerData.self, from: calibrationData)
+                    DispatchQueue.main.async {
+                        self.magnetometerData = magData
+                    }
+                } catch {
+                    print("Failed to decode magnetometer data: \(error)")
                 }
             }
         }
@@ -765,11 +846,17 @@ struct ContentView: View {
                 }
                 .tag(1)
             
+            CalibrationView(bluetoothManager: bluetoothManager)
+                .tabItem {
+                    Label("Calibration", systemImage: "gyroscope")
+                }
+                .tag(2)
+            
             OfflineMapsView(locationManager: locationManager, offlineTileManager: offlineTileManager)
                 .tabItem {
                     Label("Offline", systemImage: "arrow.down.circle.fill")
                 }
-                .tag(2)
+                .tag(3)
         }
         .onAppear {
             locationManager.requestAuthorization()
@@ -977,7 +1064,7 @@ struct WaypointMapView: View {
     @State private var hasSetInitialPosition = false
     @State private var searchText = ""
     @State private var showSearchResults = false
-    @State private var mapStyle: MKMapType = .standard
+    @State private var mapStyle: MKMapType = .satellite
     @State private var showMapStylePicker = false
     
     var body: some View {
@@ -1573,9 +1660,10 @@ struct OfflineMapsView: View {
                                     }
                                 }
                             }
-                        }
-                        .frame(height: 300)
-                        .onTapGesture { screenCoordinate in
+                                }
+                                .mapStyle(.hybrid)
+                                .frame(height: 300)
+                                .onTapGesture { screenCoordinate in
                             if let coordinate = proxy.convert(screenCoordinate, from: .local) {
                                 selectedCenter = coordinate
                             }
@@ -2120,6 +2208,289 @@ struct EnhancedCompassView: View {
             withAnimation(.easeInOut(duration: 0.5)) {
                 animatedBearing = Double(newValue)
             }
+        }
+    }
+}
+
+// MARK: - Calibration View
+struct CalibrationView: View {
+    @ObservedObject var bluetoothManager: BluetoothManager
+    @State private var showCalibrationComplete = false
+    @State private var currentStep = 1
+    
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(spacing: 20) {
+                    if !bluetoothManager.isConnected {
+                        VStack(spacing: 16) {
+                            Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                                .font(.system(size: 48))
+                                .foregroundColor(.red)
+                            Text("Connect to Helm Device")
+                                .font(.title2)
+                                .fontWeight(.medium)
+                            Text("Please connect to your Helm device in the Status tab before calibrating the magnetometer.")
+                                .font(.body)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding()
+                    } else {
+                        VStack(spacing: 16) {
+                            Text("Magnetometer Calibration")
+                                .font(.title)
+                                .fontWeight(.bold)
+                            
+                            Text("Follow these steps to calibrate your compass for accurate navigation.")
+                                .font(.body)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding()
+                        
+                        if !bluetoothManager.isCalibrating {
+                            CalibrationInstructions()
+                            
+                            Button(action: {
+                                bluetoothManager.startCalibration()
+                                currentStep = 1
+                            }) {
+                                HStack {
+                                    Image(systemName: "play.circle.fill")
+                                    Text("Start Calibration")
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(Color.blue)
+                                .foregroundColor(.white)
+                                .cornerRadius(10)
+                            }
+                            .padding(.horizontal)
+                        } else {
+                            CalibrationActiveView(
+                                magnetometerData: bluetoothManager.magnetometerData,
+                                onSave: { data in
+                                    bluetoothManager.saveCalibration(data)
+                                    showCalibrationComplete = true
+                                },
+                                onDiscard: {
+                                    bluetoothManager.stopCalibration()
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Compass")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .alert("Calibration Complete", isPresented: $showCalibrationComplete) {
+            Button("OK") {
+                showCalibrationComplete = false
+            }
+        } message: {
+            Text("Magnetometer calibration has been saved to the Helm device. Your compass should now be more accurate.")
+        }
+    }
+}
+
+struct CalibrationInstructions: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Calibration Steps:")
+                .font(.headline)
+                .fontWeight(.medium)
+            
+            VStack(alignment: .leading, spacing: 12) {
+                CalibrationStep(number: 1, text: "Tap 'Start Calibration' to begin")
+                CalibrationStep(number: 2, text: "Hold the Helm device steady")
+                CalibrationStep(number: 3, text: "Slowly rotate the device in all directions")
+                CalibrationStep(number: 4, text: "Continue for 60-90 seconds")
+                CalibrationStep(number: 5, text: "Tap 'Save' when readings stabilize")
+            }
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Important Tips:")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundColor(.orange)
+                
+                Text("• Stay away from metal objects and electronics")
+                    .font(.caption)
+                Text("• Rotate slowly and smoothly in figure-8 patterns")
+                    .font(.caption)
+                Text("• Ensure all axes (X, Y, Z) show movement")
+                    .font(.caption)
+                Text("• Calibrate outdoors for best results")
+                    .font(.caption)
+            }
+        }
+        .padding()
+        .background(Color.blue.opacity(0.08))
+        .cornerRadius(12)
+        .padding(.horizontal)
+    }
+}
+
+struct CalibrationStep: View {
+    let number: Int
+    let text: String
+    
+    var body: some View {
+        HStack {
+            ZStack {
+                Circle()
+                    .fill(Color.blue)
+                    .frame(width: 24, height: 24)
+                Text("\(number)")
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+            }
+            Text(text)
+                .font(.body)
+            Spacer()
+        }
+    }
+}
+
+struct CalibrationActiveView: View {
+    let magnetometerData: MagnetometerData?
+    let onSave: (MagnetometerData) -> Void
+    let onDiscard: () -> Void
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("Calibration in Progress")
+                .font(.title2)
+                .fontWeight(.medium)
+            
+            Text("Rotate the Helm device slowly in all directions")
+                .font(.body)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+            
+            if let data = magnetometerData {
+                VStack(spacing: 16) {
+                    MagnetometerReadingsView(data: data)
+                    CalibrationProgressView(data: data)
+                }
+                .padding()
+                .background(Color.gray.opacity(0.08))
+                .cornerRadius(12)
+                .padding(.horizontal)
+                
+                HStack(spacing: 12) {
+                    Button(action: onDiscard) {
+                        HStack {
+                            Image(systemName: "xmark.circle.fill")
+                            Text("Discard")
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.red)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                    }
+                    
+                    Button(action: { onSave(data) }) {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                            Text("Save")
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.green)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                    }
+                }
+                .padding(.horizontal)
+            } else {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .blue))
+                    Text("Waiting for magnetometer data...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+    }
+}
+
+struct MagnetometerReadingsView: View {
+    let data: MagnetometerData
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Current Readings")
+                .font(.headline)
+                .fontWeight(.medium)
+            
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("X: \(data.x, specifier: "%.1f")")
+                        .font(.system(.body, design: .monospaced))
+                    Text("Y: \(data.y, specifier: "%.1f")")
+                        .font(.system(.body, design: .monospaced))
+                    Text("Z: \(data.z, specifier: "%.1f")")
+                        .font(.system(.body, design: .monospaced))
+                }
+                
+                Spacer()
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Range X: \(data.maxX - data.minX, specifier: "%.1f")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("Range Y: \(data.maxY - data.minY, specifier: "%.1f")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("Range Z: \(data.maxZ - data.minZ, specifier: "%.1f")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+    }
+}
+
+struct CalibrationProgressView: View {
+    let data: MagnetometerData
+    
+    private var progress: Double {
+        let rangeX = data.maxX - data.minX
+        let rangeY = data.maxY - data.minY
+        let rangeZ = data.maxZ - data.minZ
+        let avgRange = (rangeX + rangeY + rangeZ) / 3.0
+        return min(Double(avgRange) / 100.0, 1.0)
+    }
+    
+    private var isCalibrationGood: Bool {
+        progress > 0.7
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Calibration Progress")
+                    .font(.headline)
+                    .fontWeight(.medium)
+                Spacer()
+                if isCalibrationGood {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                }
+            }
+            
+            ProgressView(value: progress)
+                .progressViewStyle(LinearProgressViewStyle(tint: isCalibrationGood ? .green : .blue))
+            
+            Text(isCalibrationGood ? "Ready to save calibration" : "Keep rotating in all directions")
+                .font(.caption)
+                .foregroundColor(isCalibrationGood ? .green : .secondary)
         }
     }
 }
