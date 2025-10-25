@@ -6,6 +6,7 @@
 #include <math.h>
 #include "GPSParser.h"
 #include "WatersnakeRFController.h"
+#include "GPSReceiver.h"
 
 
 // OLED display configuration
@@ -31,6 +32,9 @@ Adafruit_MMC5603 compass = Adafruit_MMC5603(12345);
 // Initialize RF controller
 WatersnakeRFController watersnakeRFController;
 
+// Initialize BLE GPS waypoint receiver
+GPSReceiver gpsReceiver;
+
 // Calibration values for magnetometer
 float magXmax = 31.91;
 float magYmax = 101.72;
@@ -48,9 +52,9 @@ float magZoffset = (magZmax + magZmin) / 2.0; // -34.255
 float avgDelta;
 float magXscale, magYscale, magZscale;
 
-// Set your destination coordinates here (latitude, longitude)
-const float DESTINATION_LAT = -32.940931;
-const float DESTINATION_LON = 151.718029;
+// Default destination coordinates (will be overridden by BLE waypoints)
+float DESTINATION_LAT = -32.940931;
+float DESTINATION_LON = 151.718029;
 
 // Navigation parameters
 const float HEADING_TOLERANCE = 15.0;
@@ -97,15 +101,22 @@ void setup() {
         Serial.println("Magnetometer initialised!");
     }
 
-    // Initialize RFM69HCW transmitter
-    if (!watersnakeRFController.begin()) {
-        Serial.println(F("RFM69HCW initialization failed!"));
-        while (1) {
-            delay(1000);
-        }
+    // // Initialize RFM69HCW transmitter
+    // if (!watersnakeRFController.begin()) {
+    //     Serial.println(F("RFM69HCW initialization failed!"));
+    //     while (1) {
+    //         delay(1000);
+    //     }
+    // } else {
+    //     Serial.println(F("RFM69HCW initialized successfully"));
+    //     Serial.println(F("Frequency: 433.032 MHz"));
+    // }
+
+    // Initialize BLE GPS receiver
+    if (!gpsReceiver.begin("Watersnake")) {
+        Serial.println("Failed to initialize BLE GPS Receiver!");
     } else {
-        Serial.println(F("RFM69HCW initialized successfully"));
-        Serial.println(F("Frequency: 433.032 MHz"));
+        Serial.println("BLE GPS Receiver initialized successfully");
     }
     
     // Calculate scaling factors for magnetometer
@@ -153,6 +164,21 @@ void setup() {
 
 void loop() {
     display.clearDisplay();
+    
+    // Update BLE GPS receiver
+    gpsReceiver.update();
+    
+    // Check for new waypoint from mobile app
+    if (gpsReceiver.hasTarget()) {
+        DESTINATION_LAT = gpsReceiver.getLatitude();
+        DESTINATION_LON = gpsReceiver.getLongitude();
+        Serial.println("New waypoint received from mobile app!");
+        Serial.print("Target: ");
+        Serial.print(DESTINATION_LAT, 6);
+        Serial.print(", ");
+        Serial.println(DESTINATION_LON, 6);
+        gpsReceiver.clearTarget();
+    }
     
     // Get compass heading
     float heading = read_heading();
