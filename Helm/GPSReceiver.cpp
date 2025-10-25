@@ -8,7 +8,8 @@
 
 GPSReceiver::GPSReceiver() : 
     gpsService("0000FFE0-0000-1000-8000-00805F9B34FB"),
-    gpsCharacteristic("0000FFE1-0000-1000-8000-00805F9B34FB", BLEWrite, 256) {
+    gpsCharacteristic("0000FFE1-0000-1000-8000-00805F9B34FB", BLEWrite, 256),
+    statusCharacteristic("0000FFE2-0000-1000-8000-00805F9B34FB", BLENotify, 512) {
     targetLatitude = 0.0;
     targetLongitude = 0.0;
     targetAltitude = 0.0;
@@ -25,6 +26,7 @@ bool GPSReceiver::begin(const char* deviceName) {
     BLE.setLocalName(deviceName);
     BLE.setAdvertisedService(gpsService);
     gpsService.addCharacteristic(gpsCharacteristic);
+    gpsService.addCharacteristic(statusCharacteristic);
     BLE.addService(gpsService);
     BLE.advertise();
     
@@ -120,4 +122,27 @@ void GPSReceiver::clearTarget() {
 
 bool GPSReceiver::isConnected() {
     return BLE.central();
+}
+
+void GPSReceiver::sendNavigationStatus(bool hasGpsFix, int satellites, double currentLat, double currentLon,
+                                       double altitude, float heading, float distance, float bearing,
+                                       double targetLat, double targetLon) {
+    if (!BLE.central()) {
+        return;
+    }
+    
+    String statusJson = "{";
+    statusJson += "\"hasGpsFix\":" + String(hasGpsFix ? "true" : "false") + ",";
+    statusJson += "\"satellites\":" + String(satellites) + ",";
+    statusJson += "\"currentLat\":" + String(currentLat, 6) + ",";
+    statusJson += "\"currentLon\":" + String(currentLon, 6) + ",";
+    statusJson += "\"altitude\":" + String(altitude, 2) + ",";
+    statusJson += "\"heading\":" + String(heading, 1) + ",";
+    statusJson += "\"distance\":" + String(distance, 1) + ",";
+    statusJson += "\"bearing\":" + String(bearing, 1) + ",";
+    statusJson += "\"targetLat\":" + String(targetLat, 6) + ",";
+    statusJson += "\"targetLon\":" + String(targetLon, 6);
+    statusJson += "}";
+    
+    statusCharacteristic.writeValue(statusJson.c_str());
 }

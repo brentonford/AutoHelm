@@ -211,6 +211,24 @@ void loop() {
     
     printDebugInfo(gps_data, heading);
     
+    // Send navigation status to connected app every 500ms
+    static unsigned long lastStatusUpdate = 0;
+    if (millis() - lastStatusUpdate >= 500) {
+        gpsReceiver.sendNavigationStatus(
+            gps_data.has_fix,
+            gps_data.satellites,
+            gps_data.latitude,
+            gps_data.longitude,
+            gps_data.altitude,
+            heading,
+            latest_distance,
+            latest_bearing,
+            DESTINATION_LAT,
+            DESTINATION_LON
+        );
+        lastStatusUpdate = millis();
+    }
+    
     // Update at 10 Hz
     delay(100);
 }

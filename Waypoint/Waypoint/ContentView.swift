@@ -3,19 +3,44 @@ import CoreBluetooth
 import CoreLocation
 import MapKit
 
+// MARK: - Arduino Navigation Status Model
+struct ArduinoNavigationStatus: Codable {
+    let hasGpsFix: Bool
+    let satellites: Int
+    let currentLat: Double
+    let currentLon: Double
+    let altitude: Double
+    let heading: Float
+    let distance: Float
+    let bearing: Float
+    let targetLat: Double
+    let targetLon: Double
+    
+    var distanceText: String {
+        if distance >= 1000 {
+            return String(format: "%.1f km", distance / 1000)
+        } else {
+            return String(format: "%.0f m", distance)
+        }
+    }
+}
+
 // MARK: - Bluetooth Manager
 class BluetoothManager: NSObject, ObservableObject {
     @Published var isConnected: Bool = false
     @Published var discoveredDevices: [CBPeripheral] = []
     @Published var signalStrength: Int = 0
     @Published var connectionStatus: String = "Disconnected"
+    @Published var arduinoStatus: ArduinoNavigationStatus? = nil
     
     private var centralManager: CBCentralManager!
     private var connectedPeripheral: CBPeripheral?
     private var gpsCharacteristic: CBCharacteristic?
+    private var statusCharacteristic: CBCharacteristic?
     
     private let serviceUUID = CBUUID(string: "0000FFE0-0000-1000-8000-00805F9B34FB")
     private let characteristicUUID = CBUUID(string: "0000FFE1-0000-1000-8000-00805F9B34FB")
+    private let statusCharacteristicUUID = CBUUID(string: "0000FFE2-0000-1000-8000-00805F9B34FB")
     
     override init() {
         super.init()
@@ -94,6 +119,8 @@ extension BluetoothManager: CBCentralManagerDelegate {
         isConnected = false
         connectionStatus = "Disconnected"
         gpsCharacteristic = nil
+        statusCharacteristic = nil
+        arduinoStatus = nil
     }
     
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
@@ -109,7 +136,7 @@ extension BluetoothManager: CBPeripheralDelegate {
         }
         
         for service in services {
-            peripheral.discoverCharacteristics([characteristicUUID], for: service)
+            peripheral.discoverCharacteristics([characteristicUUID, statusCharacteristicUUID], for: service)
         }
     }
     
@@ -121,12 +148,35 @@ extension BluetoothManager: CBPeripheralDelegate {
         for characteristic in characteristics {
             if characteristic.uuid == characteristicUUID {
                 gpsCharacteristic = characteristic
+            } else if characteristic.uuid == statusCharacteristicUUID {
+                statusCharacteristic = characteristic
+                peripheral.setNotifyValue(true, for: characteristic)
             }
         }
     }
     
     func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
         signalStrength = RSSI.intValue
+    }
+    
+    func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        if characteristic.uuid == statusCharacteristicUUID {
+            guard let data = characteristic.value,
+                  let jsonString = String(data: data, encoding: .utf8) else {
+                return
+            }
+            
+            if let statusData = jsonString.data(using: .utf8) {
+                do {
+                    let status = try JSONDecoder().decode(ArduinoNavigationStatus.self, from: statusData)
+                    DispatchQueue.main.async {
+                        self.arduinoStatus = status
+                    }
+                } catch {
+                    print("Failed to decode Arduino status: \(error)")
+                }
+            }
+        }
     }
 }
 
@@ -581,11 +631,17 @@ struct ContentView: View {
                 }
                 .tag(1)
             
+            ArduinoStatusView(bluetoothManager: bluetoothManager)
+                .tabItem {
+                    Label("Status", systemImage: "gauge.with.dots.needle.67percent")
+                }
+                .tag(2)
+            
             OfflineMapsView(locationManager: locationManager, offlineTileManager: offlineTileManager)
                 .tabItem {
                     Label("Offline", systemImage: "arrow.down.circle.fill")
                 }
-                .tag(2)
+                .tag(3)
         }
         .onAppear {
             locationManager.requestAuthorization()
@@ -1372,6 +1428,214 @@ struct OfflineMapsView: View {
                     span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
                 ))
             }
+        }
+    }
+}
+
+// MARK: - Arduino Status View
+struct ArduinoStatusView: View {
+    @ObservedObject var bluetoothManager: BluetoothManager
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 20) {
+                if bluetoothManager.isConnected {
+                    if let status = bluetoothManager.arduinoStatus {
+                        ScrollView {
+                            VStack(spacing: 15) {
+                                NavigationStatusCard(status: status)
+                                GPSStatusCard(status: status)
+                                TargetStatusCard(status: status)
+                            }
+                            .padding()
+                        }
+                    } else {
+                        VStack(spacing: 20) {
+                            Image(systemName: "clock")
+                                .font(.system(size: 60))
+                                .foregroundColor(.gray)
+                            Text("Waiting for Arduino data...")
+                                .font(.headline)
+                                .foregroundColor(.gray)
+                            Text("Make sure the Arduino is powered on and GPS has a fix")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding()
+                    }
+                } else {
+                    VStack(spacing: 20) {
+                        Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                            .font(.system(size: 60))
+                            .foregroundColor(.red)
+                        Text("Arduino not connected")
+                            .font(.headline)
+                            .foregroundColor(.red)
+                        Text("Go to Connect tab to establish connection")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding()
+                }
+            }
+            .navigationTitle("Arduino Status")
+        }
+    }
+}
+
+// MARK: - Status Cards
+struct NavigationStatusCard: View {
+    let status: ArduinoNavigationStatus
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Navigation")
+                .font(.headline)
+            
+            HStack {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "location.north.fill")
+                            .foregroundColor(.blue)
+                        Text("Heading: \(status.heading, specifier: "%.1f")°")
+                    }
+                    HStack {
+                        Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
+                            .foregroundColor(.green)
+                        Text("Bearing: \(status.bearing, specifier: "%.1f")°")
+                    }
+                    HStack {
+                        Image(systemName: "ruler.fill")
+                            .foregroundColor(.orange)
+                        Text("Distance: \(status.distanceText)")
+                    }
+                }
+                Spacer()
+                CompassView(heading: status.heading, bearing: status.bearing)
+                    .frame(width: 80, height: 80)
+            }
+        }
+        .padding()
+        .background(Color.blue.opacity(0.1))
+        .cornerRadius(15)
+    }
+}
+
+struct GPSStatusCard: View {
+    let status: ArduinoNavigationStatus
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("GPS Status")
+                    .font(.headline)
+                Spacer()
+                Circle()
+                    .fill(status.hasGpsFix ? Color.green : Color.red)
+                    .frame(width: 12, height: 12)
+                Text(status.hasGpsFix ? "Fix" : "No Fix")
+                    .font(.caption)
+                    .foregroundColor(status.hasGpsFix ? .green : .red)
+            }
+            
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "dot.radiowaves.up")
+                        .foregroundColor(.blue)
+                    Text("Satellites: \(status.satellites)")
+                }
+                HStack {
+                    Image(systemName: "location.fill")
+                        .foregroundColor(.blue)
+                    Text("Lat: \(status.currentLat, specifier: "%.6f")")
+                        .font(.system(.body, design: .monospaced))
+                }
+                HStack {
+                    Image(systemName: "location.fill")
+                        .foregroundColor(.blue)
+                    Text("Lon: \(status.currentLon, specifier: "%.6f")")
+                        .font(.system(.body, design: .monospaced))
+                }
+                HStack {
+                    Image(systemName: "mountain.2.fill")
+                        .foregroundColor(.brown)
+                    Text("Alt: \(status.altitude, specifier: "%.1f") m")
+                }
+            }
+        }
+        .padding()
+        .background(status.hasGpsFix ? Color.green.opacity(0.1) : Color.red.opacity(0.1))
+        .cornerRadius(15)
+    }
+}
+
+struct TargetStatusCard: View {
+    let status: ArduinoNavigationStatus
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Target Waypoint")
+                .font(.headline)
+            
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "mappin.circle.fill")
+                        .foregroundColor(.red)
+                    Text("Lat: \(status.targetLat, specifier: "%.6f")")
+                        .font(.system(.body, design: .monospaced))
+                }
+                HStack {
+                    Image(systemName: "mappin.circle.fill")
+                        .foregroundColor(.red)
+                    Text("Lon: \(status.targetLon, specifier: "%.6f")")
+                        .font(.system(.body, design: .monospaced))
+                }
+            }
+        }
+        .padding()
+        .background(Color.red.opacity(0.1))
+        .cornerRadius(15)
+    }
+}
+
+struct CompassView: View {
+    let heading: Float
+    let bearing: Float
+    
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.gray, lineWidth: 2)
+            
+            Circle()
+                .fill(Color.white)
+            
+            Text("N")
+                .font(.caption)
+                .offset(y: -30)
+            
+            Path { path in
+                path.move(to: CGPoint(x: 40, y: 40))
+                let angle = Double(heading) * .pi / 180
+                let endX = 40 + 25 * sin(angle)
+                let endY = 40 - 25 * cos(angle)
+                path.addLine(to: CGPoint(x: endX, y: endY))
+            }
+            .stroke(Color.blue, lineWidth: 3)
+            
+            Path { path in
+                path.move(to: CGPoint(x: 40, y: 40))
+                let angle = Double(bearing) * .pi / 180
+                let endX = 40 + 20 * sin(angle)
+                let endY = 40 - 20 * cos(angle)
+                path.addLine(to: CGPoint(x: endX, y: endY))
+            }
+            .stroke(Color.red, lineWidth: 2)
+            
+            Circle()
+                .fill(Color.black)
+                .frame(width: 4, height: 4)
         }
     }
 }

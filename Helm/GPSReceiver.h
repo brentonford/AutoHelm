@@ -33,6 +33,7 @@ class GPSReceiver {
 private:
     BLEService gpsService;
     BLECharacteristic gpsCharacteristic;
+    BLECharacteristic statusCharacteristic;
     
     double targetLatitude;
     double targetLongitude;
@@ -53,6 +54,9 @@ public:
     double getAltitude();
     void clearTarget();
     bool isConnected();
+    void sendNavigationStatus(bool hasGpsFix, int satellites, double currentLat, double currentLon, 
+                             double altitude, float heading, float distance, float bearing, 
+                             double targetLat, double targetLon);
 };
 
 #endif
