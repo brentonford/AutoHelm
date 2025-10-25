@@ -119,7 +119,7 @@ The Waypoint app provides comprehensive navigation and mapping functionality:
 
 #### Core Features
 - **Interactive Map Interface** - Tap anywhere to set waypoints
-- **Bluetooth Low Energy** - Connect to Arduino "Watersnake" device
+- **Bluetooth Low Energy** - Connect to Arduino "Helm" device
 - **Real-time Location** - GPS positioning with accuracy indicators
 - **Waypoint Transmission** - Send coordinates directly to Arduino
 
@@ -183,7 +183,7 @@ float DESTINATION_LON = 151.718029;
 
 1. Power on Arduino and wait for GPS fix
 2. Launch Waypoint app on iOS device
-3. Go to "Connect" tab and scan for "Watersnake" device
+3. Go to "Connect" tab and scan for "Helm" device
 4. Connect to Arduino (signal strength should appear)
 5. Switch to "Waypoint" tab to set navigation targets
 
@@ -191,8 +191,11 @@ float DESTINATION_LON = 151.718029;
 
 ### Service Configuration
 - **Service UUID**: `0000FFE0-0000-1000-8000-00805F9B34FB`
-- **Characteristic UUID**: `0000FFE1-0000-1000-8000-00805F9B34FB`
-- **Device Name**: "Watersnake"
+- **GPS Characteristic**: `0000FFE1-0000-1000-8000-00805F9B34FB`
+- **Status Characteristic**: `0000FFE2-0000-1000-8000-00805F9B34FB`
+- **Calibration Command**: `0000FFE3-0000-1000-8000-00805F9B34FB`
+- **Calibration Data**: `0000FFE4-0000-1000-8000-00805F9B34FB`
+- **Device Name**: "Helm"
 
 ### Data Format
 ```
@@ -236,7 +239,7 @@ static const uint64_t LEFT_CODE_LOW = 0xf7e077723ea84ULL;  // Last 50 bits
 
 ### Core Navigation Loop
 
-1. **BLE Initialization** - Advertise as "Watersnake" for app connections
+1. **BLE Initialization** - Advertise as "Helm" for app connections
 2. **Hardware Startup** - Initialize GPS, compass, OLED display, RF transmitter
 3. **GPS Acquisition** - Wait for satellite lock and valid position data
 4. **Waypoint Reception** - Listen for coordinates from mobile app via BLE
@@ -275,9 +278,9 @@ The 128x64 OLED shows:
 
 1. **Connect to Arduino**:
    - Open Waypoint app
-   - Go to "Connect" tab
+   - Go to "Status" tab
    - Tap "Scan" to discover devices
-   - Select "Watersnake" device to connect
+   - Select "Helm" device to connect
    - Verify connection status shows "Connected"
 
 2. **Set Navigation Waypoint**:
@@ -295,6 +298,14 @@ The 128x64 OLED shows:
    - Monitor download progress
    - Maps work without internet connection
 
+4. **Compass Calibration**:
+   - Go to "Calibration" tab
+   - Ensure Arduino is connected
+   - Tap "Start Calibration"
+   - Rotate device slowly in all directions
+   - Monitor magnetometer readings
+   - Tap "Save" when calibration is complete
+
 ### Arduino Operation
 
 1. **Startup Sequence**:
@@ -309,6 +320,7 @@ The 128x64 OLED shows:
    - **Ready**: GPS coordinates displayed, awaiting waypoint
    - **Navigating**: Arrow points toward target, distance shown
    - **Arrived**: "Destination reached!" when within 5m threshold
+   - **Calibration**: Real-time magnetometer data display
 
 3. **Manual Override**:
    - System sends RF commands automatically
@@ -343,7 +355,7 @@ Destination reached!
 ├── Helm/
 │   ├── Helm.ino                     # Main navigation system
 │   ├── GPSReceiver.cpp              # BLE waypoint receiver implementation  
-│   ├── GPSReceiver.h                # BLE receiver header
+│   ├── GPSReceiver.h                # BLE receiver header with calibration support
 │   ├── WatersnakeRFController.cpp   # RF transmission implementation
 │   ├── WatersnakeRFController.h     # RF controller header
 │   ├── adjust_heading.ino           # Heading correction logic
@@ -353,11 +365,9 @@ Destination reached!
 │   ├── print_debug_info.ino        # Serial debug output
 │   ├── read_heading.ino            # Calibrated compass readings
 │   └── update_display.ino          # OLED display management
-├── calibration/
-│   └── calibration.ino              # Magnetometer calibration utility
 ├── Waypoint/
 │   ├── Waypoint/
-│   │   ├── ContentView.swift        # Main iOS app implementation
+│   │   ├── ContentView.swift        # Complete iOS app implementation
 │   │   ├── Info.plist              # App permissions and settings
 │   │   └── Assets.xcassets/        # App icons and resources
 │   └── Waypoint.xcodeproj/         # Xcode project files
@@ -375,7 +385,7 @@ Destination reached!
 - **Erratic coordinates**: Confirm stable 5V power supply to GPS module
 
 **BLE Connection Issues**:
-- **App won't connect**: Verify Arduino is powered and advertising "Watersnake"
+- **App won't connect**: Verify Arduino is powered and advertising "Helm"
 - **No waypoints received**: Check BLE protocol format matches specification
 - **Connection drops**: Ensure stable power supply and maintain <30m range
 
