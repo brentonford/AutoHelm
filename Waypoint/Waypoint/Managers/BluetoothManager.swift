@@ -23,9 +23,25 @@ class BluetoothManager: NSObject, ObservableObject {
     private let calibrationCommandUUID = CBUUID(string: "0000FFE3-0000-1000-8000-00805F9B34FB")
     private let calibrationDataUUID = CBUUID(string: "0000FFE4-0000-1000-8000-00805F9B34FB")
     
+    private var autoScanTimer: Timer?
+    
     override init() {
         super.init()
         centralManager = CBCentralManager(delegate: self, queue: nil)
+        startAutoScanTimer()
+    }
+    
+    private func startAutoScanTimer() {
+        autoScanTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            if !self.isConnected && self.centralManager.state == .poweredOn {
+                self.startScanning()
+            }
+        }
+    }
+    
+    deinit {
+        autoScanTimer?.invalidate()
     }
     
     func startScanning() {
@@ -107,6 +123,39 @@ class BluetoothManager: NSObject, ObservableObject {
         }
         
         let command = enabled ? "NAV_ENABLE" : "NAV_DISABLE"
+        if let commandData = command.data(using: .utf8) {
+            peripheral.writeValue(commandData, for: characteristic, type: .withResponse)
+        }
+    }
+    
+    func startRFRemotePairing() {
+        guard let characteristic = calibrationCommandCharacteristic, let peripheral = connectedPeripheral else {
+            return
+        }
+        
+        let command = "RF_PAIR_START"
+        if let commandData = command.data(using: .utf8) {
+            peripheral.writeValue(commandData, for: characteristic, type: .withResponse)
+        }
+    }
+    
+    func completeRFRemotePairing() {
+        guard let characteristic = calibrationCommandCharacteristic, let peripheral = connectedPeripheral else {
+            return
+        }
+        
+        let command = "RF_PAIR_COMPLETE"
+        if let commandData = command.data(using: .utf8) {
+            peripheral.writeValue(commandData, for: characteristic, type: .withResponse)
+        }
+    }
+    
+    func cancelRFRemotePairing() {
+        guard let characteristic = calibrationCommandCharacteristic, let peripheral = connectedPeripheral else {
+            return
+        }
+        
+        let command = "RF_PAIR_CANCEL"
         if let commandData = command.data(using: .utf8) {
             peripheral.writeValue(commandData, for: characteristic, type: .withResponse)
         }

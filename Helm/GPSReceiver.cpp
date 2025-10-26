@@ -18,7 +18,7 @@ GPSReceiver::GPSReceiver() :
     hasValidTarget = false;
     inputBuffer = "";
     calibrationMode = false;
-    navigationEnabled = true;
+    navigationEnabled = false;
 }
 
 bool GPSReceiver::begin(const char* deviceName) {
@@ -37,8 +37,8 @@ bool GPSReceiver::begin(const char* deviceName) {
     BLE.advertise();
     
     Serial.println("BLE GPS Receiver active, waiting for connections...");
-    Serial.print("Device name: ");
-    Serial.println(deviceName);
+        Serial.print("Helm device name: ");
+        Serial.println(deviceName);
     
     return true;
 }

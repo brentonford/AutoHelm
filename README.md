@@ -14,7 +14,7 @@ This project consists of three main components:
 2. **Magnetometer Calibration** (`calibration/`) - Compass calibration utility
 3. **Waypoint** (`Waypoint/`) - Full-featured iOS app with offline maps and BLE waypoint control
 
-The app user can select a position on the map and send GPS coordinates to the Arduino via Bluetooth. The Arduino will then navigate to the waypoint using automatic motor control.
+The app user can select a position on the map and send GPS coordinates to the Helm device via Bluetooth. The Helm device will then navigate to the waypoint using automatic motor control.
 
 ### Key Features
 
@@ -24,11 +24,11 @@ The app user can select a position on the map and send GPS coordinates to the Ar
 - **OLED Display** - 128x64 display showing navigation data and directional arrow
 - **RF Motor Control** - 433MHz transmission to Watersnake motor remote
 - **Offline Maps** - Download and cache OpenStreetMap tiles for offline use
-- **BLE Communication** - Wireless waypoint transfer from mobile app to Arduino
+- **BLE Communication** - Wireless waypoint transfer from mobile app to Helm device
 
 ## Hardware Requirements
 
-### Arduino Components
+### Helm Device Components
 
 - **Arduino UNO R4 WiFi** (required for BLE functionality)
 - **Adafruit RFM69HCW 433MHz Breakout** - RF transmitter module
@@ -48,7 +48,7 @@ The app user can select a position on the map and send GPS coordinates to the Ar
 
 ## Software Dependencies
 
-### Arduino Libraries (Install via Library Manager)
+### Helm Device Libraries (Install via Library Manager)
 
 ```cpp
 #include <Adafruit_GFX.h>          // OLED graphics library
@@ -158,7 +158,7 @@ float magYmin = -6.86;
 float magZmin = -55.41;
 ```
 
-### 2. Arduino Navigation System Setup
+### 2. Helm Device Navigation System Setup
 
 1. Install all required libraries via Arduino IDE Library Manager
 2. Update default destination coordinates in `Helm/Helm.ino`:
@@ -181,10 +181,10 @@ float DESTINATION_LON = 151.718029;
 
 ### 4. System Integration
 
-1. Power on Arduino and wait for GPS fix
+1. Power on Helm device and wait for GPS fix
 2. Launch Waypoint app on iOS device
 3. Go to "Connect" tab and scan for "Helm" device
-4. Connect to Arduino (signal strength should appear)
+4. Connect to Helm device (signal strength should appear)
 5. Switch to "Waypoint" tab to set navigation targets
 
 ## BLE Communication Protocol
@@ -207,7 +207,7 @@ $GPS,latitude,longitude,altitude*\n
 $GPS,-32.940931,151.718029,45.2*\n
 ```
 
-The Arduino parses incoming data and extracts coordinates for autonomous navigation.
+The Helm device parses incoming data and extracts coordinates for autonomous navigation.
 
 ## RF Control Protocol
 
@@ -306,10 +306,10 @@ The 128x64 OLED shows:
    - Monitor magnetometer readings
    - Tap "Save" when calibration is complete
 
-### Arduino Operation
+### Helm Device Operation
 
 1. **Startup Sequence**:
-   - Power on Arduino
+   - Power on Helm device
    - Wait for component initialization messages
    - GPS will search for satellite signals (2-5 minutes initially)
    - Display shows "NO FIX!" until GPS locks
@@ -325,7 +325,7 @@ The 128x64 OLED shows:
 3. **Manual Override**:
    - System sends RF commands automatically
    - Commands repeat every 2+ seconds if heading error persists
-   - No manual controls on Arduino - use mobile app to set new waypoints
+   - No manual controls on Helm device - use mobile app to set new waypoints
 
 ### Serial Debug Output
 
@@ -376,7 +376,7 @@ Destination reached!
 
 ## Troubleshooting
 
-### Arduino Issues
+### Helm Device Issues
 
 **GPS Problems**:
 - **No GPS fix**: Ensure clear sky view, wait 2-5 minutes for satellite acquisition
@@ -385,7 +385,7 @@ Destination reached!
 - **Erratic coordinates**: Confirm stable 5V power supply to GPS module
 
 **BLE Connection Issues**:
-- **App won't connect**: Verify Arduino is powered and advertising "Helm"
+- **App won't connect**: Verify Helm device is powered and advertising "Helm"
 - **No waypoints received**: Check BLE protocol format matches specification
 - **Connection drops**: Ensure stable power supply and maintain <30m range
 
@@ -404,8 +404,8 @@ Destination reached!
 ### iOS App Issues
 
 **Connection Problems**:
-- **No devices found**: Enable Bluetooth, ensure Arduino is powered and nearby
-- **Connection fails**: Restart both app and Arduino, check distance <10m
+- **No devices found**: Enable Bluetooth, ensure Helm device is powered and nearby
+- **Connection fails**: Restart both app and Helm device, check distance <10m
 - **Permissions denied**: Grant Bluetooth and Location access in iOS Settings
 
 **Map Issues**:

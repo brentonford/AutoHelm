@@ -16,7 +16,8 @@ struct MagnetometerData: Codable {
 }
 
 // MARK: - Arduino Navigation Status Model
-struct ArduinoNavigationStatus: Codable {
+struct ArduinoNavigationStatus: Equatable, Decodable {
+    let navigationActive: Bool
     let hasGpsFix: Bool
     let satellites: Int
     let currentLat: Double
@@ -36,10 +37,6 @@ struct ArduinoNavigationStatus: Codable {
         } else {
             return String(format: "%.0f m", distance)
         }
-    }
-    
-    var navigationActive: Bool {
-        return isNavigating ?? false
     }
     
     var destinationReached: Bool {
@@ -152,8 +149,4 @@ struct DownloadedRegion: Identifiable, Codable {
 }
 
 // MARK: - Helper Extensions
-extension Array {
-    subscript(safe index: Index) -> Element? {
-        return indices.contains(index) ? self[index] : nil
-    }
-}
+// Array safe subscript extension is implemented in Extensions.swift to avoid duplication

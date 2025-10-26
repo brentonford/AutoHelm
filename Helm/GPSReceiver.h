@@ -8,7 +8,7 @@
  * Example: "$GPS,-32.940931,151.718029,45.2*"
  * 
  * Hardware Requirements:
- * - Arduino with BLE capability (Arduino Nano 33 BLE, UNO R4 WiFi, etc.)
+ * - Helm device with BLE capability (Arduino Nano 33 BLE, UNO R4 WiFi, etc.)
  * - ArduinoBLE library
  * 
  * Usage:
