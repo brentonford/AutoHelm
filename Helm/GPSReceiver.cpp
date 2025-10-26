@@ -18,6 +18,7 @@ GPSReceiver::GPSReceiver() :
     hasValidTarget = false;
     inputBuffer = "";
     calibrationMode = false;
+    navigationEnabled = true;
 }
 
 bool GPSReceiver::begin(const char* deviceName) {
@@ -46,6 +47,19 @@ void GPSReceiver::update() {
     BLE.poll();
     
     BLEDevice central = BLE.central();
+    
+    static bool wasConnected = false;
+    bool currentlyConnected = central;
+    
+    // Check for connection status changes
+    if (currentlyConnected != wasConnected) {
+        if (currentlyConnected) {
+            playAppConnected();
+        } else if (wasConnected) {
+            playAppDisconnected();
+        }
+        wasConnected = currentlyConnected;
+    }
     
     if (central) {
         if (calibrationCommandCharacteristic.written()) {
@@ -135,7 +149,7 @@ bool GPSReceiver::isConnected() {
 
 void GPSReceiver::sendNavigationStatus(bool hasGpsFix, int satellites, double currentLat, double currentLon,
                                        double altitude, float heading, float distance, float bearing,
-                                       double targetLat, double targetLon) {
+                                       double targetLat, double targetLon, bool isNavigating, bool hasReachedDestination) {
     if (!BLE.central()) {
         return;
     }
@@ -176,6 +190,12 @@ void GPSReceiver::handleCalibrationCommand() {
             // Parse calibration values and save them
             Serial.println("Calibration values received: " + command);
             calibrationMode = false;
+        } else if (command == "NAV_ENABLE") {
+            navigationEnabled = true;
+            Serial.println("Navigation enabled");
+        } else if (command == "NAV_DISABLE") {
+            navigationEnabled = false;
+            Serial.println("Navigation disabled");
         }
     }
 }
@@ -196,4 +216,12 @@ bool GPSReceiver::isCalibrationMode() {
 
 void GPSReceiver::setCalibrationMode(bool enabled) {
     calibrationMode = enabled;
+}
+
+void GPSReceiver::setNavigationEnabled(bool enabled) {
+    navigationEnabled = enabled;
+}
+
+bool GPSReceiver::isNavigationEnabled() {
+    return navigationEnabled;
 }

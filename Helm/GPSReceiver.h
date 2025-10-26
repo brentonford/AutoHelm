@@ -58,14 +58,21 @@ public:
     bool isConnected();
     void sendNavigationStatus(bool hasGpsFix, int satellites, double currentLat, double currentLon, 
                              double altitude, float heading, float distance, float bearing, 
-                             double targetLat, double targetLon);
+                             double targetLat, double targetLon, bool isNavigating, bool hasReachedDestination);
     void handleCalibrationCommand();
     void sendCalibrationData(float x, float y, float z, float minX, float minY, float minZ, float maxX, float maxY, float maxZ);
     bool isCalibrationMode();
     void setCalibrationMode(bool enabled);
+    void setNavigationEnabled(bool enabled);
+    bool isNavigationEnabled();
 
 private:
     bool calibrationMode;
+    bool navigationEnabled;
 };
+
+// Forward declarations for notification functions
+void playAppConnected();
+void playAppDisconnected();
 
 #endif

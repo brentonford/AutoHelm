@@ -79,6 +79,9 @@ const float MIN_DISTANCE_METERS = 5.0;
 float latest_distance = 0;
 float latest_bearing = 0;
 unsigned long lastCorrectionTime = 0;
+bool isNavigating = false;
+bool hasReachedDestination = false;
+bool previousGpsFix = false;
 
 // Calibration variables
 float calMagMinX, calMagMaxX;
@@ -95,6 +98,13 @@ void adjustHeading(float relativeAngle);
 void updateDisplay(GPSData gpsData, float heading, float distance, float bearing);
 void printDebugInfo(GPSData gpsData, float heading);
 void handleCalibrationMode();
+void playNavigationEnabled();
+void playWaypointSet();
+void playGpsFixLost();
+void playGpsFixed();
+void playAppConnected();
+void playAppDisconnected();
+void playDestinationReached();
 
 
 void setup() {
@@ -139,6 +149,9 @@ void setup() {
     } else {
         Serial.println("BLE GPS Receiver initialized successfully");
     }
+    
+    // Initialize buzzer pin for nautical notifications
+    pinMode(8, OUTPUT);
     
     // Calculate scaling factors for magnetometer
     float xRange = magXmax - magXmin;
@@ -204,6 +217,7 @@ void loop() {
         Serial.print(DESTINATION_LAT, 6);
         Serial.print(", ");
         Serial.println(DESTINATION_LON, 6);
+        playWaypointSet();
         gpsReceiver.clearTarget();
     }
     
@@ -213,6 +227,18 @@ void loop() {
     // Get current GPS data
     GPSData gps_data = parseGPS();
     
+    // Check for GPS fix status changes
+    if (gps_data.has_fix != previousGpsFix) {
+        if (gps_data.has_fix) {
+            Serial.println("GPS fix acquired!");
+            playGpsFixed();
+        } else {
+            Serial.println("GPS fix lost!");
+            playGpsFixLost();
+        }
+        previousGpsFix = gps_data.has_fix;
+    }
+    
     // If we have valid GPS data, calculate distance and bearing
     if (gps_data.has_fix) {
         // Calculate distance to destination
@@ -221,20 +247,37 @@ void loop() {
         // Calculate bearing to destination
         latest_bearing = calculate_bearing(gps_data.latitude, gps_data.longitude, DESTINATION_LAT, DESTINATION_LON);
         
-        // Only navigate if we're more than MIN_DISTANCE_METERS away
-        if (latest_distance > MIN_DISTANCE_METERS) {
+        // Check if we should navigate (only if navigation is enabled)
+        if (gpsReceiver.isNavigationEnabled() && latest_distance > MIN_DISTANCE_METERS) {
             // Calculate the difference between bearing to destination and current heading
             float relative_angle = fmod((latest_bearing - heading + 360.0), 360.0);
             
+            // Check if navigation was just enabled
+            if (!isNavigating) {
+                playNavigationEnabled();
+            }
+            
             // Adjust heading if needed
             adjustHeading(relative_angle);
+            isNavigating = true;
+            hasReachedDestination = false;
+        } else if (latest_distance <= MIN_DISTANCE_METERS) {
+            // Check if we just reached destination
+            if (!hasReachedDestination) {
+                Serial.println("Destination reached!");
+                playDestinationReached();
+            }
+            isNavigating = false;
+            hasReachedDestination = true;
         } else {
-            Serial.println("Destination reached!");
+            // Navigation disabled
+            isNavigating = false;
+            hasReachedDestination = false;
         }
     }
     
     // Update the display
-    updateDisplay(gps_data, heading, latest_distance, latest_bearing);
+    updateDisplay(gps_data, heading, latest_distance, latest_bearing, gpsReceiver.isConnected(), isNavigating, hasReachedDestination);
     
     printDebugInfo(gps_data, heading);
     
@@ -251,7 +294,9 @@ void loop() {
             latest_distance,
             latest_bearing,
             DESTINATION_LAT,
-            DESTINATION_LON
+            DESTINATION_LON,
+            isNavigating,
+            hasReachedDestination
         );
         lastStatusUpdate = millis();
     }

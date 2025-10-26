@@ -1,4 +1,4 @@
-void updateDisplay(GPSData gpsData, float heading, float distance, float bearing) {
+void updateDisplay(GPSData gpsData, float heading, float distance, float bearing, bool isConnected, bool isNavigating, bool hasReachedDestination) {
     display.clearDisplay();
     
     if (!gpsData.has_fix) {
@@ -22,6 +22,40 @@ void updateDisplay(GPSData gpsData, float heading, float distance, float bearing
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     
+    // Status icons at top right
+    int iconX = 110;
+    int iconY = 2;
+    
+    // Connection status icon
+    if (isConnected) {
+        // Connected - small wifi icon
+        display.drawPixel(iconX, iconY + 2, SSD1306_WHITE);
+        display.drawPixel(iconX + 1, iconY + 1, SSD1306_WHITE);
+        display.drawPixel(iconX + 2, iconY, SSD1306_WHITE);
+        display.drawPixel(iconX + 3, iconY + 1, SSD1306_WHITE);
+        display.drawPixel(iconX + 4, iconY + 2, SSD1306_WHITE);
+    }
+    iconX += 8;
+    
+    // Navigation status icon
+    if (hasReachedDestination) {
+        // Destination reached - checkmark
+        display.drawPixel(iconX, iconY + 2, SSD1306_WHITE);
+        display.drawPixel(iconX + 1, iconY + 3, SSD1306_WHITE);
+        display.drawPixel(iconX + 2, iconY + 2, SSD1306_WHITE);
+        display.drawPixel(iconX + 3, iconY + 1, SSD1306_WHITE);
+        display.drawPixel(iconX + 4, iconY, SSD1306_WHITE);
+    } else if (isNavigating) {
+        // Navigating - small arrow
+        display.drawPixel(iconX + 2, iconY, SSD1306_WHITE);
+        display.drawPixel(iconX + 1, iconY + 1, SSD1306_WHITE);
+        display.drawPixel(iconX + 2, iconY + 1, SSD1306_WHITE);
+        display.drawPixel(iconX + 3, iconY + 1, SSD1306_WHITE);
+        display.drawPixel(iconX + 2, iconY + 2, SSD1306_WHITE);
+        display.drawPixel(iconX + 2, iconY + 3, SSD1306_WHITE);
+        display.drawPixel(iconX + 2, iconY + 4, SSD1306_WHITE);
+    }
+    
     if (distance >= 1000) {
         display.setCursor(4, 57);
         display.print(distance/1000, 1);
@@ -40,10 +74,13 @@ void updateDisplay(GPSData gpsData, float heading, float distance, float bearing
     display.setCursor(64, 12);
     display.print(gpsData.longitude, 6);
     
-    display.setCursor(64, 30);
-    display.print(DESTINATION_LAT, 6);
-    display.setCursor(64, 40);
-    display.print(DESTINATION_LON, 6);
+    // Only show destination coordinates when navigating
+    if (isNavigating || hasReachedDestination) {
+        display.setCursor(64, 30);
+        display.print(DESTINATION_LAT, 6);
+        display.setCursor(64, 40);
+        display.print(DESTINATION_LON, 6);
+    }
     
     display.drawLine(47, 0, 58, 11, SSD1306_WHITE);
     display.drawLine(58, 11, 58, 38, SSD1306_WHITE);
