@@ -1,17 +1,17 @@
 /*
- * WatersnakeRFController.cpp
+ * DeviceRFController.cpp
  * 
- * Implementation of Watersnake RF control library
+ * Implementation of device RF control library for 433MHz remote control
  */
 
-#include "WatersnakeRFController.h"
+#include "DeviceRFController.h"
 #include <SPI.h>
 
-WatersnakeRFController::WatersnakeRFController() 
+DeviceRFController::DeviceRFController() 
     : rf69(RF_CS_PIN, RF_INT_PIN), initialized(false) {
 }
 
-bool WatersnakeRFController::begin() {
+bool DeviceRFController::begin() {
     pinMode(RF_RST_PIN, OUTPUT);
     digitalWrite(RF_RST_PIN, LOW);
     delay(10);
@@ -48,7 +48,7 @@ bool WatersnakeRFController::begin() {
     return true;
 }
 
-void WatersnakeRFController::sendPwmBit(bool bit) {
+void DeviceRFController::sendPwmBit(bool bit) {
     if (bit) {
         digitalWrite(RF_INT_PIN, HIGH);
         delayMicroseconds(LONG_PULSE_US);
@@ -62,14 +62,14 @@ void WatersnakeRFController::sendPwmBit(bool bit) {
     }
 }
 
-void WatersnakeRFController::sendSyncPulse() {
+void DeviceRFController::sendSyncPulse() {
     digitalWrite(RF_INT_PIN, HIGH);
     delayMicroseconds(SYNC_PULSE_US);
     digitalWrite(RF_INT_PIN, LOW);
     delayMicroseconds(GAP_US);
 }
 
-void WatersnakeRFController::transmitCode(uint64_t codeHigh, uint64_t codeLow) {
+void DeviceRFController::transmitCode(uint64_t codeHigh, uint64_t codeLow) {
     rf69.setModeTx();
     delay(1);
     
@@ -89,7 +89,7 @@ void WatersnakeRFController::transmitCode(uint64_t codeHigh, uint64_t codeLow) {
     rf69.setModeIdle();
 }
 
-void WatersnakeRFController::transmitRight(uint8_t repeatCount) {
+void DeviceRFController::transmitRight(uint8_t repeatCount) {
     if (!initialized) {
         return;
     }
@@ -100,7 +100,7 @@ void WatersnakeRFController::transmitRight(uint8_t repeatCount) {
     }
 }
 
-void WatersnakeRFController::transmitLeft(uint8_t repeatCount) {
+void DeviceRFController::transmitLeft(uint8_t repeatCount) {
     if (!initialized) {
         return;
     }
@@ -111,6 +111,6 @@ void WatersnakeRFController::transmitLeft(uint8_t repeatCount) {
     }
 }
 
-bool WatersnakeRFController::isInitialized() const {
+bool DeviceRFController::isInitialized() const {
     return initialized;
 }

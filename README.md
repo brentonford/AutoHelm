@@ -1,6 +1,6 @@
 # AutoHelm - GPS Navigation System
 
-An Arduino-based GPS navigation system that automatically controls a remote device via 433MHz RF transmission. The system provides compass-guided navigation with real-time GPS tracking and OLED display feedback.
+An Arduino-based autonomous GPS navigation system with user control and configuration via Bluetooth connect app. The system provides compass-guided navigation with real-time GPS tracking, OLED display feedback, and wireless waypoint management through a companion iOS app.
 
 ## Project Overview
 
@@ -14,17 +14,18 @@ This project consists of three main components:
 2. **Magnetometer Calibration** (`calibration/`) - Compass calibration utility
 3. **Waypoint** (`Waypoint/`) - Full-featured iOS app with offline maps and BLE waypoint control
 
-The app user can select a position on the map and send GPS coordinates to the Helm device via Bluetooth. The Helm device will then navigate to the waypoint using automatic motor control.
+The system enables users to select waypoints on their mobile device and wirelessly transmit GPS coordinates to the Helm device via Bluetooth Low Energy. The Helm device then autonomously navigates to the waypoint using automatic motor control, compass guidance, and real-time feedback through its OLED display.
 
 ### Key Features
 
-- **Mobile App Integration** - iOS app with offline maps and BLE waypoint transmission
+- **Mobile App Integration** - iOS app with offline maps and BLE waypoint transmission for remote control
+- **User-Controlled Navigation** - Set waypoints, enable/disable navigation, and monitor status via Bluetooth app
 - **Real-time GPS Navigation** - Autonomous waypoint guidance with distance/bearing calculations
-- **Digital Compass** - MMC5603 magnetometer with hard/soft iron calibration
+- **Digital Compass** - MMC5603 magnetometer with hard/soft iron calibration via mobile app
 - **OLED Display** - 128x64 display showing navigation data and directional arrow
 - **RF Motor Control** - 433MHz transmission to Watersnake motor remote
 - **Offline Maps** - Download and cache OpenStreetMap tiles for offline use
-- **BLE Communication** - Wireless waypoint transfer from mobile app to Helm device
+- **BLE Communication** - Wireless waypoint transfer and device control from mobile app to Helm device
 
 ## Hardware Requirements
 
@@ -35,6 +36,7 @@ The app user can select a position on the map and send GPS coordinates to the He
 - **Adafruit MMC5603 Magnetometer** - Digital compass sensor
 - **SSD1306 OLED Display** (128x64, I2C interface)
 - **GPS Module** (UART compatible, 9600 baud rate)
+- **Piezo Buzzer** - Audio feedback for navigation events
 - **433MHz Spring Antenna** - For RF transmission
 
 ### Target Device
@@ -78,7 +80,7 @@ MISO     -> D12 (MISO)
 MOSI     -> D11 (MOSI)
 CS       -> D10
 RST      -> D9
-G0/DIO0  -> D2
+G0/DIO0  -> D8
 ANT      -> 433MHz spring antenna
 ```
 
@@ -111,17 +113,26 @@ RX         -> D3 (GPS_TX_PIN)
 Baud Rate  -> 9600
 ```
 
+### Piezo Buzzer
+```
+Piezo Buzzer -> Arduino UNO R4 WiFi
+Positive (+) -> D7 (BUZZER_PIN)
+Negative (-) -> GND
+```
+
 ## Mobile App Features
 
 ### Waypoint iOS App
 
-The Waypoint app provides comprehensive navigation and mapping functionality:
+The Waypoint app provides comprehensive navigation and mapping functionality with complete user control over the Helm device:
 
 #### Core Features
-- **Interactive Map Interface** - Tap anywhere to set waypoints
-- **Bluetooth Low Energy** - Connect to Arduino "Helm" device
+- **Interactive Map Interface** - Tap anywhere to set waypoints and control navigation remotely
+- **Bluetooth Low Energy** - Connect to Arduino "Helm" device for wireless control
 - **Real-time Location** - GPS positioning with accuracy indicators
-- **Waypoint Transmission** - Send coordinates directly to Arduino
+- **Waypoint Transmission** - Send coordinates directly to Arduino via Bluetooth
+- **Navigation Control** - Enable/disable autonomous navigation remotely
+- **Device Status Monitoring** - Real-time feedback from Helm device via Bluetooth
 
 #### Offline Maps System
 - **Download Map Tiles** - Cache OpenStreetMap data for offline use
@@ -140,37 +151,23 @@ The Waypoint app provides comprehensive navigation and mapping functionality:
 
 ### 1. Magnetometer Calibration (Required First)
 
-Before using navigation, calibrate the compass:
+Before using navigation, calibrate the compass via the mobile app:
 
-1. Upload `calibration/calibration.ino` to Arduino
-2. Open Serial Monitor (9600 baud)
-3. Rotate device slowly in all directions for 2-3 minutes
-4. Copy final calibration values from Serial output
-5. Update values in `Helm/Helm.ino`:
-
-```cpp
-// Replace with your calibration values
-float magXmax = 31.91;
-float magYmax = 101.72; 
-float magZmax = 54.58;
-float magXmin = -73.95;
-float magYmin = -6.86;
-float magZmin = -55.41;
-```
+1. Upload `Helm/Helm.ino` to Arduino UNO R4 WiFi
+2. Install and launch Waypoint app on iOS device
+3. Connect to "Helm" device via Bluetooth
+4. Navigate to Calibration tab in app
+5. Tap "Start Calibration"
+6. Rotate device slowly in all directions for 2-3 minutes
+7. Monitor real-time magnetometer readings in app
+8. Tap "Save Calibration" when readings stabilize
 
 ### 2. Helm Device Navigation System Setup
 
 1. Install all required libraries via Arduino IDE Library Manager
-2. Update default destination coordinates in `Helm/Helm.ino`:
-
-```cpp
-// Default destination (overridden by mobile app waypoints)
-float DESTINATION_LAT = -32.940931;
-float DESTINATION_LON = 151.718029;
-```
-
-3. Upload `Helm/Helm.ino` to Arduino UNO R4 WiFi
-4. Open Serial Monitor to verify GPS fix and component initialization
+2. Upload `Helm/Helm.ino` to Arduino UNO R4 WiFi
+3. Open Serial Monitor to verify GPS fix and component initialization
+4. Device will begin advertising as "Helm" for Bluetooth connections
 
 ### 3. iOS App Installation
 
@@ -183,9 +180,12 @@ float DESTINATION_LON = 151.718029;
 
 1. Power on Helm device and wait for GPS fix
 2. Launch Waypoint app on iOS device
-3. Go to "Connect" tab and scan for "Helm" device
+3. Go to "Helm" tab and scan for "Helm" device
 4. Connect to Helm device (signal strength should appear)
-5. Switch to "Waypoint" tab to set navigation targets
+5. Enable navigation in the app's navigation controls
+6. Switch to "Waypoint" tab to set navigation targets
+7. Tap anywhere on map to create waypoint
+8. Tap "Send to Helm" to begin autonomous navigation
 
 ## BLE Communication Protocol
 
@@ -207,7 +207,13 @@ $GPS,latitude,longitude,altitude*\n
 $GPS,-32.940931,151.718029,45.2*\n
 ```
 
-The Helm device parses incoming data and extracts coordinates for autonomous navigation.
+### Control Commands
+- `NAV_ENABLE` - Enable autonomous navigation
+- `NAV_DISABLE` - Disable autonomous navigation
+- `START_CAL` - Begin compass calibration mode
+- `STOP_CAL` - End compass calibration mode
+
+The Helm device parses incoming data and extracts coordinates for autonomous navigation, with all control managed via the mobile app.
 
 ## RF Control Protocol
 
@@ -242,24 +248,30 @@ static const uint64_t LEFT_CODE_LOW = 0xf7e077723ea84ULL;  // Last 50 bits
 1. **BLE Initialization** - Advertise as "Helm" for app connections
 2. **Hardware Startup** - Initialize GPS, compass, OLED display, RF transmitter
 3. **GPS Acquisition** - Wait for satellite lock and valid position data
-4. **Waypoint Reception** - Listen for coordinates from mobile app via BLE
-5. **Navigation Execution**:
+4. **Mobile App Connection** - Wait for Bluetooth connection from Waypoint app
+5. **User-Controlled Operation**:
+   - Receive waypoints from mobile app via BLE
+   - Monitor navigation enable/disable commands from app
+   - Execute compass calibration when requested via app
+6. **Autonomous Navigation Execution**:
    - Calculate bearing to destination using great-circle formulas
    - Read current heading from calibrated magnetometer
    - Determine heading error and required correction
    - Send LEFT/RIGHT RF commands if error exceeds tolerance
    - Update OLED display with navigation data and directional arrow
-   - Provide debug output via Serial Monitor
-6. **Arrival Detection** - Stop navigation when within minimum distance threshold
+   - Provide real-time status feedback to mobile app via BLE
+   - Provide audio feedback via piezo buzzer for navigation events
+7. **Arrival Detection** - Stop navigation when within minimum distance threshold and notify app
 
 ### Navigation Parameters
 
-Adjust these constants in `Helm/Helm.ino`:
+Adjust these constants in `Helm/DataModels.cpp`:
 
 ```cpp
 const float HEADING_TOLERANCE = 15.0;        // Acceptable heading error (degrees)
 const float MIN_CORRECTION_INTERVAL = 2000; // Minimum time between corrections (ms)
 const float MIN_DISTANCE_METERS = 5.0;      // Stop navigation distance threshold (m)
+const int BUZZER_PIN = 7;                   // Piezo buzzer pin
 ```
 
 ### Display Layout
@@ -270,6 +282,7 @@ The 128x64 OLED shows:
 - **Middle Right**: Target destination coordinates
 - **Bottom Left**: Distance to target (meters/kilometers)
 - **Bottom Right**: Current altitude
+- **Status Icons**: GPS fix status, BLE connection, and navigation state
 - **Status Messages**: GPS fix status and satellite count
 
 ## Usage Instructions
@@ -278,32 +291,38 @@ The 128x64 OLED shows:
 
 1. **Connect to Arduino**:
    - Open Waypoint app
-   - Go to "Status" tab
+   - Go to "Helm" tab
    - Tap "Scan" to discover devices
    - Select "Helm" device to connect
    - Verify connection status shows "Connected"
 
-2. **Set Navigation Waypoint**:
+2. **Enable Navigation**:
+   - In "Helm" tab, toggle "Navigation Control" to enabled
+   - Helm device will activate autonomous navigation mode
+   - Status indicator shows "Navigation Active"
+
+3. **Set Navigation Waypoint**:
    - Switch to "Waypoint" tab  
    - Tap anywhere on map to select destination
    - Coordinates appear in waypoint card
-   - Tap "Send to Arduino" to transmit waypoint
-   - Confirmation message appears when sent
+   - Tap "Send to Helm" to transmit waypoint
+   - Helm device begins autonomous navigation
+   - Monitor progress in real-time via "Helm" status tab
 
-3. **Download Offline Maps** (Optional):
-   - Go to "Offline" tab
+4. **Download Offline Maps** (Optional):
+   - Go to "Settings" tab, then "Offline Maps"
    - Tap map location to select download center
    - Adjust radius slider (1-20 km)
    - Tap "Download Maps for Selected Area"  
    - Monitor download progress
    - Maps work without internet connection
 
-4. **Compass Calibration**:
-   - Go to "Calibration" tab
+5. **Compass Calibration**:
+   - Go to "Settings" tab, then "Calibration"
    - Ensure Arduino is connected
    - Tap "Start Calibration"
    - Rotate device slowly in all directions
-   - Monitor magnetometer readings
+   - Monitor real-time magnetometer readings
    - Tap "Save" when calibration is complete
 
 ### Helm Device Operation
@@ -314,18 +333,29 @@ The 128x64 OLED shows:
    - GPS will search for satellite signals (2-5 minutes initially)
    - Display shows "NO FIX!" until GPS locks
    - BLE begins advertising for mobile app connections
+   - Piezo buzzer plays startup tone sequence
 
 2. **Navigation Modes**:
-   - **GPS Search**: "Waiting for GPS..." with satellite count
-   - **Ready**: GPS coordinates displayed, awaiting waypoint
-   - **Navigating**: Arrow points toward target, distance shown
-   - **Arrived**: "Destination reached!" when within 5m threshold
-   - **Calibration**: Real-time magnetometer data display
+   - **Standby**: GPS coordinates displayed, awaiting app connection and waypoint
+   - **Ready**: Connected to app, navigation disabled, awaiting commands
+   - **Navigating**: Arrow points toward target, distance shown, autonomous control active
+   - **Arrived**: "Destination reached!" when within 5m threshold, plays arrival tone
+   - **Calibration**: Real-time magnetometer data display during app-controlled calibration
 
-3. **Manual Override**:
-   - System sends RF commands automatically
+3. **Audio Feedback**:
+   - **App Connected**: Ascending tone sequence
+   - **App Disconnected**: Descending tone sequence
+   - **Navigation Started**: Multi-tone startup melody
+   - **Waypoint Set**: Confirmation beep sequence
+   - **GPS Fix Acquired**: Triple beep + ascending melody
+   - **GPS Fix Lost**: Descending alarm sequence
+   - **Destination Reached**: Victory melody sequence
+
+4. **Manual Override**:
+   - System sends RF commands automatically based on compass heading
    - Commands repeat every 2+ seconds if heading error persists
-   - No manual controls on Helm device - use mobile app to set new waypoints
+   - Navigation can be disabled remotely via mobile app
+   - No manual controls on Helm device - all control via mobile app
 
 ### Serial Debug Output
 
@@ -341,6 +371,8 @@ Test Transmitter
 sending RIGHT...
 sending LEFT...
 Setup complete!
+BLE: Device connected!
+Navigation enabled
 New waypoint received from mobile app!
 Target: -32.940931, 151.718029
 Time: 12:34:56, Satellites: 8, Position: -32.940500, 151.717800, Altitude: 45.2 m, Fix: Yes, Heading: 127.5
@@ -356,22 +388,38 @@ Destination reached!
 │   ├── Helm.ino                     # Main navigation system
 │   ├── GPSReceiver.cpp              # BLE waypoint receiver implementation  
 │   ├── GPSReceiver.h                # BLE receiver header with calibration support
-│   ├── WatersnakeRFController.cpp   # RF transmission implementation
-│   ├── WatersnakeRFController.h     # RF controller header
-│   ├── adjust_heading.ino           # Heading correction logic
-│   ├── calculate_bearing.ino        # Great-circle bearing calculations
-│   ├── calculate_distance.ino       # Haversine distance formula
-│   ├── draw_arrow.ino              # OLED directional arrow rendering
-│   ├── print_debug_info.ino        # Serial debug output
-│   ├── read_heading.ino            # Calibrated compass readings
-│   └── update_display.ino          # OLED display management
+│   ├── DeviceRFController.cpp       # RF transmission implementation
+│   ├── DeviceRFController.h         # RF controller header
+│   ├── NavigationManager.cpp        # Navigation logic and waypoint management
+│   ├── NavigationManager.h          # Navigation manager header
+│   ├── DisplayManager.cpp           # OLED display management
+│   ├── DisplayManager.h             # Display manager header
+│   ├── CompassManager.cpp           # Magnetometer control and calibration
+│   ├── CompassManager.h             # Compass manager header
+│   ├── GPSManager.cpp               # GPS data processing
+│   ├── GPSManager.h                 # GPS manager header
+│   ├── NavigationUtils.cpp          # Navigation calculations and audio feedback
+│   ├── NavigationUtils.h            # Navigation utilities header
+│   ├── DataModels.cpp               # System configuration constants
+│   └── DataModels.h                 # Data structures and system config
 ├── Waypoint/
 │   ├── Waypoint/
-│   │   ├── ContentView.swift        # Complete iOS app implementation
-│   │   ├── Info.plist              # App permissions and settings
-│   │   └── Assets.xcassets/        # App icons and resources
-│   └── Waypoint.xcodeproj/         # Xcode project files
-└── README.md                        # This documentation
+│   │   ├── Views/
+│   │   │   ├── ContentView.swift            # Main app interface
+│   │   │   ├── WaypointViews/              # Map and waypoint management
+│   │   │   └── SettingsViews/              # Device configuration and controls
+│   │   ├── Managers/
+│   │   │   ├── BluetoothManager.swift       # BLE device communication
+│   │   │   ├── LocationManager.swift       # iOS location services
+│   │   │   ├── OfflineTileManager.swift    # Map caching system
+│   │   │   └── WaypointManager.swift       # Waypoint data management
+│   │   ├── Components/                      # Reusable UI components
+│   │   ├── Models/                          # Data models and structures
+│   │   ├── Utilities/                       # Helper functions and extensions
+│   │   ├── Assets.xcassets/                 # App icons and resources
+│   │   └── Info.plist                       # App permissions and settings
+│   └── Waypoint.xcodeproj/                  # Xcode project files
+└── README.md                                # This documentation
 ```
 
 ## Troubleshooting
@@ -388,18 +436,23 @@ Destination reached!
 - **App won't connect**: Verify Helm device is powered and advertising "Helm"
 - **No waypoints received**: Check BLE protocol format matches specification
 - **Connection drops**: Ensure stable power supply and maintain <30m range
+- **Commands not working**: Verify navigation is enabled in mobile app
 
 **RF Transmission Problems**:
 - **Motor not responding**: Verify antenna connection and 433.032 MHz frequency
 - **Weak signal**: Check 5V power supply stability and antenna positioning  
-- **Wrong direction**: Re-run calibration or verify motor LEFT/RIGHT codes
-- **RFM69HCW init failure**: Check SPI wiring (D10→CS, D9→RST, D2→G0)
+- **Wrong direction**: Re-run calibration via mobile app or verify motor LEFT/RIGHT codes
+- **RFM69HCW init failure**: Check SPI wiring (D10→CS, D9→RST, D8→G0)
 
 **Compass/Display Issues**:
-- **Erratic heading**: Re-calibrate magnetometer away from metal objects
+- **Erratic heading**: Re-calibrate magnetometer via mobile app away from metal objects
 - **Blank OLED**: Verify I2C address 0x3C and Wire1 bus connections (SDA/SCL)
 - **No compass data**: Check MMC5603 power and I2C wiring
 - **Display not updating**: Ensure display.display() calls in main loop
+
+**Audio Issues**:
+- **No buzzer sounds**: Verify piezo buzzer connections (D7→+, GND→-)
+- **Weak audio**: Check buzzer polarity and power connections
 
 ### iOS App Issues
 
@@ -414,6 +467,11 @@ Destination reached!
 - **Offline maps not working**: Verify download completed successfully
 - **Poor GPS accuracy**: Use device outdoors with clear sky view
 
+**Control Issues**:
+- **Navigation won't start**: Ensure navigation is enabled in Helm tab
+- **Waypoints not sending**: Verify Bluetooth connection is active
+- **No status updates**: Check BLE connection stability
+
 **App Performance**:
 - **Slow map loading**: Clear cache or reduce offline map area size
 - **App crashes**: Restart app, check iOS version compatibility (15.0+)
@@ -423,9 +481,9 @@ Destination reached!
 
 - **Navigation Update Rate**: 10Hz main loop frequency
 - **GPS Accuracy**: 3-5 meters with good satellite reception (8+ satellites)
-- **Compass Precision**: ±2° with proper magnetometer calibration
+- **Compass Precision**: ±2° with proper magnetometer calibration via mobile app
 - **RF Range**: 100+ meters in open water conditions
-- **BLE Range**: 10-30 meters for waypoint transmission
+- **BLE Range**: 10-30 meters for waypoint transmission and device control
 - **Battery Life**: Varies with GPS acquisition time and RF transmission frequency
 - **Offline Map Storage**: ~2-5MB per km² depending on zoom levels (10-15)
 
@@ -437,16 +495,19 @@ Destination reached!
 - **GPS Dependency**: Keep alternative navigation methods available
 - **Battery Management**: Monitor power levels during extended operation
 - **Range Limitations**: Maintain visual contact with remote device when possible
+- **Mobile App Dependency**: Ensure mobile device battery and connectivity for system control
 
 ## Future Enhancement Possibilities
 
-- **Multi-waypoint Routes** - Support sequential navigation through multiple points
+- **Multi-waypoint Routes** - Support sequential navigation through multiple points via mobile app
 - **Obstacle Avoidance** - Integration with ultrasonic or radar sensors
-- **Data Logging** - SD card storage of navigation tracks and performance metrics
-- **Web Interface** - WiFi-based configuration and remote monitoring
-- **Speed Control** - Variable motor speed based on distance and conditions
+- **Data Logging** - SD card storage of navigation tracks and performance metrics accessible via mobile app
+- **Web Interface** - WiFi-based configuration and remote monitoring as alternative to mobile app
+- **Speed Control** - Variable motor speed based on distance and conditions, controlled via app
 - **Weather Compensation** - Wind and current drift correction algorithms
-- **Geofencing** - Automatic boundary enforcement for operational safety
+- **Geofencing** - Automatic boundary enforcement for operational safety configured via app
+- **Voice Commands** - Audio control integration with mobile app
+- **Multi-device Support** - Control multiple Helm devices from single mobile app
 
 ## License and Compliance
 
@@ -458,5 +519,6 @@ Contributions welcome! Please:
 1. Fork repository and create feature branches  
 2. Test changes thoroughly with actual hardware
 3. Document RF protocol modifications or new hardware integrations
-4. Ensure backward compatibility with existing calibration data
+4. Ensure backward compatibility with existing mobile app functionality
 5. Update documentation for new features or requirements
+6. Test BLE communication protocols with both Arduino and iOS components

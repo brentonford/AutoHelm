@@ -1,8 +1,8 @@
 /*
- * WatersnakeRFController.h
+ * DeviceRFController.h
  * 
- * Library for controlling Watersnake Fierce 2 electric motor
- * via RFM69HCW 433MHz radio module
+ * Library for controlling remote devices via 433MHz RF transmission
+ * using RFM69HCW radio module
  * 
  * Signal Parameters (from RTL-SDR analysis):
  * - Frequency: 433.032 MHz
@@ -32,15 +32,15 @@
  * 'L' or 'l' - Transmit LEFT command
  */
 
-#ifndef WATERSNAKE_RF_CONTROLLER_H
-#define WATERSNAKE_RF_CONTROLLER_H
+#ifndef DEVICE_RF_CONTROLLER_H
+#define DEVICE_RF_CONTROLLER_H
 
 #include <Arduino.h>
 #include <RH_RF69.h>
 
-class WatersnakeRFController {
+class DeviceRFController {
 public:
-    WatersnakeRFController();
+    DeviceRFController();
     
     bool begin();
     void transmitRight(uint8_t repeatCount = 3);
@@ -50,7 +50,7 @@ public:
 private:
     static const uint8_t RF_CS_PIN = 10;
     static const uint8_t RF_RST_PIN = 9;
-    static const uint8_t RF_INT_PIN = 2;
+    static const uint8_t RF_INT_PIN = 8;
     
     static constexpr float FREQUENCY = 433.032;
     static constexpr float FREQ_DEVIATION = 22.5;

@@ -1,6 +1,6 @@
 #include "NavigationManager.h"
 
-NavigationManager::NavigationManager(WatersnakeRFController* controller) : rfController(controller) {
+NavigationManager::NavigationManager(DeviceRFController* controller) : rfController(controller) {
 }
 
 void NavigationManager::setTarget(float latitude, float longitude) {

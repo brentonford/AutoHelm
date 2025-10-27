@@ -4,7 +4,7 @@
 #include "NavigationManager.h"
 #include "DisplayManager.h"
 #include "CompassManager.h"
-#include "WatersnakeRFController.h"
+#include "DeviceRFController.h"
 #include "GPSReceiver.h"
 #include "NavigationUtils.h"
 
@@ -13,7 +13,7 @@ GPSManager gpsManager;
 NavigationManager* navigationManager;
 DisplayManager displayManager;
 CompassManager compassManager;
-WatersnakeRFController watersnakeRFController;
+DeviceRFController deviceRFController;
 GPSReceiver gpsReceiver;
 
 // System state
@@ -78,7 +78,7 @@ void setup() {
     // Initialize RF Controller
     Serial.print("Initializing RF Controller... ");
     Serial.flush();
-    bool rfAvailable = watersnakeRFController.begin();
+    bool rfAvailable = deviceRFController.begin();
     if (rfAvailable) {
         Serial.println("SUCCESS");
     } else {
@@ -89,7 +89,7 @@ void setup() {
     // Initialize navigation manager
     Serial.print("Initializing navigation... ");
     Serial.flush();
-    navigationManager = new NavigationManager(&watersnakeRFController);
+    navigationManager = new NavigationManager(&deviceRFController);
     Serial.println("SUCCESS");
     Serial.flush();
     
@@ -117,17 +117,17 @@ void setup() {
     }
     
     // Test RF transmission if available
-    if (watersnakeRFController.isInitialized()) {
+    if (deviceRFController.isInitialized()) {
         Serial.println("=== Testing RF Transmission ===");
         Serial.flush();
         Serial.println("Sending RIGHT command...");
         Serial.flush();
-        watersnakeRFController.transmitRight(3);
+        deviceRFController.transmitRight(3);
         delay(2000);
         
         Serial.println("Sending LEFT command...");
         Serial.flush();
-        watersnakeRFController.transmitLeft(3);
+        deviceRFController.transmitLeft(3);
         delay(2000);
     } else {
         Serial.println("=== Skipping RF Test (RF not available) ===");
@@ -146,7 +146,7 @@ void setup() {
     Serial.flush();
     Serial.println("  GPS: Always Available");
     Serial.flush();
-    Serial.print("  RF Controller: "); Serial.println(watersnakeRFController.isInitialized() ? "Available" : "Not Available");
+    Serial.print("  RF Controller: "); Serial.println(deviceRFController.isInitialized() ? "Available" : "Not Available");
     Serial.flush();
     Serial.println();
     Serial.println("Starting main loop...");
