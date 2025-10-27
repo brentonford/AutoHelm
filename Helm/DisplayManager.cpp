@@ -9,8 +9,6 @@ bool DisplayManager::begin() {
     Wire1.begin();
     delay(100);
     
-    Serial.println("Initializing OLED display...");
-    
     display = new Adafruit_SSD1306(128, 64, &Wire1, -1);
     
     // Try multiple initialization attempts
@@ -71,6 +69,8 @@ void DisplayManager::updateDisplay(const GPSData& gpsData, float heading, const 
         Serial.println("Display not initialized - skipping update");
         return;
     }
+    
+    // Display update messages removed to reduce serial noise
     
     display->clearDisplay();
     

@@ -46,11 +46,16 @@ public:
     void transmitRight(uint8_t repeatCount = 3);
     void transmitLeft(uint8_t repeatCount = 3);
     bool isInitialized() const;
+    void testSPIPins();
+    void performModuleHealthCheck();
 
 private:
     static const uint8_t RF_CS_PIN = 10;
     static const uint8_t RF_RST_PIN = 9;
     static const uint8_t RF_INT_PIN = 8;
+    static const uint8_t SCK_PIN = 13;
+    static const uint8_t MISO_PIN = 12;
+    static const uint8_t MOSI_PIN = 11;
     
     static constexpr float FREQUENCY = 433.032;
     static constexpr float FREQ_DEVIATION = 22.5;
@@ -75,6 +80,8 @@ private:
     void sendPwmBit(bool bit);
     void sendSyncPulse();
     void transmitCode(uint64_t codeHigh, uint64_t codeLow);
+    uint8_t readRegisterDirect(uint8_t addr);
+    void writeRegisterDirect(uint8_t addr, uint8_t value);
 };
 
 #endif

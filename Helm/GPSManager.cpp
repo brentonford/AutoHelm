@@ -57,5 +57,12 @@ GPSData GPSManager::parseGPS() {
     data.longitude = 0.0;
     data.altitude = 0.0;
     data.time = "";
+    
+    static unsigned long lastGpsDebug = 0;
+    if (millis() - lastGpsDebug > 30000) {
+        Serial.println("GPS: No fix data available");
+        lastGpsDebug = millis();
+    }
+    
     return data;
 }
