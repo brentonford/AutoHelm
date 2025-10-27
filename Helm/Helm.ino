@@ -7,6 +7,10 @@
 #include "DeviceRFController.h"
 #include "GPSReceiver.h"
 #include "NavigationUtils.h"
+#include "RfController.h"
+
+#define RF_CS_PIN 10
+#define RF_RST_PIN 9
 
 // Hardware managers
 GPSManager gpsManager;
@@ -15,6 +19,7 @@ DisplayManager displayManager;
 CompassManager compassManager;
 DeviceRFController deviceRFController;
 GPSReceiver gpsReceiver;
+RfController rfController(RF_CS_PIN, RF_RST_PIN);
 
 // System state
 bool previousGpsFix = false;
@@ -25,6 +30,7 @@ unsigned long lastCalibrationDataSent = 0;
 bool displayAvailable = false;
 bool compassAvailable = false;
 bool bleAvailable = false;
+bool rfControllerAvailable = false;
 
 // Forward declarations for notification functions
 void playNavigationEnabled();
@@ -150,6 +156,14 @@ void setup() {
         Serial.println("=== Skipping RF Test (RF not available) ===");
         Serial.flush();
     }
+
+    rfControllerAvailable = rfController.begin();
+    if (rfControllerAvailable) {
+        Serial.println("RF Controller ready");
+        rfController.printDebugInfo();
+    } else {
+        Serial.println("RF Controller FAILED");
+    }
     
     Serial.println("=== Setup Complete ===");
     Serial.flush();
@@ -163,7 +177,9 @@ void setup() {
     Serial.flush();
     Serial.println("  GPS: Always Available");
     Serial.flush();
-    Serial.print("  RF Controller: "); Serial.println(deviceRFController.isInitialized() ? "Available" : "Not Available");
+    Serial.print("  Device RF Controller: "); Serial.println(deviceRFController.isInitialized() ? "Available" : "Not Available");
+    Serial.flush();
+    Serial.print("  RF Controller: "); Serial.println(rfControllerAvailable ? "Available" : "Not Available");
     Serial.flush();
     Serial.println();
     Serial.println("Starting main loop...");
@@ -171,6 +187,22 @@ void setup() {
 }
 
 void loop() {
+
+    // Trigger RF Controller on serial command
+    if (Serial.available()) {
+        char cmd = Serial.read();
+        
+        if (cmd == 'r') {
+            rfController.transmitRightButton();
+        } else if (cmd == 'l') {
+            rfController.transmitLeftButton();
+        } else if (cmd == 't') {
+            rfController.transmitSimpleBurst();
+        } else if (cmd == 'd') {
+            rfController.printDebugInfo();
+        }
+    }
+
     // Update BLE receiver if available
     if (bleAvailable) {
         gpsReceiver.update();
