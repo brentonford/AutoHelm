@@ -13,7 +13,7 @@
  * Hardware Requirements:
  * - Arduino UNO R4 (or compatible)
  * - Adafruit RFM69HCW 433MHz Breakout
- * - RadioHead library by Mike McCauley
+ * - RFM69 library by Felix Rusu
   * 
  * Wiring:
  * RFM69HCW -> Arduino UNO R4
@@ -24,7 +24,7 @@
  * MOSI     -> D11 (MOSI)
  * CS       -> D10
  * RST      -> D9
- * G0/DIO0  -> D2
+ * G0/DIO0  -> D8
  * ANT      -> 433MHz spring antenna
  * 
  * Serial Commands:
@@ -36,7 +36,7 @@
 #define DEVICE_RF_CONTROLLER_H
 
 #include <Arduino.h>
-#include <RH_RF69.h>
+#include <RFM69.h>
 
 class DeviceRFController {
 public:
@@ -57,9 +57,11 @@ private:
     static const uint8_t MISO_PIN = 12;
     static const uint8_t MOSI_PIN = 11;
     
-    static constexpr float FREQUENCY = 433.032;
-    static constexpr float FREQ_DEVIATION = 22.5;
-    static const uint16_t BITRATE = 6400;
+    static const uint8_t NODEID = 2;
+    static const uint8_t NETWORKID = 100;
+    static const uint8_t FREQUENCY = RF69_433MHZ;
+    static const char* ENCRYPT_KEY;
+    static const bool IS_RFM69HCW = true;
     
     static const uint8_t SHORT_PULSE_US = 50;
     static const uint8_t LONG_PULSE_US = 102;
@@ -74,7 +76,7 @@ private:
     static const uint64_t LEFT_CODE_HIGH = 0x8000576d76ULL;
     static const uint64_t LEFT_CODE_LOW = 0xf7e077723ea84ULL;
     
-    RH_RF69 rf69;
+    RFM69 radio;
     bool initialized;
     
     void sendPwmBit(bool bit);

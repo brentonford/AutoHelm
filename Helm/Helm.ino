@@ -154,6 +154,23 @@ void setup() {
 }
 
 void loop() {
+
+    // BFORD - temporary test remove after proven signal to motor works.
+    if (deviceRFController.isInitialized()) {
+        Serial.println("=== Testing RF Transmission ===");
+        Serial.flush();
+        Serial.println("Sending RIGHT command...");
+        Serial.flush();
+        deviceRFController.transmitRight(3);
+        delay(2000);
+        
+        Serial.println("Sending LEFT command...");
+        Serial.flush();
+        deviceRFController.transmitLeft(3);
+        delay(2000);
+    }
+
+
     // Update BLE receiver if available
     if (bleAvailable) {
         gpsReceiver.update();
