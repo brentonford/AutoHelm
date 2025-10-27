@@ -116,16 +116,33 @@ void setup() {
         displayManager.updateDisplay(GPSData(), 0, NavigationState(), false);
     }
     
-    // Test RF transmission if available
+    // Protocol analysis and testing if available
     if (deviceRFController.isInitialized()) {
-        Serial.println("=== Testing RF Transmission ===");
+        Serial.println("=== RF PROTOCOL ANALYSIS ===");
         Serial.flush();
-        Serial.println("Sending RIGHT command...");
+        
+        // Show protocol comparison
+        deviceRFController.compareProtocols();
+        delay(2000);
+        
+        Serial.println("\n=== SIGNAL CAPTURE TEST ===");
+        Serial.println("Uncomment next line and press remote button to capture signal:");
+        Serial.println("// deviceRFController.captureRawSignal();");
+        Serial.flush();
+        
+        Serial.println("\n=== RC-SWITCH PROTOCOL TEST ===");
+        Serial.println("Uncomment next line to test standard protocols:");
+        Serial.println("// deviceRFController.testRcSwitch();");
+        Serial.flush();
+        
+        Serial.println("\n=== CURRENT IMPLEMENTATION TEST ===");
+        Serial.flush();
+        Serial.println("Sending RIGHT command with current implementation...");
         Serial.flush();
         deviceRFController.transmitRight(3);
         delay(2000);
         
-        Serial.println("Sending LEFT command...");
+        Serial.println("Sending LEFT command with current implementation...");
         Serial.flush();
         deviceRFController.transmitLeft(3);
         delay(2000);
@@ -154,23 +171,6 @@ void setup() {
 }
 
 void loop() {
-
-    // BFORD - temporary test remove after proven signal to motor works.
-    if (deviceRFController.isInitialized()) {
-        Serial.println("=== Testing RF Transmission ===");
-        Serial.flush();
-        Serial.println("Sending RIGHT command...");
-        Serial.flush();
-        deviceRFController.transmitRight(3);
-        delay(2000);
-        
-        Serial.println("Sending LEFT command...");
-        Serial.flush();
-        deviceRFController.transmitLeft(3);
-        delay(2000);
-    }
-
-
     // Update BLE receiver if available
     if (bleAvailable) {
         gpsReceiver.update();

@@ -70,10 +70,10 @@ The system enables users to select waypoints on their mobile device and wireless
 
 ## Wiring Diagrams
 
-### RFM69HCW RF Module
+### Adafruit RFM69HCW Transceiver Radio Breakout - 433 MHz
 ```
 RFM69HCW -> Arduino UNO R4 WiFi
-VIN      -> 5V
+VIN      -> 5V (5V tolerant)
 GND      -> GND  
 SCK      -> D13 (SCK)
 MISO     -> D12 (MISO)
@@ -81,6 +81,7 @@ MOSI     -> D11 (MOSI)
 CS       -> D10
 RST      -> D9
 G0/DIO0  -> D8
+G2/DIO2  -> D7 (Direct modulation)
 ANT      -> 433MHz spring antenna
 ```
 
@@ -116,7 +117,7 @@ Baud Rate  -> 9600
 ### Piezo Buzzer
 ```
 Piezo Buzzer -> Arduino UNO R4 WiFi
-Positive (+) -> D7 (BUZZER_PIN)
+Positive (+) -> D4 (BUZZER_PIN)
 Negative (-) -> GND
 ```
 
