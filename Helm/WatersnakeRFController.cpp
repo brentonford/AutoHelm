@@ -9,7 +9,6 @@
 
 WatersnakeRFController::WatersnakeRFController() 
     : rf69(RF_CS_PIN, RF_INT_PIN), initialized(false) {
-    begin();
 }
 
 bool WatersnakeRFController::begin() {

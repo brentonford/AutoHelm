@@ -46,9 +46,29 @@ class BluetoothManager: NSObject, ObservableObject {
     
     func startScanning() {
         if centralManager.state == .poweredOn {
+            print("Starting BLE scan for service UUID: \(serviceUUID)")
             discoveredDevices.removeAll()
-            centralManager.scanForPeripherals(withServices: [serviceUUID], options: nil)
+            
+            // Enhanced scanning options for better discovery
+            let scanOptions: [String: Any] = [
+                CBCentralManagerScanOptionAllowDuplicatesKey: true,
+                CBCentralManagerScanOptionSolicitedServiceUUIDsKey: [serviceUUID]
+            ]
+            
+            // Scan for both the specific service and all devices
+            centralManager.scanForPeripherals(withServices: [serviceUUID], options: scanOptions)
+            
+            // Also scan without service filter as backup
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                if let self = self, self.discoveredDevices.isEmpty {
+                    print("No devices found with service filter, trying broader scan...")
+                    self.centralManager.scanForPeripherals(withServices: nil, options: scanOptions)
+                }
+            }
+            
             connectionStatus = "Scanning..."
+        } else {
+            print("Bluetooth not powered on, state: \(centralManager.state.rawValue)")
         }
     }
     
@@ -165,23 +185,54 @@ class BluetoothManager: NSObject, ObservableObject {
 // MARK: - CBCentralManagerDelegate
 extension BluetoothManager: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        print("Bluetooth state changed to: \(central.state.rawValue)")
+        
         switch central.state {
         case .poweredOn:
             connectionStatus = "Ready"
+            print("Bluetooth is ready - starting auto scan")
+            // Auto-start scanning when Bluetooth becomes available
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.startScanning()
+            }
         case .poweredOff:
             connectionStatus = "Bluetooth Off"
+            print("Bluetooth is turned off")
         case .unauthorized:
             connectionStatus = "Unauthorized"
+            print("Bluetooth access unauthorized")
         case .unsupported:
             connectionStatus = "Unsupported"
-        default:
+            print("Bluetooth not supported on this device")
+        case .unknown:
             connectionStatus = "Unknown"
+            print("Bluetooth state unknown")
+        case .resetting:
+            connectionStatus = "Resetting"
+            print("Bluetooth is resetting")
+        @unknown default:
+            connectionStatus = "Unknown State"
+            print("Unknown Bluetooth state: \(central.state.rawValue)")
         }
     }
     
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
+        print("Discovered device: \(peripheral.name ?? "Unknown") - \(peripheral.identifier)")
+        print("RSSI: \(RSSI) dBm")
+        print("Advertisement data: \(advertisementData)")
+        
+        // Check if this is our target device
+        let isTargetDevice = peripheral.name?.contains("Helm") == true ||
+                            advertisementData[CBAdvertisementDataLocalNameKey] as? String == "Helm" ||
+                            advertisementData[CBAdvertisementDataServiceUUIDsKey] != nil
+        
+        if isTargetDevice {
+            print("Found potential Helm device!")
+        }
+        
         if !discoveredDevices.contains(where: { $0.identifier == peripheral.identifier }) {
             discoveredDevices.append(peripheral)
+            print("Added device to discovery list")
         }
     }
     
