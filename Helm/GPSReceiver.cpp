@@ -22,23 +22,68 @@ GPSReceiver::GPSReceiver() :
 }
 
 bool GPSReceiver::begin(const char* deviceName) {
-    if (!BLE.begin()) {
-        Serial.println("Starting BLE failed!");
+    Serial.println("Starting BLE GPS Receiver initialization...");
+    
+    // Initialize BLE with multiple attempts
+    int bleAttempts = 0;
+    bool bleSuccess = false;
+    
+    while (bleAttempts < 3 && !bleSuccess) {
+        Serial.print("BLE init attempt ");
+        Serial.println(bleAttempts + 1);
+        
+        if (BLE.begin()) {
+            bleSuccess = true;
+            Serial.println("BLE initialization successful!");
+        } else {
+            Serial.print("BLE init failed on attempt ");
+            Serial.println(bleAttempts + 1);
+            delay(1000);
+        }
+        bleAttempts++;
+    }
+    
+    if (!bleSuccess) {
+        Serial.println("BLE initialization failed - all attempts exhausted");
         return false;
     }
     
+    // Set device name and local name
     BLE.setLocalName(deviceName);
-    BLE.setAdvertisedService(gpsService);
+    BLE.setDeviceName(deviceName);
+    
+    Serial.print("Setting device name: ");
+    Serial.println(deviceName);
+    
+    // Add characteristics to service
     gpsService.addCharacteristic(gpsCharacteristic);
     gpsService.addCharacteristic(statusCharacteristic);
     gpsService.addCharacteristic(calibrationCommandCharacteristic);
     gpsService.addCharacteristic(calibrationDataCharacteristic);
+    
+    // Add service to BLE
     BLE.addService(gpsService);
-    BLE.advertise();
+    
+    // Set advertised service UUID
+    BLE.setAdvertisedService(gpsService);
+    
+    // Configure advertising parameters for better discoverability
+    BLE.setAdvertisingInterval(160); // 100ms intervals for faster discovery
+    BLE.setConnectable(true);
+    
+    // Start advertising
+    bool advertiseSuccess = BLE.advertise();
+    if (!advertiseSuccess) {
+        Serial.println("Failed to start BLE advertising!");
+        return false;
+    }
     
     Serial.println("BLE GPS Receiver active, waiting for connections...");
-        Serial.print("Helm device name: ");
-        Serial.println(deviceName);
+    Serial.print("Device name: ");
+    Serial.println(deviceName);
+    Serial.print("Service UUID: ");
+    Serial.println("0000FFE0-0000-1000-8000-00805F9B34FB");
+    Serial.println("Ready for iOS app connection...");
     
     return true;
 }
@@ -49,32 +94,64 @@ void GPSReceiver::update() {
     BLEDevice central = BLE.central();
     
     static bool wasConnected = false;
+    static unsigned long lastConnectionCheck = 0;
     bool currentlyConnected = central;
+    
+    // Periodic connection status logging
+    if (millis() - lastConnectionCheck > 10000) { // Every 10 seconds
+        if (currentlyConnected) {
+            Serial.println("BLE Status: Connected to central device");
+            Serial.print("Central address: ");
+            Serial.println(central.address());
+        } else {
+            Serial.println("BLE Status: Advertising, waiting for connection...");
+            // Restart advertising if needed
+            if (!BLE.advertise()) {
+                Serial.println("Restarting BLE advertising...");
+                BLE.advertise();
+            }
+        }
+        lastConnectionCheck = millis();
+    }
     
     // Check for connection status changes
     if (currentlyConnected != wasConnected) {
         if (currentlyConnected) {
+            Serial.println("BLE: Device connected!");
+            Serial.print("Connected to: ");
+            Serial.println(central.address());
             playAppConnected();
         } else if (wasConnected) {
+            Serial.println("BLE: Device disconnected!");
             playAppDisconnected();
+            // Restart advertising after disconnect
+            delay(100);
+            BLE.advertise();
         }
         wasConnected = currentlyConnected;
     }
     
     if (central) {
         if (calibrationCommandCharacteristic.written()) {
+            Serial.println("Calibration command received");
             handleCalibrationCommand();
         }
         
         if (gpsCharacteristic.written()) {
+            Serial.println("GPS data received");
             int length = gpsCharacteristic.valueLength();
             const uint8_t* value = gpsCharacteristic.value();
+            
+            Serial.print("Received data length: ");
+            Serial.println(length);
             
             for (int i = 0; i < length; i++) {
                 char receivedChar = (char)value[i];
                 
                 if (receivedChar == '\n') {
                     if (inputBuffer.length() > 0) {
+                        Serial.print("Processing GPS data: ");
+                        Serial.println(inputBuffer);
                         parseGPSData(inputBuffer);
                         inputBuffer = "";
                     }
@@ -87,7 +164,11 @@ void GPSReceiver::update() {
 }
 
 void GPSReceiver::parseGPSData(String data) {
+    Serial.print("Parsing GPS data: ");
+    Serial.println(data);
+    
     if (!data.startsWith("$GPS,") || !data.endsWith("*")) {
+        Serial.println("Invalid GPS data format - missing header/footer");
         return;
     }
     
@@ -95,11 +176,13 @@ void GPSReceiver::parseGPSData(String data) {
     
     int firstComma = data.indexOf(',');
     if (firstComma == -1) {
+        Serial.println("Invalid GPS data format - missing first comma");
         return;
     }
     
     int secondComma = data.indexOf(',', firstComma + 1);
     if (secondComma == -1) {
+        Serial.println("Invalid GPS data format - missing second comma");
         return;
     }
     
@@ -179,6 +262,9 @@ void GPSReceiver::handleCalibrationCommand() {
     if (length > 0) {
         String command = String((char*)value).substring(0, length);
         command.trim();
+        
+        Serial.print("Calibration command: ");
+        Serial.println(command);
         
         if (command == "START_CAL") {
             calibrationMode = true;

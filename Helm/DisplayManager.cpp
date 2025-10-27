@@ -5,30 +5,84 @@ DisplayManager::DisplayManager() : display(nullptr) {
 }
 
 bool DisplayManager::begin() {
+    // Initialize I2C bus explicitly
+    Wire1.begin();
+    delay(100);
+    
+    Serial.println("Initializing OLED display...");
+    
     display = new Adafruit_SSD1306(128, 64, &Wire1, -1);
     
-    if(!display->begin(SSD1306_SWITCHCAPVCC, SystemConfig::SCREEN_ADDRESS)) {
-        Serial.println(F("SSD1306 allocation failed"));
-        return false;
+    // Try multiple initialization attempts
+    int attempts = 0;
+    bool success = false;
+    
+    while (attempts < 3 && !success) {
+        Serial.print("Display init attempt ");
+        Serial.println(attempts + 1);
+        
+        if(display->begin(SSD1306_SWITCHCAPVCC, SystemConfig::SCREEN_ADDRESS)) {
+            success = true;
+            Serial.println("OLED initialization successful!");
+        } else {
+            Serial.print("OLED init failed on attempt ");
+            Serial.println(attempts + 1);
+            delay(500);
+        }
+        attempts++;
     }
     
-    Serial.println("OLED initialised!");
+    if (!success) {
+        Serial.println(F("SSD1306 allocation failed - all attempts exhausted"));
+        // Try with default I2C bus as fallback
+        delete display;
+        display = new Adafruit_SSD1306(128, 64, &Wire, -1);
+        if(display->begin(SSD1306_SWITCHCAPVCC, SystemConfig::SCREEN_ADDRESS)) {
+            Serial.println("OLED initialized on Wire bus (fallback)");
+            success = true;
+        } else {
+            Serial.println("OLED failed on both Wire1 and Wire buses");
+            delete display;
+            display = nullptr;
+            return false;
+        }
+    }
+    
+    // Test display with visible pattern
+    display->clearDisplay();
+    display->setTextSize(2);
+    display->setTextColor(SSD1306_WHITE);
+    display->setCursor(10, 10);
+    display->println("HELM");
+    display->setCursor(10, 35);
+    display->println("READY");
+    display->display();
+    delay(2000);
+    
     display->clearDisplay();
     display->display();
+    
+    Serial.println("OLED fully initialized and tested!");
     return true;
 }
 
 void DisplayManager::updateDisplay(const GPSData& gpsData, float heading, const NavigationState& navState, bool isConnected) {
+    if (!display) {
+        Serial.println("Display not initialized - skipping update");
+        return;
+    }
+    
     display->clearDisplay();
     
     if (!gpsData.hasFix) {
+        display->setTextSize(2);
         display->setTextColor(SSD1306_WHITE);
-        display->setCursor(44, 5);
+        display->setCursor(10, 5);
         display->print("NO FIX!");
         display->setTextSize(1);
         display->setCursor(10, 30);
         display->print("Waiting for GPS...");
-        display->setCursor(24, 50);
+        display->setCursor(24, 45);
         display->print("Satellites: ");
         display->print(gpsData.satellites);
         display->display();
@@ -46,6 +100,8 @@ void DisplayManager::updateDisplay(const GPSData& gpsData, float heading, const 
 }
 
 void DisplayManager::showCalibrationScreen(float x, float y, float z) {
+    if (!display) return;
+    
     display->clearDisplay();
     display->setTextSize(1);
     display->setTextColor(SSD1306_WHITE);
@@ -68,6 +124,8 @@ void DisplayManager::showCalibrationScreen(float x, float y, float z) {
 }
 
 void DisplayManager::drawArrow(float angle, int centerX, int centerY, int size) {
+    if (!display) return;
+    
     float radAngle = angle * M_PI / 180.0;
     
     int tipX = centerX + size * sin(radAngle);
@@ -88,6 +146,8 @@ void DisplayManager::drawArrow(float angle, int centerX, int centerY, int size) 
 }
 
 void DisplayManager::drawStatusIcons(bool isConnected, bool isNavigating, bool hasReachedDestination) {
+    if (!display) return;
+    
     display->setTextSize(1);
     display->setTextColor(SSD1306_WHITE);
     
@@ -121,6 +181,11 @@ void DisplayManager::drawStatusIcons(bool isConnected, bool isNavigating, bool h
 }
 
 void DisplayManager::drawNavigationInfo(const GPSData& gpsData, const NavigationState& navState) {
+    if (!display) return;
+    
+    display->setTextSize(1);
+    display->setTextColor(SSD1306_WHITE);
+    
     if (navState.currentDistance >= 1000) {
         display->setCursor(4, 57);
         display->print(navState.currentDistance/1000, 1);
@@ -148,6 +213,8 @@ void DisplayManager::drawNavigationInfo(const GPSData& gpsData, const Navigation
 }
 
 void DisplayManager::drawBorders() {
+    if (!display) return;
+    
     display->drawLine(47, 0, 58, 11, SSD1306_WHITE);
     display->drawLine(58, 11, 58, 38, SSD1306_WHITE);
     display->drawLine(58, 38, 47, 49, SSD1306_WHITE);

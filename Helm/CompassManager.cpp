@@ -7,11 +7,17 @@ CompassManager::CompassManager() : compass(12345), isCalibrating(false), firstCa
 
 bool CompassManager::begin() {
     if (!compass.begin(MMC56X3_DEFAULT_ADDRESS, &Wire1)) {
-        Serial.println("Ooops, no MMC5603 detected ... Check your wiring!");
-        return false;
+        Serial.println("MMC5603 not detected on Wire1, trying Wire bus...");
+        if (!compass.begin(MMC56X3_DEFAULT_ADDRESS, &Wire)) {
+            Serial.println("MMC5603 not detected on either I2C bus");
+            return false;
+        } else {
+            Serial.println("Magnetometer initialized on Wire bus");
+        }
+    } else {
+        Serial.println("Magnetometer initialized on Wire1 bus");
     }
     
-    Serial.println("Magnetometer initialised!");
     return true;
 }
 

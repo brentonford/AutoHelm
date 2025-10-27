@@ -4,7 +4,7 @@
 #include "NavigationManager.h"
 #include "DisplayManager.h"
 #include "CompassManager.h"
-#include "WatersnakeRFController.h"
+// #include "WatersnakeRFController.h"
 #include "GPSReceiver.h"
 #include "NavigationUtils.h"
 
@@ -13,13 +13,18 @@ GPSManager gpsManager;
 NavigationManager* navigationManager;
 DisplayManager displayManager;
 CompassManager compassManager;
-WatersnakeRFController watersnakeRFController;
+// WatersnakeRFController watersnakeRFController;
 GPSReceiver gpsReceiver;
 
 // System state
 bool previousGpsFix = false;
 unsigned long lastStatusUpdate = 0;
 unsigned long lastCalibrationDataSent = 0;
+
+// Hardware status flags
+bool displayAvailable = false;
+bool compassAvailable = false;
+bool bleAvailable = false;
 
 // Forward declarations for notification functions
 void playNavigationEnabled();
@@ -30,112 +35,214 @@ void playDestinationReached();
 
 void setup() {
     Serial.begin(9600);
-    delay(100);
-    Serial.println("GPS Navigation Starting...");
+    delay(2000);
     
-    if (!displayManager.begin()) {
-        while(1) delay(10);
-    }
+    Serial.println("SERIAL COMMUNICATION TEST - IF YOU SEE THIS, SERIAL IS WORKING");
+    Serial.flush();
+    delay(500);
     
-    gpsManager.begin();
+    Serial.println("=== GPS Navigation System Starting ===");
+    Serial.flush();
+    Serial.println("Initializing components...");
+    Serial.flush();
     
-    if (!compassManager.begin()) {
-        while(1) delay(10);
-    }
-    
-    navigationManager = new NavigationManager(&watersnakeRFController);
-    
-    if (!gpsReceiver.begin("Helm")) {
-        Serial.println("Failed to initialize BLE GPS Receiver!");
+    // Initialize display (non-blocking)
+    Serial.print("Initializing OLED display... ");
+    Serial.flush();
+    displayAvailable = displayManager.begin();
+    if (displayAvailable) {
+        Serial.println("SUCCESS");
     } else {
-        Serial.println("BLE GPS Receiver initialized successfully");
+        Serial.println("FAILED - continuing without display");
+    }
+    Serial.flush();
+    
+    // Initialize GPS (always works)
+    Serial.print("Initializing GPS... ");
+    Serial.flush();
+    gpsManager.begin();
+    Serial.println("SUCCESS");
+    Serial.flush();
+    
+    // Initialize compass (non-blocking)
+    Serial.print("Initializing compass... ");
+    Serial.flush();
+    compassAvailable = compassManager.begin();
+    if (compassAvailable) {
+        Serial.println("SUCCESS");
+    } else {
+        Serial.println("FAILED - continuing without compass");
+    }
+    Serial.flush();
+    
+    // Initialize navigation manager
+    Serial.print("Initializing navigation... ");
+    Serial.flush();
+    // navigationManager = new NavigationManager(&watersnakeRFController);
+    Serial.println("SUCCESS");
+    Serial.flush();
+    
+    // Initialize BLE GPS Receiver (non-blocking)
+    Serial.print("Initializing BLE GPS Receiver... ");
+    Serial.flush();
+    bleAvailable = gpsReceiver.begin("Helm");
+    if (bleAvailable) {
+        Serial.println("SUCCESS");
+    } else {
+        Serial.println("FAILED - continuing without BLE");
+    }
+    Serial.flush();
+    
+    // Initialize buzzer pin
+    Serial.print("Initializing buzzer... ");
+    Serial.flush();
+    pinMode(SystemConfig::BUZZER_PIN, OUTPUT);
+    Serial.println("SUCCESS");
+    Serial.flush();
+    
+    // Update display if available
+    if (displayAvailable) {
+        displayManager.updateDisplay(GPSData(), 0, NavigationState(), false);
     }
     
-    pinMode(SystemConfig::BUZZER_PIN, OUTPUT);
+    // // Test RF transmission
+    // Serial.println("=== Testing RF Transmission ===");
+    // Serial.flush();
+    // Serial.println("Sending RIGHT command...");
+    // Serial.flush();
+    // watersnakeRFController.transmitRight(3);
+    // delay(2000);
     
-    displayManager.updateDisplay(GPSData(), 0, NavigationState(), false);
+    // Serial.println("Sending LEFT command...");
+    // Serial.flush();
+    // watersnakeRFController.transmitLeft(3);
+    // delay(2000);
     
-    Serial.println("Test Transmitter");
-    Serial.println("sending RIGHT...");
-    watersnakeRFController.transmitRight(3);
-    delay(2000);
-    
-    Serial.println("sending LEFT...");
-    watersnakeRFController.transmitLeft(3);
-    delay(2000);
-    
-    Serial.println("Setup complete!");
+    // Serial.println("=== Setup Complete ===");
+    // Serial.flush();
+    // Serial.println("System Status:");
+    // Serial.flush();
+    // Serial.print("  Display: "); Serial.println(displayAvailable ? "Available" : "Not Available");
+    // Serial.flush();
+    // Serial.print("  Compass: "); Serial.println(compassAvailable ? "Available" : "Not Available"); 
+    // Serial.flush();
+    // Serial.print("  BLE: "); Serial.println(bleAvailable ? "Available" : "Not Available");
+    // Serial.flush();
+    // Serial.println("  GPS: Always Available");
+    // Serial.flush();
+    // Serial.println("  RF Controller: Always Available");
+    // Serial.flush();
+    // Serial.println();
+    // Serial.println("Starting main loop...");
+    // Serial.flush();
 }
 
 void loop() {
-    gpsReceiver.update();
+//     // Update BLE receiver if available
+//     if (bleAvailable) {
+//         gpsReceiver.update();
+        
+//         // Handle calibration mode
+//         if (gpsReceiver.isCalibrationMode()) {
+//             handleCalibrationMode();
+//             return;
+//         }
+        
+//         // Check for new waypoints
+//         if (gpsReceiver.hasTarget()) {
+//             Serial.println("New waypoint received from BLE!");
+//             navigationManager->setTarget(gpsReceiver.getLatitude(), gpsReceiver.getLongitude());
+//             playWaypointSet();
+//             gpsReceiver.clearTarget();
+//         }
+        
+//         // Update navigation enabled state
+//         navigationManager->setNavigationEnabled(gpsReceiver.isNavigationEnabled());
+//     }
     
-    if (gpsReceiver.isCalibrationMode()) {
-        handleCalibrationMode();
-        return;
-    }
+//     // Read compass heading if available
+//     float heading = 0.0;
+//     if (compassAvailable) {
+//         heading = compassManager.readHeading();
+//     } else {
+//         heading = 0.0; // Default heading when compass unavailable
+//     }
     
-    if (gpsReceiver.hasTarget()) {
-        navigationManager->setTarget(gpsReceiver.getLatitude(), gpsReceiver.getLongitude());
-        playWaypointSet();
-        gpsReceiver.clearTarget();
-    }
+//     // Update GPS
+//     gpsManager.update();
+//     GPSData gpsData = gpsManager.getCurrentData();
     
-    float heading = compassManager.readHeading();
+//     // Handle GPS fix status changes
+//     if (gpsManager.hasFixStatusChanged()) {
+//         if (gpsData.hasFix) {
+//             Serial.println("GPS fix acquired!");
+//             playGpsFixed();
+//         } else {
+//             Serial.println("GPS fix lost!");
+//             playGpsFixLost();
+//         }
+//     }
     
-    gpsManager.update();
-    GPSData gpsData = gpsManager.getCurrentData();
+//     // Update navigation
+//     navigationManager->update(gpsData, heading);
+//     NavigationState navState = navigationManager->getState();
     
-    if (gpsManager.hasFixStatusChanged()) {
-        if (gpsData.hasFix) {
-            playGpsFixed();
-        } else {
-            playGpsFixLost();
-        }
-    }
+//     // Handle navigation state changes
+//     static bool wasNavigating = false;
+//     if (navState.isNavigating && !wasNavigating) {
+//         Serial.println("Navigation started!");
+//         playNavigationEnabled();
+//     }
+//     wasNavigating = navState.isNavigating;
     
-    navigationManager->setNavigationEnabled(gpsReceiver.isNavigationEnabled());
-    navigationManager->update(gpsData, heading);
-    NavigationState navState = navigationManager->getState();
+//     static bool wasDestinationReached = false;
+//     if (navState.hasReachedDestination && !wasDestinationReached) {
+//         Serial.println("Destination reached!");
+//         playDestinationReached();
+//     }
+//     wasDestinationReached = navState.hasReachedDestination;
     
-    static bool wasNavigating = false;
-    if (navState.isNavigating && !wasNavigating) {
-        playNavigationEnabled();
-    }
-    wasNavigating = navState.isNavigating;
+//     // Update display if available
+//     if (displayAvailable) {
+//         displayManager.updateDisplay(gpsData, heading, navState, bleAvailable ? gpsReceiver.isConnected() : false);
+//     }
     
-    static bool wasDestinationReached = false;
-    if (navState.hasReachedDestination && !wasDestinationReached) {
-        playDestinationReached();
-    }
-    wasDestinationReached = navState.hasReachedDestination;
+//     // Print debug info
+//     gpsManager.printDebugInfo(heading);
     
-    displayManager.updateDisplay(gpsData, heading, navState, gpsReceiver.isConnected());
+//     // Send status via BLE if available
+//     if (bleAvailable && millis() - lastStatusUpdate >= 500) {
+//         gpsReceiver.sendNavigationStatus(
+//             gpsData.hasFix, gpsData.satellites, gpsData.latitude, gpsData.longitude,
+//             gpsData.altitude, heading, navState.currentDistance, navState.currentBearing,
+//             navState.targetLatitude, navState.targetLongitude,
+//             navState.isNavigating, navState.hasReachedDestination
+//         );
+//         lastStatusUpdate = millis();
+//     }
     
-    gpsManager.printDebugInfo(heading);
-    
-    if (millis() - lastStatusUpdate >= 500) {
-        gpsReceiver.sendNavigationStatus(
-            gpsData.hasFix, gpsData.satellites, gpsData.latitude, gpsData.longitude,
-            gpsData.altitude, heading, navState.currentDistance, navState.currentBearing,
-            navState.targetLatitude, navState.targetLongitude,
-            navState.isNavigating, navState.hasReachedDestination
-        );
-        lastStatusUpdate = millis();
-    }
-    
-    delay(100);
-}
+//     delay(100);
+// }
 
-void handleCalibrationMode() {
-    float x, y, z, minX, minY, minZ, maxX, maxY, maxZ;
-    compassManager.getCalibrationData(x, y, z, minX, minY, minZ, maxX, maxY, maxZ);
+// void handleCalibrationMode() {
+//     if (!compassAvailable) {
+//         Serial.println("Calibration requested but compass not available!");
+//         return;
+//     }
     
-    if (millis() - lastCalibrationDataSent >= 500) {
-        gpsReceiver.sendCalibrationData(x, y, z, minX, minY, minZ, maxX, maxY, maxZ);
-        lastCalibrationDataSent = millis();
-    }
+//     float x, y, z, minX, minY, minZ, maxX, maxY, maxZ;
+//     compassManager.getCalibrationData(x, y, z, minX, minY, minZ, maxX, maxY, maxZ);
     
-    displayManager.showCalibrationScreen(x, y, z);
+//     // Send calibration data via BLE if available
+//     if (bleAvailable && millis() - lastCalibrationDataSent >= 500) {
+//         gpsReceiver.sendCalibrationData(x, y, z, minX, minY, minZ, maxX, maxY, maxZ);
+//         lastCalibrationDataSent = millis();
+//     }
+    
+//     // Show calibration screen if display available
+//     if (displayAvailable) {
+//         displayManager.showCalibrationScreen(x, y, z);
+//     }
+    
     delay(100);
 }
