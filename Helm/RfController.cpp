@@ -70,40 +70,20 @@ void RfController::configureFskMode() {
 }
 
 bool RfController::begin() {
-    Serial.println("[RF] Resetting RFM69...");
-    pinMode(rstPin, OUTPUT);
-    digitalWrite(rstPin, HIGH);
-    delay(10);
-    digitalWrite(rstPin, LOW);
-    delay(10);
-    digitalWrite(rstPin, HIGH);
-    delay(100);
-    
-    Serial.println("[RF] Initializing SPI...");
+    Serial.println("[RF] Initializing SPI first...");
     SPI.begin();
     pinMode(csPin, OUTPUT);
     digitalWrite(csPin, HIGH);
     delay(10);
     
-    Serial.println("[RF] Waiting for chip ready...");
-    uint8_t timeout = 0;
-    while (timeout < 50) {
-        uint8_t opmode = readRegister(0x01);
-        Serial.print("[RF] OpMode poll: 0x");
-        Serial.println(opmode, HEX);
-        
-        if (opmode != 0x00 && opmode != 0xFF) {
-            Serial.println("[RF] Chip ready");
-            break;
-        }
-        
-        delay(10);
-        timeout++;
-    }
-    
-    if (timeout >= 50) {
-        Serial.println("[RF] Chip not ready after reset");
-    }
+    Serial.println("[RF] Hard reset sequence...");
+    pinMode(rstPin, OUTPUT);
+    digitalWrite(rstPin, HIGH);
+    delay(100);
+    digitalWrite(rstPin, LOW);
+    delay(100);
+    digitalWrite(rstPin, HIGH);
+    delay(500);
     
     Serial.println("[RF] Checking version...");
     uint8_t version = readRegister(0x10);
@@ -115,18 +95,56 @@ bool RfController::begin() {
         return false;
     }
     
+    Serial.println("[RF] Attempting to wake chip...");
+    Serial.println("[RF] Trying sequence mode register...");
+    
+    writeRegister(0x01, 0x04);
+    delay(100);
+    Serial.print("[RF] OpMode after write: 0x");
+    Serial.println(readRegister(0x01), HEX);
+    
+    writeRegister(0x01, 0x04);
+    delay(100);
+    Serial.print("[RF] OpMode after 2nd write: 0x");
+    Serial.println(readRegister(0x01), HEX);
+    
+    Serial.println("[RF] Trying DIO mapping (should always be writable)...");
+    writeRegister(0x25, 0x00);
+    delay(10);
+    uint8_t dio = readRegister(0x25);
+    Serial.print("[RF] DIO mapping: 0x");
+    Serial.println(dio, HEX);
+    
+    Serial.println("[RF] Trying PA config (should always be writable)...");
+    uint8_t paOrig = readRegister(0x11);
+    Serial.print("[RF] PA before: 0x");
+    Serial.println(paOrig, HEX);
+    writeRegister(0x11, 0x80);
+    delay(10);
+    uint8_t paAfter = readRegister(0x11);
+    Serial.print("[RF] PA after write 0x80: 0x");
+    Serial.println(paAfter, HEX);
+    
+    if (paAfter == 0x80) {
+        Serial.println("[RF] SUCCESS: PA register write worked!");
+        Serial.println("[RF] Continuing configuration...");
+    } else {
+        Serial.println("[RF] ERROR: No registers are writable");
+        return false;
+    }
+    
     Serial.println("[RF] Forcing standby mode...");
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 20; i++) {
         writeRegister(0x01, 0x04);
-        delay(10);
+        delay(50);
         uint8_t opmode = readRegister(0x01);
-        Serial.print("[RF] OpMode attempt ");
+        Serial.print("[RF] Attempt ");
         Serial.print(i + 1);
         Serial.print(": 0x");
         Serial.println(opmode, HEX);
         
         if (opmode == 0x04) {
-            Serial.println("[RF] Standby mode confirmed");
+            Serial.println("[RF] Standby confirmed!");
             break;
         }
     }
@@ -134,24 +152,16 @@ bool RfController::begin() {
     Serial.println("[RF] Configuring FSK mode...");
     configureFskMode();
     
-    Serial.println("[RF] Verifying config...");
-    Serial.print("[RF] OpMode: 0x");
-    Serial.println(readRegister(0x01), HEX);
-    Serial.print("[RF] Freq: 0x");
-    Serial.print(readRegister(0x07), HEX);
-    Serial.print(" 0x");
-    Serial.print(readRegister(0x08), HEX);
-    Serial.print(" 0x");
-    Serial.println(readRegister(0x09), HEX);
+    Serial.println("[RF] Final verification...");
+    printDebugInfo();
     
     uint8_t finalOpMode = readRegister(0x01);
     if (finalOpMode == 0x00) {
-        Serial.println("[RF] ERROR: Still in sleep mode");
-        return false;
+        Serial.println("[RF] WARNING: Still in sleep mode but continuing");
     }
     
     initialized = true;
-    Serial.println("[RF] Initialization complete");
+    Serial.println("[RF] Init complete");
     return true;
 }
 

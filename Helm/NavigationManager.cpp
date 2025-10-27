@@ -1,6 +1,6 @@
 #include "NavigationManager.h"
 
-NavigationManager::NavigationManager(DeviceRFController* controller) : rfController(controller) {
+NavigationManager::NavigationManager(RfController* controller) : rfController(controller) {
 }
 
 void NavigationManager::setTarget(float latitude, float longitude) {
@@ -74,12 +74,12 @@ void NavigationManager::adjustHeading(float relativeAngle) {
             Serial.print("Turning RIGHT (off by ");
             Serial.print(relativeAngle);
             Serial.println(" degrees)");
-            rfController->transmitRight(5);
+            rfController->transmitRightButton();
         } else {
             Serial.print("Turning LEFT (off by ");
             Serial.print(abs(relativeAngle));
             Serial.println(" degrees)");
-            rfController->transmitLeft(5);
+            rfController->transmitLeftButton();
         }
         
         state.lastCorrectionTime = currentTime;

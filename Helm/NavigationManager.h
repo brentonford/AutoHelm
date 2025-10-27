@@ -4,15 +4,15 @@
 #include <Arduino.h>
 #include "DataModels.h"
 #include "NavigationUtils.h"
-#include "DeviceRFController.h"
+#include "RfController.h"
 
 class NavigationManager {
 private:
     NavigationState state;
-    DeviceRFController* rfController;
+    RfController* rfController;
     
 public:
-    NavigationManager(DeviceRFController* controller);
+    NavigationManager(RfController* controller);
     void setTarget(float latitude, float longitude);
     void setNavigationEnabled(bool enabled);
     void update(const GPSData& gpsData, float heading);

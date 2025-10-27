@@ -4,7 +4,6 @@
 #include "NavigationManager.h"
 #include "DisplayManager.h"
 #include "CompassManager.h"
-#include "DeviceRFController.h"
 #include "GPSReceiver.h"
 #include "NavigationUtils.h"
 #include "RfController.h"
@@ -17,7 +16,6 @@ GPSManager gpsManager;
 NavigationManager* navigationManager;
 DisplayManager displayManager;
 CompassManager compassManager;
-DeviceRFController deviceRFController;
 GPSReceiver gpsReceiver;
 RfController rfController(RF_CS_PIN, RF_RST_PIN);
 
@@ -47,7 +45,7 @@ void setup() {
     Serial.flush();
     delay(500);
     
-    Serial.println("=== GPS Navigation System Starting ===");
+    Serial.println("=== Helm System Starting ===");
     Serial.flush();
     Serial.println("Initializing components...");
     Serial.flush();
@@ -56,10 +54,8 @@ void setup() {
     Serial.print("Initializing OLED display... ");
     Serial.flush();
     displayAvailable = displayManager.begin();
-    if (displayAvailable) {
-        Serial.println("SUCCESS");
-    } else {
-        Serial.println("FAILED - continuing without display");
+    if (!displayAvailable) {
+        Serial.print("FAILED - continuing without display");
     }
     Serial.flush();
     
@@ -67,35 +63,21 @@ void setup() {
     Serial.print("Initializing GPS... ");
     Serial.flush();
     gpsManager.begin();
-    Serial.println("SUCCESS");
     Serial.flush();
     
     // Initialize compass (non-blocking)
     Serial.print("Initializing compass... ");
     Serial.flush();
     compassAvailable = compassManager.begin();
-    if (compassAvailable) {
-        Serial.println("SUCCESS");
-    } else {
+    if (!compassAvailable) {
         Serial.println("FAILED - continuing without compass");
-    }
-    Serial.flush();
-    
-    // Initialize RF Controller
-    Serial.print("Initializing RF Controller... ");
-    Serial.flush();
-    bool rfAvailable = deviceRFController.begin();
-    if (rfAvailable) {
-        Serial.println("SUCCESS");
-    } else {
-        Serial.println("FAILED - continuing without RF control");
     }
     Serial.flush();
     
     // Initialize navigation manager
     Serial.print("Initializing navigation... ");
     Serial.flush();
-    navigationManager = new NavigationManager(&deviceRFController);
+    navigationManager = new NavigationManager(&rfController);
     Serial.println("SUCCESS");
     Serial.flush();
     
@@ -121,41 +103,6 @@ void setup() {
     if (displayAvailable) {
         displayManager.updateDisplay(GPSData(), 0, NavigationState(), false);
     }
-    
-    // Protocol analysis and testing if available
-    if (deviceRFController.isInitialized()) {
-        Serial.println("=== RF PROTOCOL ANALYSIS ===");
-        Serial.flush();
-        
-        // Show protocol comparison
-        deviceRFController.compareProtocols();
-        delay(2000);
-        
-        Serial.println("\n=== SIGNAL CAPTURE TEST ===");
-        Serial.println("Uncomment next line and press remote button to capture signal:");
-        Serial.println("// deviceRFController.captureRawSignal();");
-        Serial.flush();
-        
-        Serial.println("\n=== RC-SWITCH PROTOCOL TEST ===");
-        Serial.println("Uncomment next line to test standard protocols:");
-        Serial.println("// deviceRFController.testRcSwitch();");
-        Serial.flush();
-        
-        Serial.println("\n=== CURRENT IMPLEMENTATION TEST ===");
-        Serial.flush();
-        Serial.println("Sending RIGHT command with current implementation...");
-        Serial.flush();
-        deviceRFController.transmitRight(3);
-        delay(2000);
-        
-        Serial.println("Sending LEFT command with current implementation...");
-        Serial.flush();
-        deviceRFController.transmitLeft(3);
-        delay(2000);
-    } else {
-        Serial.println("=== Skipping RF Test (RF not available) ===");
-        Serial.flush();
-    }
 
     rfControllerAvailable = rfController.begin();
     if (rfControllerAvailable) {
@@ -166,20 +113,6 @@ void setup() {
     }
     
     Serial.println("=== Setup Complete ===");
-    Serial.flush();
-    Serial.println("System Status:");
-    Serial.flush();
-    Serial.print("  Display: "); Serial.println(displayAvailable ? "Available" : "Not Available");
-    Serial.flush();
-    Serial.print("  Compass: "); Serial.println(compassAvailable ? "Available" : "Not Available"); 
-    Serial.flush();
-    Serial.print("  BLE: "); Serial.println(bleAvailable ? "Available" : "Not Available");
-    Serial.flush();
-    Serial.println("  GPS: Always Available");
-    Serial.flush();
-    Serial.print("  Device RF Controller: "); Serial.println(deviceRFController.isInitialized() ? "Available" : "Not Available");
-    Serial.flush();
-    Serial.print("  RF Controller: "); Serial.println(rfControllerAvailable ? "Available" : "Not Available");
     Serial.flush();
     Serial.println();
     Serial.println("Starting main loop...");
