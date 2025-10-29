@@ -109,7 +109,10 @@ void loop() {
     }
     
     if (displayAvailable) {
-        if (gpsAvailable && compassAvailable) {
+        if (navigationManager.isNavigationEnabled() && navState.mode != NavigationMode::IDLE) {
+            // Show navigation display when actively navigating
+            displayManager.updateNavigationDisplay(navState, heading);
+        } else if (gpsAvailable && compassAvailable) {
             displayManager.updateGPSAndCompass(gpsData, heading);
         } else if (gpsAvailable) {
             displayManager.updateGPSDisplay(gpsData);
@@ -118,7 +121,7 @@ void loop() {
         }
     }
     
-    delay(1000);
+    delay(200);  // 5Hz update rate for navigation arrow
 }
 
 void handleSerialCommands() {
