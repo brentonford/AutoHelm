@@ -2,6 +2,7 @@
 #include "DisplayManager.h"
 #include "GPSManager.h"
 #include "CompassManager.h"
+#include "NavigationUtils.h"
 
 DisplayManager displayManager;
 GPSManager gpsManager(SystemConfig::GPS_RX_PIN, SystemConfig::GPS_TX_PIN);
@@ -46,6 +47,9 @@ void setup() {
     
     Serial.print("System ready. Build version: ");
     Serial.println(SystemConfig::VERSION);
+    
+    // Run navigation calculator tests
+    NavigationUtils::runNavigationTests();
 }
 
 void loop() {
