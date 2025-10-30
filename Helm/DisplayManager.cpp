@@ -127,3 +127,108 @@ void DisplayManager::drawSatelliteCount(int count) {
     display.print(count);
     display.print(" sats");
 }
+
+void DisplayManager::drawNavigationArrow(float relativeAngle) {
+    if (!initialized) return;
+    
+    // Arrow center position
+    int centerX = 64;
+    int centerY = 32;
+    int arrowLength = 20;
+    
+    // Convert relative angle to radians
+    float angleRad = (relativeAngle - 90.0) * PI / 180.0;
+    
+    // Calculate arrow tip position
+    int tipX = centerX + arrowLength * cos(angleRad);
+    int tipY = centerY + arrowLength * sin(angleRad);
+    
+    // Calculate arrow base positions
+    float baseAngle1 = angleRad + (150.0 * PI / 180.0);
+    float baseAngle2 = angleRad - (150.0 * PI / 180.0);
+    int baseLength = 12;
+    
+    int base1X = centerX + baseLength * cos(baseAngle1);
+    int base1Y = centerY + baseLength * sin(baseAngle1);
+    int base2X = centerX + baseLength * cos(baseAngle2);
+    int base2Y = centerY + baseLength * sin(baseAngle2);
+    
+    // Draw arrow lines
+    display.drawLine(centerX, centerY, tipX, tipY, SSD1306_WHITE);
+    display.drawLine(tipX, tipY, base1X, base1Y, SSD1306_WHITE);
+    display.drawLine(tipX, tipY, base2X, base2Y, SSD1306_WHITE);
+}
+
+void DisplayManager::drawCompass(float heading) {
+    if (!initialized) return;
+    
+    // Draw compass circle
+    int compassX = 100;
+    int compassY = 16;
+    int compassRadius = 12;
+    
+    display.drawCircle(compassX, compassY, compassRadius, SSD1306_WHITE);
+    
+    // Draw north indicator
+    float northAngle = (-heading - 90.0) * PI / 180.0;
+    int northX = compassX + (compassRadius - 3) * cos(northAngle);
+    int northY = compassY + (compassRadius - 3) * sin(northAngle);
+    display.drawLine(compassX, compassY, northX, northY, SSD1306_WHITE);
+}
+
+void DisplayManager::updateNavigationDisplay(const NavigationState& nav, float heading) {
+    if (!initialized) return;
+    
+    display.clearDisplay();
+    
+    // Navigation status in top left
+    display.setCursor(0, 0);
+    switch(nav.mode) {
+        case NavigationMode::IDLE:
+            display.print("NAV: IDLE");
+            break;
+        case NavigationMode::NAVIGATING:
+            display.print("NAV: ACTIVE");
+            break;
+        case NavigationMode::ARRIVED:
+            display.print("ARRIVED!");
+            break;
+    }
+    
+    // Draw compass in top right
+    drawCompass(heading);
+    
+    // Draw navigation arrow if navigating
+    if (nav.mode == NavigationMode::NAVIGATING) {
+        drawNavigationArrow(nav.relativeAngle);
+    }
+    
+    // Distance to target (bottom left)
+    if (nav.mode != NavigationMode::IDLE) {
+        display.setCursor(0, 48);
+        if (nav.distanceToTarget >= 1000.0) {
+            display.print(nav.distanceToTarget / 1000.0, 1);
+            display.print("km");
+        } else {
+            display.print(nav.distanceToTarget, 0);
+            display.print("m");
+        }
+    }
+    
+    // Bearing to target (bottom right)
+    if (nav.mode != NavigationMode::IDLE) {
+        display.setCursor(70, 48);
+        display.print(nav.bearingToTarget, 0);
+        display.cp437(true);
+        display.write(0xF8);
+    }
+    
+    // Current heading (bottom center)
+    display.setCursor(0, 56);
+    display.print("HDG: ");
+    display.print(heading, 0);
+    display.cp437(true);
+    display.write(0xF8);
+    
+    display.display();
+}

@@ -5,6 +5,7 @@
 #include <Adafruit_SSD1306.h>
 #include <Wire.h>
 #include "DataModels.h"
+#include "NavigationManager.h"
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -25,6 +26,9 @@ public:
     void updateGPSAndCompass(const GPSData& data, float heading);
     void drawCoordinates(float lat, float lon);
     void drawSatelliteCount(int count);
+    void drawNavigationArrow(float relativeAngle);
+    void drawCompass(float heading);
+    void updateNavigationDisplay(const NavigationState& nav, float heading);
 };
 
 #endif

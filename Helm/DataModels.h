@@ -1,6 +1,8 @@
 #ifndef DATA_MODELS_H
 #define DATA_MODELS_H
 
+#include <stdint.h>
+
 struct GPSData {
     float latitude;
     float longitude;
