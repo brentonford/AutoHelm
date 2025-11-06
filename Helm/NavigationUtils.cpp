@@ -1,6 +1,85 @@
 #include "NavigationUtils.h"
 #include <Arduino.h>
 
+BuzzerController::BuzzerController(int pin) : buzzerPin(pin) {
+    pinMode(buzzerPin, OUTPUT);
+}
+
+void BuzzerController::playTone(int frequency, int duration) {
+    tone(buzzerPin, frequency, duration);
+    delay(duration);
+    noTone(buzzerPin);
+}
+
+void BuzzerController::playNavigationEnabled() {
+    // Ascending tone: 150Hz to 523Hz
+    playTone(150, 200);
+    delay(50);
+    playTone(262, 200);
+    delay(50);
+    playTone(523, 300);
+}
+
+void BuzzerController::playWaypointSet() {
+    // Confirmation beep: 800Hz to 659Hz
+    playTone(800, 150);
+    delay(50);
+    playTone(659, 200);
+}
+
+void BuzzerController::playGpsFixLost() {
+    // Descending tone: 523Hz to 150Hz
+    playTone(523, 200);
+    delay(50);
+    playTone(262, 200);
+    delay(50);
+    playTone(150, 300);
+}
+
+void BuzzerController::playGpsFixed() {
+    // Triple beep at 800Hz + ascending
+    playTone(800, 100);
+    delay(80);
+    playTone(800, 100);
+    delay(80);
+    playTone(800, 100);
+    delay(150);
+    playTone(523, 150);
+    delay(50);
+    playTone(659, 200);
+}
+
+void BuzzerController::playAppConnected() {
+    // Connection melody: 392Hz to 659Hz
+    playTone(392, 150);
+    delay(50);
+    playTone(523, 150);
+    delay(50);
+    playTone(659, 200);
+}
+
+void BuzzerController::playAppDisconnected() {
+    // Disconnection sound: 330Hz to 150Hz
+    playTone(330, 200);
+    delay(50);
+    playTone(220, 200);
+    delay(50);
+    playTone(150, 250);
+}
+
+void BuzzerController::playDestinationReached() {
+    // Celebration melody: 523-392 pattern
+    playTone(523, 200);
+    delay(50);
+    playTone(392, 150);
+    delay(50);
+    playTone(523, 200);
+    delay(100);
+    playTone(659, 300);
+    delay(50);
+    playTone(523, 250);
+}
+
 float NavigationUtils::calculateDistance(float lat1, float lon1, float lat2, float lon2) {
     // Convert coordinates to radians with higher precision
     double lat1Rad = lat1 * DEG_TO_RAD;

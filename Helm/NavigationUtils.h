@@ -1,6 +1,23 @@
 #ifndef NAVIGATION_UTILS_H
 #define NAVIGATION_UTILS_H
 
+class BuzzerController {
+private:
+    int buzzerPin;
+    
+    void playTone(int frequency, int duration);
+    
+public:
+    BuzzerController(int pin);
+    void playNavigationEnabled();
+    void playWaypointSet();
+    void playGpsFixLost();
+    void playGpsFixed();
+    void playAppConnected();
+    void playAppDisconnected();
+    void playDestinationReached();
+};
+
 class NavigationUtils {
 public:
     static float calculateDistance(float lat1, float lon1, float lat2, float lon2);
