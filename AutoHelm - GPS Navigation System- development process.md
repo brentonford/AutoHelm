@@ -24,11 +24,11 @@ feature/phase-1-arduino-core
 feature/phase-2-navigation-logic
 feature/phase-3-audio-feedback
 feature/phase-4-bluetooth-setup
-feature/phase-5-rf-control
-feature/phase-6-ios-foundation
-feature/phase-7-bluetooth-integration-testing
-feature/phase-8-advanced-ios
-feature/phase-9-calibration
+feature/phase-5-ios-foundation
+feature/phase-6-bluetooth-integration-testing
+feature/phase-7-advanced-ios
+feature/phase-8-calibration
+feature/phase-9-rf-control
 feature/phase-10-polish-testing
 ```
 
@@ -564,110 +564,9 @@ git branch -d feature/phase-4-bluetooth-setup
 
 ---
 
-## Phase 5: RF Control System
+## Phase 5: iOS App Foundation
 
-**Branch:** `feature/phase-5-rf-control`
-
-**Phase Context:** RF control enables autonomous course correction by transmitting commands to compatible trolling motors or steering systems. The 433MHz system provides reliable wireless control with sufficient range for marine applications. Integration with navigation logic enables automatic heading corrections, making the system truly autonomous rather than just providing guidance information.
-
-**Branch Creation:**
-```bash
-git checkout main
-git pull origin main
-git checkout -b feature/phase-5-rf-control
-```
-
-### Step 5.1: RFM69 Module Initialization
-
-**Goal:** Configure the RFM69HCW radio module for reliable 433MHz FSK transmission with optimal power and modulation settings for trolling motor remote control compatibility.
-
-**Context:** RF control is what makes the navigation system truly autonomous rather than just a guidance display. The RFM69 module must be configured to match the specific modulation and timing requirements of trolling motor remote controls. Proper RF configuration ensures reliable command transmission over marine distances while avoiding interference with other radio systems.
-
-**Files Created:**
-- `RfController.h` - RF controller class
-- `RfController.cpp` - FSK transmission implementation
-
-**Implementation:**
-```cpp
-class RfController {
-private:
-    RFM69 radio;
-    bool initialized;
-    
-    const float FREQUENCY = 433.032;
-    const int TX_POWER = 20;
-    
-    void configureForFSK();
-    void transmitBurst(const uint8_t* data, int length);
-    
-public:
-    bool begin(int csPin, int resetPin);
-    void transmitRightButton();
-    void transmitLeftButton();
-    bool isInitialized() const;
-};
-```
-
-**Testing:**
-- Verify radio initialization via serial
-- Use RTL-SDR to confirm 433.032 MHz signal
-- Test burst pattern timing
-
-**Commit:** "feat: implement RFM69 radio controller"
-
----
-
-### Step 5.2: Motor Control Integration
-
-**Goal:** Integrate RF control with navigation logic to provide automated heading corrections based on calculated bearing errors, enabling true autonomous navigation with intelligent correction timing.
-
-**Context:** The integration of RF control with navigation calculations creates the autonomous behavior that distinguishes this system from simple GPS displays. The system must intelligently determine when heading corrections are needed and avoid over-correction that could cause oscillatory behavior. Proper timing and tolerance settings ensure smooth navigation while maintaining course accuracy.
-
-**Updates:**
-- Integrate RF controller with navigation manager
-
-**Implementation:**
-```cpp
-void NavigationManager::adjustHeading(float relativeAngle) {
-    if (abs(relativeAngle) < HEADING_TOLERANCE) {
-        return;
-    }
-    
-    if (shouldCorrectHeading(relativeAngle)) {
-        if (relativeAngle > 0) {
-            rfController.transmitRightButton();
-        } else {
-            rfController.transmitLeftButton();
-        }
-        lastCorrectionTime = millis();
-    }
-}
-```
-
-**Testing:**
-- Verify RF commands sent at correct times
-- Test minimum correction interval
-- Validate heading tolerance logic
-
-**Commit:** "feat: integrate RF control with navigation system"
-
----
-
-**Phase 5 Completion:**
-```bash
-git push origin feature/phase-5-rf-control
-# Create pull request: "Phase 5: RF Control System"
-# Review and merge with squash
-git checkout main
-git pull origin main
-git branch -d feature/phase-5-rf-control
-```
-
----
-
-## Phase 6: iOS App Foundation
-
-**Branch:** `feature/phase-6-ios-foundation`
+**Branch:** `feature/phase-5-ios-foundation`
 
 **Phase Context:** The iOS companion app transforms the navigation system from a standalone device into a comprehensive navigation solution. The app provides intuitive waypoint creation, real-time device monitoring, and enhanced user interface capabilities that would be impossible on the Arduino's limited display. This foundation enables advanced features while maintaining the autonomous operation of the core navigation system.
 
@@ -675,10 +574,10 @@ git branch -d feature/phase-5-rf-control
 ```bash
 git checkout main
 git pull origin main
-git checkout -b feature/phase-6-ios-foundation
+git checkout -b feature/phase-5-ios-foundation
 ```
 
-### Step 6.1: Xcode Project Setup
+### Step 5.1: Xcode Project Setup
 
 **Goal:** Establish a properly configured iOS project with required permissions and capabilities that provides a stable foundation for BLE communication and location services integration.
 
@@ -711,7 +610,7 @@ Waypoint/
 
 ---
 
-### Step 6.2: Data Models
+### Step 5.2: Data Models
 
 **Goal:** Define robust data structures that ensure type-safe communication between iOS app components and provide consistent data representation for waypoints and device status.
 
@@ -753,7 +652,7 @@ struct DeviceStatus: Codable {
 
 ---
 
-### Step 6.3: Bluetooth Manager
+### Step 5.3: Bluetooth Manager
 
 **Goal:** Implement robust BLE communication with automatic reconnection and thread-safe data handling that provides reliable wireless connectivity to the navigation device under varying connection conditions.
 
@@ -791,13 +690,13 @@ class BluetoothManager: NSObject, ObservableObject {
 - Test BLE scanning functionality
 - Verify service UUID recognition
 - Test auto-reconnection logic
-- Note: Full device testing deferred to Phase 7
+- Note: Full device testing deferred to Phase 6
 
 **Commit:** "feat: implement Bluetooth manager with auto-reconnect"
 
 ---
 
-### Step 6.4: Location Manager
+### Step 5.4: Location Manager
 
 **Goal:** Implement comprehensive location services management that handles permissions gracefully and provides accurate user positioning for map centering and waypoint creation relative to current location.
 
@@ -830,7 +729,7 @@ class LocationManager: NSObject, ObservableObject {
 
 ---
 
-### Step 6.5: Basic Map View
+### Step 5.5: Basic Map View
 
 **Goal:** Create an interactive map interface that provides intuitive navigation and waypoint visualization with standard map controls and user location display.
 
@@ -868,7 +767,7 @@ struct MapView: View {
 
 ---
 
-### Step 6.6: Waypoint Creation
+### Step 5.6: Waypoint Creation
 
 **Goal:** Enable intuitive waypoint creation through map tap gestures that immediately creates waypoints at selected coordinates and provides visual confirmation through map markers.
 
@@ -904,36 +803,36 @@ struct MapView: View {
 
 ---
 
-**Phase 6 Completion:**
+**Phase 5 Completion:**
 ```bash
-git push origin feature/phase-6-ios-foundation
-# Create pull request: "Phase 6: iOS App Foundation"
+git push origin feature/phase-5-ios-foundation
+# Create pull request: "Phase 5: iOS App Foundation"
 # Review and merge with squash
 git checkout main
 git pull origin main
-git branch -d feature/phase-6-ios-foundation
+git branch -d feature/phase-5-ios-foundation
 ```
 
 ---
 
-## Phase 7: Bluetooth Integration Testing
+## Phase 6: Bluetooth Integration Testing
 
-**Branch:** `feature/phase-7-bluetooth-integration-testing`
+**Branch:** `feature/phase-6-bluetooth-integration-testing`
 
-**Phase Context:** Now that both the Arduino BLE infrastructure (Phase 4) and iOS app foundation (Phase 6) are complete, this phase focuses on integrating and thoroughly testing the Bluetooth communication between devices. This includes waypoint transmission, status monitoring, and establishing the complete wireless control workflow.
+**Phase Context:** Now that both the Arduino BLE infrastructure (Phase 4) and iOS app foundation (Phase 5) are complete, this phase focuses on integrating and thoroughly testing the Bluetooth communication between devices. This includes waypoint transmission, status monitoring, and establishing the complete wireless control workflow.
 
 **Prerequisites:** 
 - Phase 4: Bluetooth Setup (Arduino BLE service running)
-- Phase 6: iOS App Foundation (iOS BLE manager implemented)
+- Phase 5: iOS App Foundation (iOS BLE manager implemented)
 
 **Branch Creation:**
 ```bash
 git checkout main
 git pull origin main
-git checkout -b feature/phase-7-bluetooth-integration-testing
+git checkout -b feature/phase-6-bluetooth-integration-testing
 ```
 
-### Step 7.1: Waypoint Reception Integration
+### Step 6.1: Waypoint Reception Integration
 
 **Goal:** Complete the waypoint transmission workflow by implementing Arduino waypoint parsing and integrating received coordinates with the navigation system, enabling seamless waypoint transfer from iOS app to navigation device.
 
@@ -979,7 +878,7 @@ Button("Send to Helm") {
 
 ---
 
-### Step 7.2: Status Data Integration Testing
+### Step 6.2: Status Data Integration Testing
 
 **Goal:** Verify comprehensive status data flow from Arduino to iOS app, ensuring real-time navigation monitoring and device status display functions correctly across the wireless connection.
 
@@ -1016,7 +915,7 @@ func updateDeviceStatus(from data: Data) {
 
 ---
 
-### Step 7.3: Connection Reliability Testing
+### Step 6.3: Connection Reliability Testing
 
 **Goal:** Thoroughly test BLE connection reliability under various conditions, including reconnection scenarios, range testing, and error recovery to ensure robust wireless operation in field conditions.
 
@@ -1060,7 +959,7 @@ void BluetoothController::handleConnectionStates() {
 
 ---
 
-### Step 7.4: End-to-End Navigation Workflow
+### Step 6.4: End-to-End Navigation Workflow
 
 **Goal:** Validate the complete navigation workflow from iOS waypoint creation through Arduino autonomous navigation, ensuring all system components work together seamlessly for real-world navigation scenarios.
 
@@ -1104,21 +1003,21 @@ void validateNavigationWorkflow() {
 
 ---
 
-**Phase 7 Completion:**
+**Phase 6 Completion:**
 ```bash
-git push origin feature/phase-7-bluetooth-integration-testing
-# Create pull request: "Phase 7: Bluetooth Integration Testing"
+git push origin feature/phase-6-bluetooth-integration-testing
+# Create pull request: "Phase 6: Bluetooth Integration Testing"
 # Review and merge with squash
 git checkout main
 git pull origin main
-git branch -d feature/phase-7-bluetooth-integration-testing
+git branch -d feature/phase-6-bluetooth-integration-testing
 ```
 
 ---
 
-## Phase 8: Advanced iOS Features
+## Phase 7: Advanced iOS Features
 
-**Branch:** `feature/phase-8-advanced-ios`
+**Branch:** `feature/phase-7-advanced-ios`
 
 **Phase Context:** Advanced iOS features enhance the navigation system's usability and reliability through persistent waypoint storage, comprehensive device monitoring, location search capabilities, and offline operation support. These features transform the app from a basic waypoint sender into a comprehensive navigation planning and monitoring tool that supports complex navigation scenarios and field use requirements.
 
@@ -1126,10 +1025,10 @@ git branch -d feature/phase-7-bluetooth-integration-testing
 ```bash
 git checkout main
 git pull origin main
-git checkout -b feature/phase-8-advanced-ios
+git checkout -b feature/phase-7-advanced-ios
 ```
 
-### Step 8.1: Waypoint Persistence
+### Step 7.1: Waypoint Persistence
 
 **Goal:** Implement reliable waypoint storage and retrieval that preserves navigation plans between app sessions, enabling users to build and maintain waypoint libraries for recurring navigation routes.
 
@@ -1166,7 +1065,7 @@ class WaypointManager: ObservableObject {
 
 ---
 
-### Step 8.2: Waypoint Detail View
+### Step 7.2: Waypoint Detail View
 
 **Goal:** Provide comprehensive waypoint editing capabilities including names, descriptions, photos, and custom icons that enable detailed navigation planning and waypoint identification.
 
@@ -1210,7 +1109,7 @@ struct WaypointDetailView: View {
 
 ---
 
-### Step 8.3: Device Status View
+### Step 7.3: Device Status View
 
 **Goal:** Create comprehensive device monitoring interface that displays real-time navigation progress, GPS quality metrics, and connection status to enable informed navigation decisions and system troubleshooting.
 
@@ -1247,7 +1146,7 @@ struct DeviceStatusView: View {
 
 ---
 
-### Step 8.4: Search Functionality
+### Step 7.4: Search Functionality
 
 **Goal:** Integrate location search capabilities that enable users to find and navigate to named locations, addresses, and points of interest without requiring manual coordinate entry or map exploration.
 
@@ -1285,7 +1184,7 @@ class SearchManager: ObservableObject {
 
 ---
 
-### Step 8.5: Offline Map Tiles
+### Step 7.5: Offline Map Tiles
 
 **Goal:** Enable offline navigation capability through map tile caching that ensures navigation planning remains available without internet connectivity, critical for marine and remote area navigation.
 
@@ -1329,21 +1228,21 @@ class OfflineTileManager: ObservableObject {
 
 ---
 
-**Phase 8 Completion:**
+**Phase 7 Completion:**
 ```bash
-git push origin feature/phase-8-advanced-ios
-# Create pull request: "Phase 8: Advanced iOS Features"
+git push origin feature/phase-7-advanced-ios
+# Create pull request: "Phase 7: Advanced iOS Features"
 # Review and merge with squash
 git checkout main
 git pull origin main
-git branch -d feature/phase-8-advanced-ios
+git branch -d feature/phase-7-advanced-ios
 ```
 
 ---
 
-## Phase 9: Calibration System
+## Phase 8: Calibration System
 
-**Branch:** `feature/phase-9-calibration`
+**Branch:** `feature/phase-8-calibration`
 
 **Phase Context:** Compass calibration is critical for navigation accuracy, as magnetic interference from electronics, metal objects, or local magnetic anomalies can cause significant heading errors. The calibration system provides both the Arduino capability to collect calibration data and the iOS interface to guide users through the calibration process while visualizing the quality of calibration data collection.
 
@@ -1351,10 +1250,10 @@ git branch -d feature/phase-8-advanced-ios
 ```bash
 git checkout main
 git pull origin main
-git checkout -b feature/phase-9-calibration
+git checkout -b feature/phase-8-calibration
 ```
 
-### Step 9.1: Arduino Calibration Mode
+### Step 8.1: Arduino Calibration Mode
 
 **Goal:** Implement calibration data collection mode that streams real-time magnetometer readings via BLE to enable comprehensive calibration data analysis and storage on the iOS device.
 
@@ -1388,7 +1287,7 @@ public:
 
 ---
 
-### Step 9.2: iOS Calibration View
+### Step 8.2: iOS Calibration View
 
 **Goal:** Create intuitive calibration interface with real-time 3D visualization that guides users through proper calibration procedures and provides immediate feedback on calibration quality and completeness.
 
@@ -1436,14 +1335,115 @@ struct CalibrationView: View {
 
 ---
 
-**Phase 9 Completion:**
+**Phase 8 Completion:**
 ```bash
-git push origin feature/phase-9-calibration
-# Create pull request: "Phase 9: Calibration System"
+git push origin feature/phase-8-calibration
+# Create pull request: "Phase 8: Calibration System"
 # Review and merge with squash
 git checkout main
 git pull origin main
-git branch -d feature/phase-9-calibration
+git branch -d feature/phase-8-calibration
+```
+
+---
+
+## Phase 9: RF Control System
+
+**Branch:** `feature/phase-9-rf-control`
+
+**Phase Context:** RF control enables autonomous course correction by transmitting commands to compatible trolling motors or steering systems. The 433MHz system provides reliable wireless control with sufficient range for marine applications. Integration with navigation logic enables automatic heading corrections, making the system truly autonomous rather than just providing guidance information.
+
+**Branch Creation:**
+```bash
+git checkout main
+git pull origin main
+git checkout -b feature/phase-9-rf-control
+```
+
+### Step 9.1: RFM69 Module Initialization
+
+**Goal:** Configure the RFM69HCW radio module for reliable 433MHz FSK transmission with optimal power and modulation settings for trolling motor remote control compatibility.
+
+**Context:** RF control is what makes the navigation system truly autonomous rather than just a guidance display. The RFM69 module must be configured to match the specific modulation and timing requirements of trolling motor remote controls. Proper RF configuration ensures reliable command transmission over marine distances while avoiding interference with other radio systems.
+
+**Files Created:**
+- `RfController.h` - RF controller class
+- `RfController.cpp` - FSK transmission implementation
+
+**Implementation:**
+```cpp
+class RfController {
+private:
+    RFM69 radio;
+    bool initialized;
+    
+    const float FREQUENCY = 433.032;
+    const int TX_POWER = 20;
+    
+    void configureForFSK();
+    void transmitBurst(const uint8_t* data, int length);
+    
+public:
+    bool begin(int csPin, int resetPin);
+    void transmitRightButton();
+    void transmitLeftButton();
+    bool isInitialized() const;
+};
+```
+
+**Testing:**
+- Verify radio initialization via serial
+- Use RTL-SDR to confirm 433.032 MHz signal
+- Test burst pattern timing
+
+**Commit:** "feat: implement RFM69 radio controller"
+
+---
+
+### Step 9.2: Motor Control Integration
+
+**Goal:** Integrate RF control with navigation logic to provide automated heading corrections based on calculated bearing errors, enabling true autonomous navigation with intelligent correction timing.
+
+**Context:** The integration of RF control with navigation calculations creates the autonomous behavior that distinguishes this system from simple GPS displays. The system must intelligently determine when heading corrections are needed and avoid over-correction that could cause oscillatory behavior. Proper timing and tolerance settings ensure smooth navigation while maintaining course accuracy.
+
+**Updates:**
+- Integrate RF controller with navigation manager
+
+**Implementation:**
+```cpp
+void NavigationManager::adjustHeading(float relativeAngle) {
+    if (abs(relativeAngle) < HEADING_TOLERANCE) {
+        return;
+    }
+    
+    if (shouldCorrectHeading(relativeAngle)) {
+        if (relativeAngle > 0) {
+            rfController.transmitRightButton();
+        } else {
+            rfController.transmitLeftButton();
+        }
+        lastCorrectionTime = millis();
+    }
+}
+```
+
+**Testing:**
+- Verify RF commands sent at correct times
+- Test minimum correction interval
+- Validate heading tolerance logic
+
+**Commit:** "feat: integrate RF control with navigation system"
+
+---
+
+**Phase 9 Completion:**
+```bash
+git push origin feature/phase-9-rf-control
+# Create pull request: "Phase 9: RF Control System"
+# Review and merge with squash
+git checkout main
+git pull origin main
+git branch -d feature/phase-9-rf-control
 ```
 
 ---
