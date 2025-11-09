@@ -4,15 +4,18 @@
 #include "CompassManager.h"
 #include "NavigationManager.h"
 #include "NavigationUtils.h"
+#include "BluetoothController.h"
 
 DisplayManager displayManager;
 GPSManager gpsManager(SystemConfig::GPS_RX_PIN, SystemConfig::GPS_TX_PIN);
 CompassManager compassManager;
 NavigationManager navigationManager;
 BuzzerController buzzer(SystemConfig::BUZZER_PIN);
+BluetoothController bluetoothController;
 bool displayAvailable = false;
 bool gpsAvailable = false;
 bool compassAvailable = false;
+bool bluetoothAvailable = false;
 
 void setup() {
     Serial.begin(115200);
@@ -48,6 +51,14 @@ void setup() {
         Serial.println("FAILED - continuing without compass");
     }
     
+    Serial.print("Initializing Bluetooth... ");
+    bluetoothAvailable = bluetoothController.begin("Helm");
+    if (bluetoothAvailable) {
+        Serial.println("SUCCESS");
+    } else {
+        Serial.println("FAILED - continuing without Bluetooth");
+    }
+    
     Serial.print("System ready. Build version: ");
     Serial.println(SystemConfig::VERSION);
     
@@ -77,6 +88,11 @@ void loop() {
     
     // Handle serial commands for testing
     handleSerialCommands();
+    
+    // Update Bluetooth controller
+    if (bluetoothAvailable) {
+        bluetoothController.update();
+    }
     
     if (gpsAvailable) {
         gpsManager.update();
@@ -115,6 +131,11 @@ void loop() {
         Serial.print("Heading: ");
         Serial.print(heading, 1);
         Serial.println(" degrees");
+    }
+    
+    // Send status data via Bluetooth
+    if (bluetoothAvailable && bluetoothController.isConnected()) {
+        sendBluetoothStatus(gpsData, heading, navState);
     }
     
     if (displayAvailable) {
@@ -263,4 +284,25 @@ void showNavigationTestResults() {
     }
     
     Serial.println("========================================\n");
+}
+
+void sendBluetoothStatus(const GPSData& gpsData, float heading, const NavigationState& navState) {
+    // Use BluetoothController's JSON formatting for consistency
+    String statusJson = bluetoothController.createStatusJSON(gpsData, navState, heading);
+    
+    // Send via BLE
+    bluetoothController.sendStatus(statusJson.c_str());
+    
+    // Output JSON to Serial for testing when BLE connected
+    if (bluetoothController.isConnected()) {
+        static unsigned long lastJsonOutput = 0;
+        unsigned long currentTime = millis();
+        
+        // Output at ~1Hz rate
+        if (currentTime - lastJsonOutput >= 1000) {
+            Serial.print("BLE JSON: ");
+            Serial.println(statusJson);
+            lastJsonOutput = currentTime;
+        }
+    }
 }

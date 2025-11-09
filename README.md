@@ -770,10 +770,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - RTL-SDR for RF signal analysis and verification
 - OpenStreetMap contributors for mapping data
 
----
-
-**Project Status:** Active Development  
-**Version:** 1.0.0  
-**Last Updated:** January 2025
-
 For technical support or questions, please open an issue in the GitHub repository.
