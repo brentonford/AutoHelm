@@ -9,6 +9,7 @@ DisplayManager displayManager;
 GPSManager gpsManager(SystemConfig::GPS_RX_PIN, SystemConfig::GPS_TX_PIN);
 CompassManager compassManager;
 NavigationManager navigationManager;
+BuzzerController buzzer(SystemConfig::BUZZER_PIN);
 bool displayAvailable = false;
 bool gpsAvailable = false;
 bool compassAvailable = false;
@@ -59,7 +60,15 @@ void setup() {
     Serial.println("'n' - Toggle navigation enabled/disabled");
     Serial.println("'c' - Clear navigation target");
     Serial.println("'t' - Show current navigation state");
-    Serial.println("======================\n");
+    Serial.println("\n=== Audio Test Commands ===");
+    Serial.println("'1' - Play navigation enabled sound");
+    Serial.println("'2' - Play waypoint set sound");
+    Serial.println("'3' - Play GPS fix lost sound");
+    Serial.println("'4' - Play GPS fixed sound");
+    Serial.println("'5' - Play app connected sound");
+    Serial.println("'6' - Play app disconnected sound");
+    Serial.println("'7' - Play destination reached sound");
+    Serial.println("================================\n");
 }
 
 void loop() {
@@ -157,6 +166,41 @@ void handleSerialCommands() {
             case 't':
                 // Show current navigation state
                 showNavigationTestResults();
+                break;
+                
+            case '1':
+                Serial.println("Playing navigation enabled sound...");
+                buzzer.playNavigationEnabled();
+                break;
+                
+            case '2':
+                Serial.println("Playing waypoint set sound...");
+                buzzer.playWaypointSet();
+                break;
+                
+            case '3':
+                Serial.println("Playing GPS fix lost sound...");
+                buzzer.playGpsFixLost();
+                break;
+                
+            case '4':
+                Serial.println("Playing GPS fixed sound...");
+                buzzer.playGpsFixed();
+                break;
+                
+            case '5':
+                Serial.println("Playing app connected sound...");
+                buzzer.playAppConnected();
+                break;
+                
+            case '6':
+                Serial.println("Playing app disconnected sound...");
+                buzzer.playAppDisconnected();
+                break;
+                
+            case '7':
+                Serial.println("Playing destination reached sound...");
+                buzzer.playDestinationReached();
                 break;
         }
     }
