@@ -475,15 +475,15 @@ git checkout -b feature/phase-4-bluetooth-comm
 **Context:** BLE connectivity is the primary interface between the navigation device and user control systems. Reliable connection establishment and maintenance are critical for waypoint transmission and status monitoring. The BLE service must handle connection events gracefully and provide clear indication of connection status to ensure users understand when wireless control is available.
 
 **Files Created:**
-- `GPSReceiver.h` - BLE communication class
-- `GPSReceiver.cpp` - BLE service implementation
+- `BluetoothController.h` - BLE communication class
+- `BluetoothController.cpp` - BLE service implementation
 
 **Implementation:**
 ```cpp
-class GPSReceiver {
+class BluetoothController {
 private:
-    BLEService gpsService;
-    BLECharacteristic gpsCharacteristic;
+    BLEService bluetoothService;
+    BLECharacteristic waypointCharacteristic;
     BLECharacteristic statusCharacteristic;
     
     bool initialized;
@@ -502,7 +502,7 @@ public:
 
 **Service Configuration:**
 - Service UUID: `0000FFE0-0000-1000-8000-00805F9B34FB`
-- GPS Characteristic: Write (waypoint data)
+- Waypoint Characteristic: Write (waypoint data)
 - Status Characteristic: Notify (device status)
 
 **Testing:**
@@ -522,7 +522,7 @@ public:
 
 **Implementation:**
 ```cpp
-void handleGPSWrite(BLEDevice central, BLECharacteristic characteristic);
+void handleWaypointWrite(BLEDevice central, BLECharacteristic characteristic);
 bool parseWaypointData(const char* data, float& lat, float& lon);
 ```
 
@@ -798,7 +798,7 @@ class BluetoothManager: NSObject, ObservableObject {
     private var autoScanTimer: Timer?
     
     private let serviceUUID = CBUUID(string: "0000FFE0-0000-1000-8000-00805F9B34FB")
-    private let gpsCharacteristicUUID = CBUUID(string: "0000FFE1-0000-1000-8000-00805F9B34FB")
+    private let waypointCharacteristicUUID = CBUUID(string: "0000FFE1-0000-1000-8000-00805F9B34FB")
     
     func startScanning()
     func connect(peripheral: CBPeripheral)

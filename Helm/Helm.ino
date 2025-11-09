@@ -4,15 +4,18 @@
 #include "CompassManager.h"
 #include "NavigationManager.h"
 #include "NavigationUtils.h"
+#include "BluetoothController.h"
 
 DisplayManager displayManager;
 GPSManager gpsManager(SystemConfig::GPS_RX_PIN, SystemConfig::GPS_TX_PIN);
 CompassManager compassManager;
 NavigationManager navigationManager;
 BuzzerController buzzer(SystemConfig::BUZZER_PIN);
+BluetoothController bluetoothController;
 bool displayAvailable = false;
 bool gpsAvailable = false;
 bool compassAvailable = false;
+bool bluetoothAvailable = false;
 
 void setup() {
     Serial.begin(115200);
@@ -48,6 +51,14 @@ void setup() {
         Serial.println("FAILED - continuing without compass");
     }
     
+    Serial.print("Initializing Bluetooth... ");
+    bluetoothAvailable = bluetoothController.begin("Helm");
+    if (bluetoothAvailable) {
+        Serial.println("SUCCESS");
+    } else {
+        Serial.println("FAILED - continuing without Bluetooth");
+    }
+    
     Serial.print("System ready. Build version: ");
     Serial.println(SystemConfig::VERSION);
     
@@ -77,6 +88,11 @@ void loop() {
     
     // Handle serial commands for testing
     handleSerialCommands();
+    
+    // Update Bluetooth controller
+    if (bluetoothAvailable) {
+        bluetoothController.update();
+    }
     
     if (gpsAvailable) {
         gpsManager.update();
@@ -115,6 +131,11 @@ void loop() {
         Serial.print("Heading: ");
         Serial.print(heading, 1);
         Serial.println(" degrees");
+    }
+    
+    // Send status data via Bluetooth
+    if (bluetoothAvailable && bluetoothController.isConnected()) {
+        sendBluetoothStatus(gpsData, heading, navState);
     }
     
     if (displayAvailable) {
@@ -263,4 +284,22 @@ void showNavigationTestResults() {
     }
     
     Serial.println("========================================\n");
+}
+
+void sendBluetoothStatus(const GPSData& gpsData, float heading, const NavigationState& navState) {
+    // Build JSON status message
+    String statusJson = "{";
+    statusJson += "\"has_fix\":" + String(gpsData.hasFix ? "true" : "false") + ",";
+    statusJson += "\"satellites\":" + String(gpsData.satellites) + ",";
+    statusJson += "\"currentLat\":" + String(gpsData.latitude, 6) + ",";
+    statusJson += "\"currentLon\":" + String(gpsData.longitude, 6) + ",";
+    statusJson += "\"altitude\":" + String(gpsData.altitude, 1) + ",";
+    statusJson += "\"heading\":" + String(heading, 1) + ",";
+    statusJson += "\"distance\":" + String(navState.distanceToTarget, 1) + ",";
+    statusJson += "\"bearing\":" + String(navState.bearingToTarget, 1) + ",";
+    statusJson += "\"targetLat\":" + String(navState.targetLatitude, 6) + ",";
+    statusJson += "\"targetLon\":" + String(navState.targetLongitude, 6);
+    statusJson += "}";
+    
+    bluetoothController.sendStatus(statusJson.c_str());
 }
