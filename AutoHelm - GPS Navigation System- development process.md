@@ -23,12 +23,13 @@ Build and test each component independently before integration. Each step produc
 feature/phase-1-arduino-core
 feature/phase-2-navigation-logic
 feature/phase-3-audio-feedback
-feature/phase-4-bluetooth-comm
+feature/phase-4-bluetooth-setup
 feature/phase-5-rf-control
 feature/phase-6-ios-foundation
-feature/phase-7-advanced-ios
-feature/phase-8-calibration
-feature/phase-9-polish-testing
+feature/phase-7-bluetooth-integration-testing
+feature/phase-8-advanced-ios
+feature/phase-9-calibration
+feature/phase-10-polish-testing
 ```
 
 ### Workflow Per Phase
@@ -455,11 +456,11 @@ git branch -d feature/phase-3-audio-feedback
 
 ---
 
-## Phase 4: Bluetooth Communication
+## Phase 4: Bluetooth Setup
 
-**Branch:** `feature/phase-4-bluetooth-comm`
+**Branch:** `feature/phase-4-bluetooth-setup`
 
-**Phase Context:** Bluetooth Low Energy communication enables wireless waypoint management and real-time status monitoring through the iOS companion app. This wireless interface eliminates the need for physical connections while providing comprehensive remote control and monitoring capabilities. Reliable BLE communication is essential for practical field use and enhances user experience through seamless device integration.
+**Phase Context:** Bluetooth Low Energy communication setup establishes the foundation for wireless waypoint management and real-time status monitoring. This phase focuses on establishing robust BLE advertising, service configuration, and basic communication infrastructure without requiring the iOS app for testing. All testing in this phase uses Arduino serial commands and generic BLE testing tools.
 
 **Branch Creation:**
 ```bash
@@ -501,51 +502,25 @@ public:
 ```
 
 **Service Configuration:**
-- Service UUID: `0000FFE0-0000-1000-8000-00805F9B34FB`
+- Service UUID: `19B10000-E8F2-537E-4F6C-D104768A1214`
 - Waypoint Characteristic: Write (waypoint data)
 - Status Characteristic: Notify (device status)
 
-**Testing:**
-- Verify device advertises as "Helm"
+**Testing (No iOS App Required):**
+- Verify device advertises as "Helm" in generic BLE scanner apps
 - Test connection from iPhone's Bluetooth settings
-- Confirm connection status on display
+- Confirm connection status on display and serial output
+- Verify service UUIDs are discoverable
 
 **Commit:** "feat: implement BLE service for iOS connection"
 
 ---
 
-### Step 4.2: Waypoint Reception
+### Step 4.2: Status Broadcasting Infrastructure
 
-**Goal:** Implement reliable waypoint data reception and parsing that seamlessly integrates received coordinates into the navigation system, enabling wireless waypoint setting from the iOS app.
+**Goal:** Implement the status broadcasting framework that will transmit comprehensive navigation and system status data, with testing using serial output validation rather than actual iOS app reception.
 
-**Context:** Wireless waypoint transmission eliminates the need for manual coordinate entry and enables dynamic navigation planning. The protocol must be robust enough to handle transmission errors while providing immediate navigation system integration. Successful waypoint reception should trigger navigation system updates and provide user confirmation of received targets.
-
-**Implementation:**
-```cpp
-void handleWaypointWrite(BLEDevice central, BLECharacteristic characteristic);
-bool parseWaypointData(const char* data, float& lat, float& lon);
-```
-
-**Protocol:**
-```
-Format: $GPS,latitude,longitude,altitude*
-Example: $GPS,-32.940931,151.718029,45.2*
-```
-
-**Testing:**
-- Send test waypoint via BLE testing app
-- Verify navigation manager receives coordinates
-- Confirm arrow points to received waypoint
-
-**Commit:** "feat: implement waypoint reception via BLE"
-
----
-
-### Step 4.3: Status Broadcasting
-
-**Goal:** Transmit comprehensive navigation and system status data to iOS devices in real-time, providing remote monitoring capability and enabling advanced features in the companion app.
-
-**Context:** Real-time status broadcasting enables the iOS app to display current navigation progress, GPS quality, and system health. This information helps users make informed navigation decisions and troubleshoot system issues. The JSON format provides structured data that can support current and future iOS app features while maintaining compatibility.
+**Context:** Status broadcasting infrastructure must be robust and well-structured to support future iOS app integration. The JSON format provides structured data that can support current and future iOS app features while maintaining compatibility. This step establishes the data formatting and transmission logic without requiring iOS app testing.
 
 **Implementation:**
 ```cpp
@@ -567,23 +542,24 @@ String createStatusJSON(const GPSData& gps, const NavigationState& nav, float he
 }
 ```
 
-**Testing:**
-- Monitor BLE notifications with testing app
-- Verify JSON structure is valid
-- Confirm update rate ~1Hz
+**Testing (No iOS App Required):**
+- Monitor JSON output via Serial when BLE connected
+- Verify JSON structure is valid using online JSON validators
+- Confirm update rate ~1Hz via serial timestamps
+- Test with generic BLE apps that can read notifications
 
-**Commit:** "feat: implement status broadcasting to iOS app"
+**Commit:** "feat: implement status broadcasting infrastructure"
 
 ---
 
 **Phase 4 Completion:**
 ```bash
-git push origin feature/phase-4-bluetooth-comm
-# Create pull request: "Phase 4: Bluetooth Communication"
+git push origin feature/phase-4-bluetooth-setup
+# Create pull request: "Phase 4: Bluetooth Setup"
 # Review and merge with squash
 git checkout main
 git pull origin main
-git branch -d feature/phase-4-bluetooth-comm
+git branch -d feature/phase-4-bluetooth-setup
 ```
 
 ---
@@ -797,8 +773,8 @@ class BluetoothManager: NSObject, ObservableObject {
     private var helmPeripheral: CBPeripheral?
     private var autoScanTimer: Timer?
     
-    private let serviceUUID = CBUUID(string: "0000FFE0-0000-1000-8000-00805F9B34FB")
-    private let waypointCharacteristicUUID = CBUUID(string: "0000FFE1-0000-1000-8000-00805F9B34FB")
+    private let serviceUUID = CBUUID(string: "19B10000-E8F2-537E-4F6C-D104768A1214")
+    private let waypointCharacteristicUUID = CBUUID(string: "19B10001-E8F2-537E-4F6C-D104768A1214")
     
     func startScanning()
     func connect(peripheral: CBPeripheral)
@@ -811,10 +787,11 @@ class BluetoothManager: NSObject, ObservableObject {
 - Status parsing and publishing
 - Thread-safe characteristic writes
 
-**Testing:**
-- Connect to Arduino device
-- Verify status updates received
-- Test auto-reconnection
+**Testing (Generic BLE Testing Only):**
+- Test BLE scanning functionality
+- Verify service UUID recognition
+- Test auto-reconnection logic
+- Note: Full device testing deferred to Phase 7
 
 **Commit:** "feat: implement Bluetooth manager with auto-reconnect"
 
@@ -927,36 +904,6 @@ struct MapView: View {
 
 ---
 
-### Step 6.7: Send Waypoint to Device
-
-**Goal:** Complete the navigation workflow by transmitting selected waypoints to the navigation device, enabling immediate autonomous navigation to user-selected destinations.
-
-**Context:** Waypoint transmission completes the connection between iOS app planning and Arduino device execution. This integration enables users to plan navigation on the large, high-resolution iOS display while having the navigation device autonomously execute the planned route. Successful transmission should trigger immediate navigation updates on the device display.
-
-**Integration:**
-- Connect map selection to BluetoothManager
-
-**Implementation:**
-```swift
-Button("Send to Helm") {
-    if let waypoint = selectedWaypoint {
-        bluetoothManager.sendWaypoint(
-            latitude: waypoint.coordinate.latitude,
-            longitude: waypoint.coordinate.longitude
-        )
-    }
-}
-```
-
-**Testing:**
-- Create waypoint in app
-- Send to Helm device
-- Verify Arduino receives and navigates
-
-**Commit:** "feat: implement waypoint transmission to device"
-
----
-
 **Phase 6 Completion:**
 ```bash
 git push origin feature/phase-6-ios-foundation
@@ -969,9 +916,209 @@ git branch -d feature/phase-6-ios-foundation
 
 ---
 
-## Phase 7: Advanced iOS Features
+## Phase 7: Bluetooth Integration Testing
 
-**Branch:** `feature/phase-7-advanced-ios`
+**Branch:** `feature/phase-7-bluetooth-integration-testing`
+
+**Phase Context:** Now that both the Arduino BLE infrastructure (Phase 4) and iOS app foundation (Phase 6) are complete, this phase focuses on integrating and thoroughly testing the Bluetooth communication between devices. This includes waypoint transmission, status monitoring, and establishing the complete wireless control workflow.
+
+**Prerequisites:** 
+- Phase 4: Bluetooth Setup (Arduino BLE service running)
+- Phase 6: iOS App Foundation (iOS BLE manager implemented)
+
+**Branch Creation:**
+```bash
+git checkout main
+git pull origin main
+git checkout -b feature/phase-7-bluetooth-integration-testing
+```
+
+### Step 7.1: Waypoint Reception Integration
+
+**Goal:** Complete the waypoint transmission workflow by implementing Arduino waypoint parsing and integrating received coordinates with the navigation system, enabling seamless waypoint transfer from iOS app to navigation device.
+
+**Context:** This step completes the BLE communication loop by connecting the iOS waypoint transmission to Arduino navigation system integration. The Arduino must reliably parse waypoint protocol messages and immediately integrate them with the navigation manager to begin autonomous navigation to received targets.
+
+**Arduino Implementation:**
+```cpp
+void BluetoothController::onWaypointReceived(BLEDevice central, BLECharacteristic characteristic) {
+    // Parse waypoint format: $GPS,latitude,longitude,altitude*
+    String waypointData = parseCharacteristicData(characteristic);
+    
+    if (waypointData.startsWith("$GPS,") && waypointData.endsWith("*")) {
+        float latitude, longitude;
+        if (parseWaypointData(waypointData, latitude, longitude)) {
+            navigationManager.setTarget(latitude, longitude);
+            Serial.print("Waypoint received via BLE: ");
+            Serial.print(latitude, 6); Serial.print(", "); Serial.println(longitude, 6);
+        }
+    }
+}
+```
+
+**iOS Integration:**
+```swift
+Button("Send to Helm") {
+    if let waypoint = selectedWaypoint {
+        bluetoothManager.sendWaypoint(
+            latitude: waypoint.coordinate.latitude,
+            longitude: waypoint.coordinate.longitude
+        )
+    }
+}
+```
+
+**Testing:**
+- Create waypoint in iOS app
+- Send waypoint to Helm device
+- Verify Arduino receives and parses coordinates correctly
+- Confirm navigation manager updates target
+- Validate navigation arrow points to received waypoint
+
+**Commit:** "feat: implement complete waypoint transmission workflow"
+
+---
+
+### Step 7.2: Status Data Integration Testing
+
+**Goal:** Verify comprehensive status data flow from Arduino to iOS app, ensuring real-time navigation monitoring and device status display functions correctly across the wireless connection.
+
+**Context:** Status data integration provides users with real-time feedback about navigation progress and device health. The iOS app must reliably receive and display GPS quality, navigation status, compass heading, and connection health to enable informed user decisions during navigation operations.
+
+**Arduino Status Broadcasting:**
+```cpp
+void sendBluetoothStatus(const GPSData& gpsData, float heading, const NavigationState& navState) {
+    String statusJson = createNavigationStatusJSON(gpsData, heading, navState);
+    bluetoothController.sendStatus(statusJson.c_str());
+}
+```
+
+**iOS Status Processing:**
+```swift
+func updateDeviceStatus(from data: Data) {
+    if let statusUpdate = try? JSONDecoder().decode(DeviceStatus.self, from: data) {
+        DispatchQueue.main.async {
+            self.deviceStatus = statusUpdate
+        }
+    }
+}
+```
+
+**Testing:**
+- Connect iOS app to Arduino device
+- Verify status updates stream from device in real-time
+- Confirm GPS fix status updates correctly
+- Validate navigation progress displays on iOS
+- Test status updates during navigation mode changes
+- Verify compass heading updates smoothly
+
+**Commit:** "feat: implement real-time status data integration"
+
+---
+
+### Step 7.3: Connection Reliability Testing
+
+**Goal:** Thoroughly test BLE connection reliability under various conditions, including reconnection scenarios, range testing, and error recovery to ensure robust wireless operation in field conditions.
+
+**Context:** BLE connection reliability is critical for practical navigation use where connection drops could interrupt navigation control. The system must handle connection interruptions gracefully while providing clear user feedback about wireless status and automatically recovering when possible.
+
+**Connection Scenarios:**
+```swift
+// Test scenarios in BluetoothManager
+func testConnectionScenarios() {
+    // 1. Auto-discovery and connection
+    // 2. Connection drop and auto-reconnect  
+    // 3. Range limit testing
+    // 4. Multiple connection attempts
+    // 5. Background/foreground transitions
+}
+```
+
+**Arduino Connection Management:**
+```cpp
+void BluetoothController::handleConnectionStates() {
+    if (connected && !wasConnected) {
+        buzzer.playAppConnected();
+        Serial.println("BLE: iOS app connected");
+    } else if (!connected && wasConnected) {
+        buzzer.playAppDisconnected();
+        Serial.println("BLE: iOS app disconnected");
+    }
+    wasConnected = connected;
+}
+```
+
+**Testing:**
+- Test initial connection establishment
+- Force disconnect and verify auto-reconnect
+- Test connection at various distances
+- Verify audio feedback for connection state changes
+- Test app backgrounding/foregrounding scenarios
+- Validate connection status indicators on both devices
+
+**Commit:** "feat: implement robust BLE connection reliability"
+
+---
+
+### Step 7.4: End-to-End Navigation Workflow
+
+**Goal:** Validate the complete navigation workflow from iOS waypoint creation through Arduino autonomous navigation, ensuring all system components work together seamlessly for real-world navigation scenarios.
+
+**Context:** End-to-end testing validates the entire system integration from user interface through wireless communication to autonomous navigation execution. This comprehensive testing ensures the system performs reliably in actual field conditions and meets the design objectives for autonomous navigation.
+
+**Complete Workflow Testing:**
+```
+1. iOS: Create waypoint on map
+2. iOS: Send waypoint via BLE  
+3. Arduino: Receive and parse waypoint
+4. Arduino: Enable navigation mode
+5. Arduino: Calculate bearing and distance
+6. Arduino: Display navigation arrow
+7. Arduino: Stream status to iOS
+8. iOS: Display real-time navigation progress
+9. Arduino: Execute autonomous navigation
+10. Arduino: Detect arrival and notify
+```
+
+**Integration Validation:**
+```cpp
+// Arduino complete navigation test
+void validateNavigationWorkflow() {
+    // Test waypoint reception from BLE
+    // Verify navigation manager integration  
+    // Test display updates during navigation
+    // Validate status broadcasting
+    // Confirm arrival detection
+}
+```
+
+**Testing:**
+- Execute complete workflow multiple times
+- Test with various waypoint distances
+- Verify navigation accuracy with known targets
+- Validate arrival detection threshold
+- Test navigation cancellation and restart
+- Confirm system behavior during GPS loss/recovery
+
+**Commit:** "feat: validate complete navigation workflow integration"
+
+---
+
+**Phase 7 Completion:**
+```bash
+git push origin feature/phase-7-bluetooth-integration-testing
+# Create pull request: "Phase 7: Bluetooth Integration Testing"
+# Review and merge with squash
+git checkout main
+git pull origin main
+git branch -d feature/phase-7-bluetooth-integration-testing
+```
+
+---
+
+## Phase 8: Advanced iOS Features
+
+**Branch:** `feature/phase-8-advanced-ios`
 
 **Phase Context:** Advanced iOS features enhance the navigation system's usability and reliability through persistent waypoint storage, comprehensive device monitoring, location search capabilities, and offline operation support. These features transform the app from a basic waypoint sender into a comprehensive navigation planning and monitoring tool that supports complex navigation scenarios and field use requirements.
 
@@ -979,10 +1126,10 @@ git branch -d feature/phase-6-ios-foundation
 ```bash
 git checkout main
 git pull origin main
-git checkout -b feature/phase-7-advanced-ios
+git checkout -b feature/phase-8-advanced-ios
 ```
 
-### Step 7.1: Waypoint Persistence
+### Step 8.1: Waypoint Persistence
 
 **Goal:** Implement reliable waypoint storage and retrieval that preserves navigation plans between app sessions, enabling users to build and maintain waypoint libraries for recurring navigation routes.
 
@@ -1019,7 +1166,7 @@ class WaypointManager: ObservableObject {
 
 ---
 
-### Step 7.2: Waypoint Detail View
+### Step 8.2: Waypoint Detail View
 
 **Goal:** Provide comprehensive waypoint editing capabilities including names, descriptions, photos, and custom icons that enable detailed navigation planning and waypoint identification.
 
@@ -1063,7 +1210,7 @@ struct WaypointDetailView: View {
 
 ---
 
-### Step 7.3: Device Status View
+### Step 8.3: Device Status View
 
 **Goal:** Create comprehensive device monitoring interface that displays real-time navigation progress, GPS quality metrics, and connection status to enable informed navigation decisions and system troubleshooting.
 
@@ -1100,7 +1247,7 @@ struct DeviceStatusView: View {
 
 ---
 
-### Step 7.4: Search Functionality
+### Step 8.4: Search Functionality
 
 **Goal:** Integrate location search capabilities that enable users to find and navigate to named locations, addresses, and points of interest without requiring manual coordinate entry or map exploration.
 
@@ -1138,7 +1285,7 @@ class SearchManager: ObservableObject {
 
 ---
 
-### Step 7.5: Offline Map Tiles
+### Step 8.5: Offline Map Tiles
 
 **Goal:** Enable offline navigation capability through map tile caching that ensures navigation planning remains available without internet connectivity, critical for marine and remote area navigation.
 
@@ -1182,21 +1329,21 @@ class OfflineTileManager: ObservableObject {
 
 ---
 
-**Phase 7 Completion:**
+**Phase 8 Completion:**
 ```bash
-git push origin feature/phase-7-advanced-ios
-# Create pull request: "Phase 7: Advanced iOS Features"
+git push origin feature/phase-8-advanced-ios
+# Create pull request: "Phase 8: Advanced iOS Features"
 # Review and merge with squash
 git checkout main
 git pull origin main
-git branch -d feature/phase-7-advanced-ios
+git branch -d feature/phase-8-advanced-ios
 ```
 
 ---
 
-## Phase 8: Calibration System
+## Phase 9: Calibration System
 
-**Branch:** `feature/phase-8-calibration`
+**Branch:** `feature/phase-9-calibration`
 
 **Phase Context:** Compass calibration is critical for navigation accuracy, as magnetic interference from electronics, metal objects, or local magnetic anomalies can cause significant heading errors. The calibration system provides both the Arduino capability to collect calibration data and the iOS interface to guide users through the calibration process while visualizing the quality of calibration data collection.
 
@@ -1204,10 +1351,10 @@ git branch -d feature/phase-7-advanced-ios
 ```bash
 git checkout main
 git pull origin main
-git checkout -b feature/phase-8-calibration
+git checkout -b feature/phase-9-calibration
 ```
 
-### Step 8.1: Arduino Calibration Mode
+### Step 9.1: Arduino Calibration Mode
 
 **Goal:** Implement calibration data collection mode that streams real-time magnetometer readings via BLE to enable comprehensive calibration data analysis and storage on the iOS device.
 
@@ -1233,15 +1380,15 @@ public:
 ```
 
 **Testing:**
-- Start calibration mode
-- Verify raw data streaming
-- Confirm min/max tracking
+- Start calibration mode via BLE command
+- Verify raw data streaming to iOS
+- Confirm min/max tracking during rotation
 
 **Commit:** "feat: implement compass calibration mode"
 
 ---
 
-### Step 8.2: iOS Calibration View
+### Step 9.2: iOS Calibration View
 
 **Goal:** Create intuitive calibration interface with real-time 3D visualization that guides users through proper calibration procedures and provides immediate feedback on calibration quality and completeness.
 
@@ -1280,29 +1427,30 @@ struct CalibrationView: View {
 - Completion percentage estimate
 
 **Testing:**
-- Start calibration
+- Start calibration via iOS app
 - Rotate device in all directions
-- Verify min/max values update
+- Verify min/max values update in real-time
+- Confirm calibration data saves to Arduino
 
 **Commit:** "feat: implement compass calibration UI"
 
 ---
 
-**Phase 8 Completion:**
+**Phase 9 Completion:**
 ```bash
-git push origin feature/phase-8-calibration
-# Create pull request: "Phase 8: Calibration System"
+git push origin feature/phase-9-calibration
+# Create pull request: "Phase 9: Calibration System"
 # Review and merge with squash
 git checkout main
 git pull origin main
-git branch -d feature/phase-8-calibration
+git branch -d feature/phase-9-calibration
 ```
 
 ---
 
-## Phase 9: Polish & Testing
+## Phase 10: Polish & Testing
 
-**Branch:** `feature/phase-9-polish-testing`
+**Branch:** `feature/phase-10-polish-testing`
 
 **Phase Context:** System polish and comprehensive testing ensure the navigation system performs reliably under real-world conditions and handles edge cases gracefully. Error handling, power optimization, and thorough documentation are essential for field deployment, while comprehensive testing validates system integration and performance across various scenarios and conditions.
 
@@ -1310,10 +1458,10 @@ git branch -d feature/phase-8-calibration
 ```bash
 git checkout main
 git pull origin main
-git checkout -b feature/phase-9-polish-testing
+git checkout -b feature/phase-10-polish-testing
 ```
 
-### Step 9.1: Error Handling
+### Step 10.1: Error Handling
 
 **Goal:** Implement comprehensive error recovery and graceful degradation that ensures the navigation system continues to operate safely even when individual components fail or connectivity is lost.
 
@@ -1344,7 +1492,7 @@ func handleConnectionLost() {
 
 ---
 
-### Step 9.2: Power Optimization
+### Step 10.2: Power Optimization
 
 **Goal:** Optimize system power consumption to maximize field operation time while maintaining navigation performance and responsiveness for extended autonomous operation.
 
@@ -1364,7 +1512,7 @@ func handleConnectionLost() {
 
 ---
 
-### Step 9.3: Documentation & Comments
+### Step 10.3: Documentation & Comments
 
 **Goal:** Provide comprehensive code documentation that enables future development, troubleshooting, and system modification by clearly explaining system architecture, component interactions, and implementation decisions.
 
@@ -1381,7 +1529,7 @@ func handleConnectionLost() {
 
 ---
 
-### Step 9.4: Integration Testing
+### Step 10.4: Integration Testing
 
 **Goal:** Validate complete system functionality through comprehensive end-to-end testing that covers normal operation, error conditions, and edge cases to ensure reliable field performance.
 
@@ -1389,7 +1537,7 @@ func handleConnectionLost() {
 
 **Test Scenarios:**
 1. Power on device → Connect app → Send waypoint → Navigate
-2. Lose GPS fix → Regain fix → Continue navigation
+2. Lose GPS fix → Regain fix → Continue navigation  
 3. BLE disconnect → Auto-reconnect → Resume navigation
 4. Arrive at destination → Audio feedback → Clear waypoint
 5. Calibrate compass → Save → Verify improved accuracy
@@ -1398,14 +1546,14 @@ func handleConnectionLost() {
 
 ---
 
-**Phase 9 Completion:**
+**Phase 10 Completion:**
 ```bash
-git push origin feature/phase-9-polish-testing
-# Create pull request: "Phase 9: Polish & Testing"
+git push origin feature/phase-10-polish-testing
+# Create pull request: "Phase 10: Polish & Testing"  
 # Review and merge with squash
 git checkout main
 git pull origin main
-git branch -d feature/phase-9-polish-testing
+git branch -d feature/phase-10-polish-testing
 ```
 
 ---

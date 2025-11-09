@@ -108,6 +108,27 @@ void BluetoothController::sendCalibrationData(const char* jsonData) {
     calibrationDataCharacteristic.writeValue(jsonData);
 }
 
+void BluetoothController::broadcastStatus(const GPSData& gps, const NavigationState& nav, float heading) {
+    if (!initialized || !connected) return;
+    
+    String statusJson = createStatusJSON(gps, nav, heading);
+    sendStatus(statusJson.c_str());
+}
+
+String BluetoothController::createStatusJSON(const GPSData& gps, const NavigationState& nav, float heading) {
+    String json = "{";
+    json += "\"hasGpsFix\":" + String(gps.hasFix ? "true" : "false") + ",";
+    json += "\"satellites\":" + String(gps.satellites) + ",";
+    json += "\"currentLat\":" + String(gps.latitude, 6) + ",";
+    json += "\"currentLon\":" + String(gps.longitude, 6) + ",";
+    json += "\"altitude\":" + String(gps.altitude, 1) + ",";
+    json += "\"heading\":" + String(heading, 1) + ",";
+    json += "\"distance\":" + String(nav.distanceToTarget, 1) + ",";
+    json += "\"bearing\":" + String(nav.bearingToTarget, 1);
+    json += "}";
+    return json;
+}
+
 bool BluetoothController::isInitialized() const {
     return initialized;
 }

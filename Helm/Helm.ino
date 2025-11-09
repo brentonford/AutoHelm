@@ -287,19 +287,22 @@ void showNavigationTestResults() {
 }
 
 void sendBluetoothStatus(const GPSData& gpsData, float heading, const NavigationState& navState) {
-    // Build JSON status message
-    String statusJson = "{";
-    statusJson += "\"has_fix\":" + String(gpsData.hasFix ? "true" : "false") + ",";
-    statusJson += "\"satellites\":" + String(gpsData.satellites) + ",";
-    statusJson += "\"currentLat\":" + String(gpsData.latitude, 6) + ",";
-    statusJson += "\"currentLon\":" + String(gpsData.longitude, 6) + ",";
-    statusJson += "\"altitude\":" + String(gpsData.altitude, 1) + ",";
-    statusJson += "\"heading\":" + String(heading, 1) + ",";
-    statusJson += "\"distance\":" + String(navState.distanceToTarget, 1) + ",";
-    statusJson += "\"bearing\":" + String(navState.bearingToTarget, 1) + ",";
-    statusJson += "\"targetLat\":" + String(navState.targetLatitude, 6) + ",";
-    statusJson += "\"targetLon\":" + String(navState.targetLongitude, 6);
-    statusJson += "}";
+    // Use BluetoothController's JSON formatting for consistency
+    String statusJson = bluetoothController.createStatusJSON(gpsData, navState, heading);
     
+    // Send via BLE
     bluetoothController.sendStatus(statusJson.c_str());
+    
+    // Output JSON to Serial for testing when BLE connected
+    if (bluetoothController.isConnected()) {
+        static unsigned long lastJsonOutput = 0;
+        unsigned long currentTime = millis();
+        
+        // Output at ~1Hz rate
+        if (currentTime - lastJsonOutput >= 1000) {
+            Serial.print("BLE JSON: ");
+            Serial.println(statusJson);
+            lastJsonOutput = currentTime;
+        }
+    }
 }

@@ -30,6 +30,8 @@ public:
     bool isConnected() const;
     void sendStatus(const char* jsonData);
     void sendCalibrationData(const char* jsonData);
+    void broadcastStatus(const GPSData& gps, const NavigationState& nav, float heading);
+    String createStatusJSON(const GPSData& gps, const NavigationState& nav, float heading);
     bool isInitialized() const;
 };
 
