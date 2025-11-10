@@ -1,7 +1,7 @@
 import Foundation
 import CoreLocation
 
-struct Waypoint: Identifiable, Codable {
+struct Waypoint: Identifiable, Codable, Equatable {
     let id: UUID
     let coordinate: CLLocationCoordinate2D
     var name: String
@@ -21,6 +21,14 @@ struct Waypoint: Identifiable, Codable {
         self.createdDate = Date()
         self.lastUpdatedDate = Date()
     }
+    
+    mutating func updateLastModified() {
+        self.lastUpdatedDate = Date()
+    }
+    
+    static func == (lhs: Waypoint, rhs: Waypoint) -> Bool {
+        return lhs.id == rhs.id
+    }
 }
 
 extension CLLocationCoordinate2D: Codable, @retroactive Equatable {
@@ -38,7 +46,8 @@ extension CLLocationCoordinate2D: Codable, @retroactive Equatable {
     }
     
     public static func == (lhs: CLLocationCoordinate2D, rhs: CLLocationCoordinate2D) -> Bool {
-        return lhs.latitude == rhs.latitude && lhs.longitude == rhs.longitude
+        return abs(lhs.latitude - rhs.latitude) < 0.000001 && 
+               abs(lhs.longitude - rhs.longitude) < 0.000001
     }
     
     private enum CodingKeys: String, CodingKey {
@@ -53,7 +62,74 @@ struct DeviceStatus: Codable {
     let currentLat: Double
     let currentLon: Double
     let altitude: Double
+    let speedKnots: Double?
+    let time: String?
+    let date: String?
+    let hdop: Double?
+    let vdop: Double?
+    let pdop: Double?
     let heading: Double
     let distance: Double
     let bearing: Double
+    let targetLat: Double?
+    let targetLon: Double?
+    
+    var currentCoordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: currentLat, longitude: currentLon)
+    }
+    
+    var targetCoordinate: CLLocationCoordinate2D? {
+        guard let lat = targetLat, let lon = targetLon else { return nil }
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+    
+    var gpsAccuracyDescription: String {
+        guard let hdop = hdop else { return "Unknown" }
+        
+        switch hdop {
+        case 0..<1:
+            return "Excellent"
+        case 1..<2:
+            return "Good"
+        case 2..<5:
+            return "Moderate"
+        case 5..<10:
+            return "Fair"
+        case 10..<20:
+            return "Poor"
+        default:
+            return "Very Poor"
+        }
+    }
+}
+
+enum NavigationState {
+    case idle
+    case navigating
+    case arrived
+    case error(String)
+    
+    var description: String {
+        switch self {
+        case .idle:
+            return "Ready"
+        case .navigating:
+            return "Navigating"
+        case .arrived:
+            return "Arrived"
+        case .error(let message):
+            return "Error: \(message)"
+        }
+    }
+}
+
+struct SystemConfig {
+    static let maxWaypoints: Int = 50
+    static let waypointArrivalDistance: Double = 5.0 // meters
+    static let coordinatePrecision: Int = 6
+    static let autoSaveInterval: TimeInterval = 30.0 // seconds
+    
+    static func formatCoordinate(_ value: Double) -> String {
+        return String(format: "%.\(coordinatePrecision)f", value)
+    }
 }
