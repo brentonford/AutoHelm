@@ -17,32 +17,47 @@ class LocationManager: NSObject, ObservableObject {
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         locationManager.distanceFilter = 5.0
-        authorizationStatus = locationManager.authorizationStatus
-        isLocationServicesEnabled = CLLocationManager.locationServicesEnabled()
+        
+        Task {
+            await checkLocationServices()
+        }
+    }
+    
+    private func checkLocationServices() async {
+        let servicesEnabled = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                let enabled = CLLocationManager.locationServicesEnabled()
+                continuation.resume(returning: enabled)
+            }
+        }
+        
+        await MainActor.run {
+            self.isLocationServicesEnabled = servicesEnabled
+            self.authorizationStatus = self.locationManager.authorizationStatus
+        }
     }
     
     func requestPermission() {
-        guard CLLocationManager.locationServicesEnabled() else {
-            isLocationServicesEnabled = false
-            return
-        }
-        
-        isLocationServicesEnabled = true
-        
-        switch authorizationStatus {
-        case .notDetermined:
-            locationManager.requestWhenInUseAuthorization()
-        case .denied, .restricted:
-            break
-        case .authorizedWhenInUse, .authorizedAlways:
-            startUpdatingLocation()
-        @unknown default:
-            break
+        Task {
+            await checkLocationServices()
+            
+            guard isLocationServicesEnabled else { return }
+            
+            switch authorizationStatus {
+            case .notDetermined:
+                locationManager.requestWhenInUseAuthorization()
+            case .denied, .restricted:
+                break
+            case .authorizedWhenInUse, .authorizedAlways:
+                startUpdatingLocation()
+            @unknown default:
+                break
+            }
         }
     }
     
     func startUpdatingLocation() {
-        guard CLLocationManager.locationServicesEnabled(),
+        guard isLocationServicesEnabled,
               authorizationStatus == .authorizedWhenInUse || authorizationStatus == .authorizedAlways else {
             return
         }

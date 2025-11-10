@@ -23,7 +23,7 @@ struct Waypoint: Identifiable, Codable {
     }
 }
 
-extension CLLocationCoordinate2D: Codable {
+extension CLLocationCoordinate2D: Codable, @retroactive Equatable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(latitude, forKey: .latitude)
@@ -35,6 +35,10 @@ extension CLLocationCoordinate2D: Codable {
         let latitude = try container.decode(Double.self, forKey: .latitude)
         let longitude = try container.decode(Double.self, forKey: .longitude)
         self.init(latitude: latitude, longitude: longitude)
+    }
+    
+    public static func == (lhs: CLLocationCoordinate2D, rhs: CLLocationCoordinate2D) -> Bool {
+        return lhs.latitude == rhs.latitude && lhs.longitude == rhs.longitude
     }
     
     private enum CodingKeys: String, CodingKey {
