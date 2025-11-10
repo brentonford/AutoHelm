@@ -6,6 +6,10 @@
 #include "NavigationManager.h"
 
 class BluetoothController {
+public:
+    typedef void (*WaypointCallback)(float latitude, float longitude);
+    typedef void (*NavigationCallback)(bool enabled);
+    
 private:
     BLEService bluetoothService;
     BLECharacteristic waypointCharacteristic;
@@ -15,6 +19,8 @@ private:
     
     bool initialized;
     bool connected;
+    static WaypointCallback waypointCallback;
+    static NavigationCallback navigationCallback;
     
     static BluetoothController* instance;
     
@@ -33,6 +39,8 @@ public:
     void broadcastStatus(const GPSData& gps, const NavigationState& nav, float heading);
     String createStatusJSON(const GPSData& gps, const NavigationState& nav, float heading);
     bool isInitialized() const;
+    void setWaypointCallback(WaypointCallback callback);
+    void setNavigationCallback(NavigationCallback callback);
 };
 
 #endif

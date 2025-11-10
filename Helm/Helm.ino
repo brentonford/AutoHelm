@@ -55,6 +55,10 @@ void setup() {
     bluetoothAvailable = bluetoothController.begin("Helm");
     if (bluetoothAvailable) {
         Serial.println("SUCCESS");
+        // Set waypoint reception callback
+        bluetoothController.setWaypointCallback(onWaypointReceived);
+        // Set navigation control callback
+        bluetoothController.setNavigationCallback(onNavigationControlReceived);
     } else {
         Serial.println("FAILED - continuing without Bluetooth");
     }
@@ -284,6 +288,33 @@ void showNavigationTestResults() {
     }
     
     Serial.println("========================================\n");
+}
+
+void onWaypointReceived(float latitude, float longitude) {
+    Serial.print("Setting navigation target from BLE: ");
+    Serial.print(latitude, 6);
+    Serial.print(", ");
+    Serial.println(longitude, 6);
+    
+    // Set target and enable navigation immediately
+    navigationManager.setTarget(latitude, longitude);
+    navigationManager.setNavigationEnabled(true);
+    
+    // Play waypoint set confirmation sound
+    buzzer.playWaypointSet();
+    
+    Serial.println("Navigation enabled - heading to received waypoint");
+}
+
+void onNavigationControlReceived(bool enabled) {
+    if (enabled) {
+        Serial.println("Navigation enabled via BLE command");
+        navigationManager.setNavigationEnabled(true);
+        buzzer.playNavigationEnabled();
+    } else {
+        Serial.println("Navigation disabled via BLE command");
+        navigationManager.setNavigationEnabled(false);
+    }
 }
 
 void sendBluetoothStatus(const GPSData& gpsData, float heading, const NavigationState& navState) {

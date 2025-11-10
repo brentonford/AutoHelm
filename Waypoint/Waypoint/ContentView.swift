@@ -9,11 +9,27 @@ import SwiftUI
 import MapKit
 
 struct ContentView: View {
+    @EnvironmentObject var bluetoothManager: BluetoothManager
+    
     var body: some View {
-        MapView()
+        TabView {
+            MapView()
+                .tabItem {
+                    Image(systemName: "map")
+                    Text("Map")
+                }
+            
+            HelmControlView()
+                .tabItem {
+                    Image(systemName: "helm")
+                    Text("Helm")
+                }
+        }
+        .environmentObject(bluetoothManager)
     }
 }
 
 #Preview {
     ContentView()
+        .environmentObject(BluetoothManager())
 }

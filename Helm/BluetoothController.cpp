@@ -2,6 +2,8 @@
 #include <Arduino.h>
 
 BluetoothController* BluetoothController::instance = nullptr;
+BluetoothController::WaypointCallback BluetoothController::waypointCallback = nullptr;
+BluetoothController::NavigationCallback BluetoothController::navigationCallback = nullptr;
 
 BluetoothController::BluetoothController() : 
     bluetoothService("19B10000-E8F2-537E-4F6C-D104768A1214"),
@@ -133,6 +135,14 @@ bool BluetoothController::isInitialized() const {
     return initialized;
 }
 
+void BluetoothController::setWaypointCallback(WaypointCallback callback) {
+    waypointCallback = callback;
+}
+
+void BluetoothController::setNavigationCallback(NavigationCallback callback) {
+    navigationCallback = callback;
+}
+
 void BluetoothController::onConnect(BLEDevice central) {
     if (instance) {
         instance->connected = true;
@@ -185,10 +195,15 @@ void BluetoothController::onWaypointReceived(BLEDevice central, BLECharacteristi
                 float latitude = waypointData.substring(firstComma + 1, secondComma).toFloat();
                 float longitude = waypointData.substring(secondComma + 1, thirdComma).toFloat();
                 
-                Serial.print("Parsed waypoint: ");
+                Serial.print("Waypoint received via BLE: ");
                 Serial.print(latitude, 6);
                 Serial.print(", ");
                 Serial.println(longitude, 6);
+                
+                // Pass waypoint to navigation system via callback
+                if (waypointCallback) {
+                    waypointCallback(latitude, longitude);
+                }
             }
         }
     }
@@ -215,8 +230,14 @@ void BluetoothController::onCalibrationCommand(BLEDevice central, BLECharacteris
             Serial.println("Stopping compass calibration via BLE");
         } else if (command == "NAV_ENABLE") {
             Serial.println("Navigation enabled via BLE");
+            if (navigationCallback) {
+                navigationCallback(true);
+            }
         } else if (command == "NAV_DISABLE") {
             Serial.println("Navigation disabled via BLE");
+            if (navigationCallback) {
+                navigationCallback(false);
+            }
         }
     }
 }

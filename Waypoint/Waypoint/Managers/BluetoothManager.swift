@@ -6,6 +6,7 @@ import Combine
 private let serviceUUID = CBUUID(string: "19B10000-E8F2-537E-4F6C-D104768A1214")
 private let waypointCharacteristicUUID = CBUUID(string: "19B10001-E8F2-537E-4F6C-D104768A1214")
 private let statusCharacteristicUUID = CBUUID(string: "19B10002-E8F2-537E-4F6C-D104768A1214")
+private let commandCharacteristicUUID = CBUUID(string: "19B10003-E8F2-537E-4F6C-D104768A1214")
 
 @MainActor
 class BluetoothManager: NSObject, ObservableObject {
@@ -19,6 +20,7 @@ class BluetoothManager: NSObject, ObservableObject {
     
     private var waypointCharacteristic: CBCharacteristic?
     private var statusCharacteristic: CBCharacteristic?
+    private var commandCharacteristic: CBCharacteristic?
     
     override init() {
         super.init()
@@ -59,12 +61,39 @@ class BluetoothManager: NSObject, ObservableObject {
     }
     
     func sendWaypoint(latitude: Double, longitude: Double) {
-        guard let characteristic = waypointCharacteristic else { return }
+        guard let characteristic = waypointCharacteristic else { 
+            print("Waypoint characteristic not available")
+            return 
+        }
         
         let waypointData = String(format: "$GPS,%.6f,%.6f,0.0*", latitude, longitude)
         let data = waypointData.data(using: .utf8)!
         
         helmPeripheral?.writeValue(data, for: characteristic, type: .withResponse)
+        print("Sent waypoint data: \(waypointData)")
+    }
+    
+    func enableNavigation() {
+        sendCommand("NAV_ENABLE")
+    }
+    
+    func disableNavigation() {
+        sendCommand("NAV_DISABLE")
+    }
+    
+    private func sendCommand(_ command: String) {
+        guard let characteristic = commandCharacteristic else {
+            print("Command characteristic not available")
+            return
+        }
+        
+        guard let data = command.data(using: .utf8) else {
+            print("Failed to encode command: \(command)")
+            return
+        }
+        
+        helmPeripheral?.writeValue(data, for: characteristic, type: .withResponse)
+        print("Sent command: \(command)")
     }
     
     private func startAutoScanTimer() {
@@ -136,6 +165,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
             isConnected = false
             waypointCharacteristic = nil
             statusCharacteristic = nil
+            commandCharacteristic = nil
             helmPeripheral = nil
         }
     }
@@ -154,7 +184,7 @@ extension BluetoothManager: CBPeripheralDelegate {
         guard let services = peripheral.services else { return }
         
         for service in services where service.uuid == serviceUUID {
-            peripheral.discoverCharacteristics([waypointCharacteristicUUID, statusCharacteristicUUID], for: service)
+            peripheral.discoverCharacteristics([waypointCharacteristicUUID, statusCharacteristicUUID, commandCharacteristicUUID], for: service)
         }
     }
     
@@ -169,6 +199,8 @@ extension BluetoothManager: CBPeripheralDelegate {
                 case statusCharacteristicUUID:
                     statusCharacteristic = characteristic
                     peripheral.setNotifyValue(true, for: characteristic)
+                case commandCharacteristicUUID:
+                    commandCharacteristic = characteristic
                 default:
                     break
                 }
@@ -188,7 +220,9 @@ extension BluetoothManager: CBPeripheralDelegate {
     
     nonisolated func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
-            print("Failed to write waypoint: \(error)")
+            print("Failed to write to characteristic: \(error)")
+        } else {
+            print("Successfully wrote to characteristic: \(characteristic.uuid)")
         }
     }
     
