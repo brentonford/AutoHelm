@@ -60,7 +60,7 @@ extension CLLocationCoordinate2D: Codable, @retroactive Equatable {
     }
 }
 
-struct DeviceStatus: Codable {
+struct DeviceStatus: Codable, Equatable {
     let hasGpsFix: Bool
     let satellites: Int
     let currentLat: Double
@@ -169,7 +169,7 @@ extension DeviceStatus {
     }
 }
 
-enum AppNavigationState: Equatable {
+enum AppNavigationState: Equatable, Codable {
     case idle
     case navigating
     case arrived

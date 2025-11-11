@@ -10,16 +10,21 @@ import SwiftUI
 @main
 struct WaypointApp: App {
     @StateObject private var bluetoothManager = BluetoothManager()
+    @StateObject private var networkManager = NetworkManager.shared
+    @StateObject private var stateConnector = StateConnector.shared
     private let logger = AppLogger.shared
     
     init() {
         setupLogging()
+        setupFrameworks()
     }
     
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(bluetoothManager)
+                .environmentObject(networkManager)
+                .environmentObject(stateConnector)
         }
     }
     
@@ -32,5 +37,13 @@ struct WaypointApp: App {
         #endif
         
         logger.info("Waypoint app initializing", category: .general)
+    }
+    
+    private func setupFrameworks() {
+        // Register managers with state connector for centralized state management
+        stateConnector.register(bluetoothManager: bluetoothManager)
+        stateConnector.register(networkManager: networkManager)
+        
+        logger.info("Enhanced frameworks initialized", category: .general)
     }
 }

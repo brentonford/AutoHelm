@@ -26,7 +26,7 @@ enum AppRoute: Hashable {
 }
 
 // MARK: - Tab Route Definitions
-enum TabRoute: String, CaseIterable {
+enum TabRoute: String, CaseIterable, Codable {
     case map = "map"
     case helm = "helm"
     
