@@ -3,11 +3,11 @@ import MapKit
 
 struct MapView: View {
     @StateObject private var locationManager = LocationManager()
+    @StateObject private var waypointManager = WaypointManager()
     @EnvironmentObject var bluetoothManager: BluetoothManager
     @State private var position: MapCameraPosition = .automatic
     @State private var mapType: MKMapType = .standard
     @State private var isLoadingSatellite: Bool = false
-    @State private var waypoints: [Waypoint] = []
     @State private var selectedWaypoint: Waypoint?
     @State private var showingWaypointAlert = false
     @State private var pendingCoordinate: CLLocationCoordinate2D?
@@ -21,7 +21,7 @@ struct MapView: View {
                         UserAnnotation()
                     }
                     
-                    ForEach(waypoints) { waypoint in
+                    ForEach(waypointManager.waypoints) { waypoint in
                         Annotation(waypoint.name, coordinate: waypoint.coordinate) {
                             Button(action: {
                                 selectedWaypoint = waypoint
@@ -52,7 +52,6 @@ struct MapView: View {
             .edgesIgnoringSafeArea(.all)
             .onAppear {
                 requestLocationPermission()
-                loadWaypoints()
             }
             .onChange(of: locationManager.userLocation) { oldValue, newValue in
                 if let location = newValue {
@@ -63,12 +62,7 @@ struct MapView: View {
                 Button("Send") {
                     if let coordinate = pendingCoordinate {
                         sendWaypointToHelm(coordinate)
-                        let waypoint = Waypoint(
-                            coordinate: coordinate,
-                            name: "Waypoint \(waypoints.count + 1)"
-                        )
-                        waypoints.append(waypoint)
-                        saveWaypoints()
+                        let _ = waypointManager.createWaypoint(at: coordinate)
                     }
                     pendingCoordinate = nil
                 }
@@ -137,7 +131,7 @@ struct MapView: View {
                             Image(systemName: "list.bullet")
                                 .foregroundColor(.primary)
                                 .font(.title2)
-                            Text("\(waypoints.count)")
+                            Text("\(waypointManager.waypoints.count)")
                                 .font(.caption)
                                 .foregroundColor(.primary)
                         }
@@ -171,7 +165,7 @@ struct MapView: View {
             })
         }
         .sheet(isPresented: $showingWaypointList) {
-            WaypointListView(waypoints: waypoints, onSend: { waypoint in
+            WaypointListView(waypoints: waypointManager.waypoints, onSend: { waypoint in
                 sendWaypointToHelm(waypoint.coordinate)
             }, onDelete: { waypoint in
                 deleteWaypoint(waypoint)
@@ -228,12 +222,7 @@ struct MapView: View {
             pendingCoordinate = coordinate
             showingWaypointAlert = true
         } else {
-            let waypoint = Waypoint(
-                coordinate: coordinate,
-                name: "Waypoint \(waypoints.count + 1)"
-            )
-            waypoints.append(waypoint)
-            saveWaypoints()
+            let _ = waypointManager.createWaypoint(at: coordinate)
         }
     }
     
@@ -242,23 +231,10 @@ struct MapView: View {
     }
     
     private func deleteWaypoint(_ waypoint: Waypoint) {
-        waypoints.removeAll { $0.id == waypoint.id }
-        saveWaypoints()
+        waypointManager.deleteWaypoint(waypoint)
     }
     
-    private func saveWaypoints() {
-        if let data = try? JSONEncoder().encode(waypoints) {
-            UserDefaults.standard.set(data, forKey: "SavedWaypoints")
-        }
-    }
-    
-    private func loadWaypoints() {
-        guard let data = UserDefaults.standard.data(forKey: "SavedWaypoints"),
-              let savedWaypoints = try? JSONDecoder().decode([Waypoint].self, from: data) else {
-            return
-        }
-        waypoints = savedWaypoints
-    }
+
 }
 
 struct WaypointListView: View {

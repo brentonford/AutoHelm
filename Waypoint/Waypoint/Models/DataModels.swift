@@ -103,6 +103,68 @@ struct DeviceStatus: Codable {
     }
 }
 
+// MARK: - Enhanced JSON Parsing Extensions
+extension DeviceStatus {
+    /// Creates a DeviceStatus from JSON data with robust error handling
+    static func fromJSONData(_ data: Data) -> DeviceStatus? {
+        do {
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            
+            // Handle potential malformed JSON gracefully
+            return try decoder.decode(DeviceStatus.self, from: data)
+        } catch DecodingError.keyNotFound(let key, let context) {
+            print("DeviceStatus JSON parsing error - missing key: \(key.stringValue)")
+            print("Context: \(context.debugDescription)")
+            return nil
+        } catch DecodingError.typeMismatch(let type, let context) {
+            print("DeviceStatus JSON parsing error - type mismatch for type: \(type)")
+            print("Context: \(context.debugDescription)")
+            return nil
+        } catch DecodingError.valueNotFound(let type, let context) {
+            print("DeviceStatus JSON parsing error - value not found for type: \(type)")
+            print("Context: \(context.debugDescription)")
+            return nil
+        } catch DecodingError.dataCorrupted(let context) {
+            print("DeviceStatus JSON parsing error - data corrupted")
+            print("Context: \(context.debugDescription)")
+            return nil
+        } catch {
+            print("DeviceStatus JSON parsing error - unknown error: \(error)")
+            return nil
+        }
+    }
+    
+    /// Creates a DeviceStatus from JSON string with automatic null handling
+    static func fromJSONString(_ jsonString: String) -> DeviceStatus? {
+        guard let data = jsonString.data(using: .utf8) else {
+            print("DeviceStatus JSON parsing error - invalid UTF8 string")
+            return nil
+        }
+        return fromJSONData(data)
+    }
+    
+    /// Type-safe property access with fallback values
+    var safeCurrentCoordinate: CLLocationCoordinate2D {
+        let lat = currentLat.isFinite ? currentLat : 0.0
+        let lon = currentLon.isFinite ? currentLon : 0.0
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+    
+    var safeTargetCoordinate: CLLocationCoordinate2D? {
+        guard let lat = targetLat, let lon = targetLon,
+              lat.isFinite, lon.isFinite else { return nil }
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+    
+    /// Validates GPS coordinate ranges
+    var hasValidCoordinates: Bool {
+        return currentLat >= -90 && currentLat <= 90 &&
+               currentLon >= -180 && currentLon <= 180 &&
+               currentLat.isFinite && currentLon.isFinite
+    }
+}
+
 enum NavigationState: Equatable {
     case idle
     case navigating
@@ -142,5 +204,109 @@ struct SystemConfig {
     
     static func formatCoordinate(_ value: Double) -> String {
         return String(format: "%.\(coordinatePrecision)f", value)
+    }
+}
+
+// MARK: - UserDefaults Property Wrappers
+@propertyWrapper
+struct UserDefault<T: Codable> {
+    let key: String
+    let defaultValue: T
+    private let userDefaults: UserDefaults
+    
+    init(key: String, defaultValue: T, userDefaults: UserDefaults = .standard) {
+        self.key = key
+        self.defaultValue = defaultValue
+        self.userDefaults = userDefaults
+    }
+    
+    var wrappedValue: T {
+        get {
+            guard let data = userDefaults.data(forKey: key) else {
+                return defaultValue
+            }
+            
+            do {
+                return try JSONDecoder().decode(T.self, from: data)
+            } catch {
+                print("UserDefault decoding error for key '\(key)': \(error)")
+                return defaultValue
+            }
+        }
+        set {
+            do {
+                let data = try JSONEncoder().encode(newValue)
+                userDefaults.set(data, forKey: key)
+            } catch {
+                print("UserDefault encoding error for key '\(key)': \(error)")
+            }
+        }
+    }
+}
+
+@propertyWrapper
+struct UserDefaultArray<T: Codable> {
+    let key: String
+    let defaultValue: [T]
+    private let userDefaults: UserDefaults
+    
+    init(key: String, defaultValue: [T] = [], userDefaults: UserDefaults = .standard) {
+        self.key = key
+        self.defaultValue = defaultValue
+        self.userDefaults = userDefaults
+    }
+    
+    var wrappedValue: [T] {
+        get {
+            guard let data = userDefaults.data(forKey: key) else {
+                return defaultValue
+            }
+            
+            do {
+                return try JSONDecoder().decode([T].self, from: data)
+            } catch {
+                print("UserDefaultArray decoding error for key '\(key)': \(error)")
+                return defaultValue
+            }
+        }
+        set {
+            do {
+                let data = try JSONEncoder().encode(newValue)
+                userDefaults.set(data, forKey: key)
+            } catch {
+                print("UserDefaultArray encoding error for key '\(key)': \(error)")
+            }
+        }
+    }
+    
+    var projectedValue: UserDefaultArrayBinding<T> {
+        UserDefaultArrayBinding(wrapper: self)
+    }
+}
+
+struct UserDefaultArrayBinding<T: Codable> {
+    private var wrapper: UserDefaultArray<T>
+    
+    init(wrapper: UserDefaultArray<T>) {
+        self.wrapper = wrapper
+    }
+    
+    mutating func append(_ element: T) {
+        var array = wrapper.wrappedValue
+        array.append(element)
+        wrapper.wrappedValue = array
+    }
+    
+    mutating func remove(at index: Int) {
+        var array = wrapper.wrappedValue
+        guard index < array.count else { return }
+        array.remove(at: index)
+        wrapper.wrappedValue = array
+    }
+    
+    mutating func removeAll(where predicate: (T) -> Bool) {
+        var array = wrapper.wrappedValue
+        array.removeAll(where: predicate)
+        wrapper.wrappedValue = array
     }
 }

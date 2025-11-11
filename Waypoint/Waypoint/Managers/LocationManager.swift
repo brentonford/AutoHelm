@@ -63,6 +63,81 @@ class LocationManager: NSObject, ObservableObject {
             .eraseToAnyPublisher()
     }
     
+    // MARK: - Enhanced CoreLocation Extensions
+    
+    /// Publisher that emits distance to a specific coordinate
+    func distancePublisher(to coordinate: CLLocationCoordinate2D) -> AnyPublisher<CLLocationDistance, Never> {
+        locationPublisher
+            .map { location in
+                let targetLocation = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+                return location.distance(from: targetLocation)
+            }
+            .removeDuplicates { abs($0 - $1) < 1.0 }
+            .eraseToAnyPublisher()
+    }
+    
+    /// Publisher that emits bearing to a specific coordinate
+    func bearingPublisher(to coordinate: CLLocationCoordinate2D) -> AnyPublisher<CLLocationDirection, Never> {
+        locationPublisher
+            .map { location in
+                self.calculateBearing(from: location.coordinate, to: coordinate)
+            }
+            .removeDuplicates { abs($0 - $1) < 1.0 }
+            .eraseToAnyPublisher()
+    }
+    
+    /// Combined distance and bearing publisher
+    func navigationDataPublisher(to coordinate: CLLocationCoordinate2D) -> AnyPublisher<LocationNavigationData, Never> {
+        locationPublisher
+            .map { location in
+                let targetLocation = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+                let distance = location.distance(from: targetLocation)
+                let bearing = self.calculateBearing(from: location.coordinate, to: coordinate)
+                
+                return LocationNavigationData(
+                    currentLocation: location.coordinate,
+                    targetLocation: coordinate,
+                    distance: distance,
+                    bearing: bearing,
+                    accuracy: location.horizontalAccuracy
+                )
+            }
+            .removeDuplicates { previous, current in
+                abs(previous.distance - current.distance) < 1.0 &&
+                abs(previous.bearing - current.bearing) < 1.0
+            }
+            .eraseToAnyPublisher()
+    }
+    
+    /// Publisher for location updates within a specific region
+    func regionBasedLocationPublisher(center: CLLocationCoordinate2D, radius: CLLocationDistance) -> AnyPublisher<CLLocation, Never> {
+        locationPublisher
+            .filter { location in
+                let centerLocation = CLLocation(latitude: center.latitude, longitude: center.longitude)
+                return location.distance(from: centerLocation) <= radius
+            }
+            .eraseToAnyPublisher()
+    }
+    
+    /// Automatic permission management publisher
+    var permissionStatePublisher: AnyPublisher<LocationPermissionState, Never> {
+        authorizationPublisher
+            .map { status in
+                switch status {
+                case .notDetermined:
+                    return .notRequested
+                case .denied, .restricted:
+                    return .denied
+                case .authorizedWhenInUse, .authorizedAlways:
+                    return .granted
+                @unknown default:
+                    return .unknown
+                }
+            }
+            .removeDuplicates()
+            .eraseToAnyPublisher()
+    }
+    
     override init() {
         super.init()
         setupLocationManager()
@@ -232,12 +307,13 @@ class LocationManager: NSObject, ObservableObject {
     
     func getBearingFromCurrentLocation(to coordinate: CLLocationCoordinate2D) -> CLLocationDirection? {
         guard let currentLocation = lastKnownLocation else { return nil }
-        
-        let targetLocation = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
-        
-        let lat1 = currentLocation.coordinate.latitude * .pi / 180
-        let lat2 = targetLocation.coordinate.latitude * .pi / 180
-        let deltaLon = (targetLocation.coordinate.longitude - currentLocation.coordinate.longitude) * .pi / 180
+        return calculateBearing(from: currentLocation.coordinate, to: coordinate)
+    }
+    
+    private func calculateBearing(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D) -> CLLocationDirection {
+        let lat1 = from.latitude * .pi / 180
+        let lat2 = to.latitude * .pi / 180
+        let deltaLon = (to.longitude - from.longitude) * .pi / 180
         
         let x = sin(deltaLon) * cos(lat2)
         let y = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(deltaLon)
@@ -274,6 +350,54 @@ class LocationManager: NSObject, ObservableObject {
             }
         @unknown default:
             errorSubject.send("Unknown location authorization status.")
+        }
+    }
+}
+
+// MARK: - Enhanced Data Models
+struct LocationNavigationData: Equatable {
+    let currentLocation: CLLocationCoordinate2D
+    let targetLocation: CLLocationCoordinate2D
+    let distance: CLLocationDistance
+    let bearing: CLLocationDirection
+    let accuracy: CLLocationAccuracy
+    
+    var isHighAccuracy: Bool {
+        return accuracy < 10.0 && accuracy > 0
+    }
+    
+    var accuracyDescription: String {
+        switch accuracy {
+        case 0..<5:
+            return "Excellent"
+        case 5..<10:
+            return "Good"
+        case 10..<20:
+            return "Fair"
+        case 20..<50:
+            return "Poor"
+        default:
+            return "Very Poor"
+        }
+    }
+}
+
+enum LocationPermissionState: Equatable {
+    case notRequested
+    case granted
+    case denied
+    case unknown
+    
+    var description: String {
+        switch self {
+        case .notRequested:
+            return "Permission not requested"
+        case .granted:
+            return "Location access granted"
+        case .denied:
+            return "Location access denied"
+        case .unknown:
+            return "Unknown permission state"
         }
     }
 }
