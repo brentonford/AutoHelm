@@ -26,6 +26,7 @@ class BluetoothManager: NSObject, ObservableObject {
     private let connectionStateSubject = PassthroughSubject<Bool, Never>()
     private let deviceStatusSubject = PassthroughSubject<DeviceStatus, Never>()
     private let scanningStateSubject = PassthroughSubject<Bool, Never>()
+    private let logger = AppLogger.shared
     
     // Public publishers for external consumption
     var connectionStatePublisher: AnyPublisher<Bool, Never> {
@@ -46,6 +47,7 @@ class BluetoothManager: NSObject, ObservableObject {
         super.init()
         centralManager = CBCentralManager(delegate: self, queue: nil)
         setupReactiveDataPipeline()
+        logger.info("BluetoothManager initialized", category: .bluetooth)
     }
     
     deinit {
@@ -132,6 +134,7 @@ class BluetoothManager: NSObject, ObservableObject {
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
         )
         scanningStateSubject.send(true)
+        logger.info("Started scanning for Helm devices", category: .bluetooth)
     }
     
     func stopScanning() {
@@ -161,7 +164,7 @@ class BluetoothManager: NSObject, ObservableObject {
         let data = waypointData.data(using: .utf8)!
         
         helmPeripheral?.writeValue(data, for: characteristic, type: .withResponse)
-        print("Sent waypoint data: \(waypointData)")
+        logger.waypointSent("GPS Waypoint", coordinate: String(format: "%.6f, %.6f", latitude, longitude))
     }
     
     func enableNavigation() {
@@ -184,7 +187,7 @@ class BluetoothManager: NSObject, ObservableObject {
         }
         
         helmPeripheral?.writeValue(data, for: characteristic, type: .withResponse)
-        print("Sent command: \(command)")
+        logger.info("Sent command to device: \(command)", category: .bluetooth)
     }
     
     private func checkConnectionHealth() {
@@ -192,7 +195,7 @@ class BluetoothManager: NSObject, ObservableObject {
         
         // Check if peripheral is still connected
         if peripheral.state != .connected {
-            print("Connection health check failed - peripheral disconnected")
+            logger.warning("Connection health check failed - peripheral disconnected", category: .bluetooth)
             connectionStateSubject.send(false)
         }
     }
@@ -207,7 +210,7 @@ class BluetoothManager: NSObject, ObservableObject {
             let status = try decoder.decode(DeviceStatus.self, from: jsonData)
             deviceStatusSubject.send(status)
         } catch {
-            print("Failed to parse device status: \(error)")
+            logger.error("Failed to parse device status", error: error, category: .bluetooth)
         }
     }
 }
@@ -241,6 +244,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
     nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         Task { @MainActor in
             connectionStateSubject.send(true)
+            logger.bluetoothConnected(peripheral.name ?? "Unknown Device")
         }
         peripheral.discoverServices([serviceUUID])
     }
@@ -252,6 +256,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
             statusCharacteristic = nil
             commandCharacteristic = nil
             helmPeripheral = nil
+            logger.bluetoothDisconnected(peripheral.name ?? "Unknown Device", error: error)
         }
     }
     

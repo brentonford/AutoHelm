@@ -1,7 +1,7 @@
 import Foundation
 import CoreLocation
 
-struct Waypoint: Identifiable, Codable, Equatable {
+struct Waypoint: Identifiable, Codable, Equatable, Hashable {
     let id: UUID
     let coordinate: CLLocationCoordinate2D
     var name: String
@@ -28,6 +28,10 @@ struct Waypoint: Identifiable, Codable, Equatable {
     
     static func == (lhs: Waypoint, rhs: Waypoint) -> Bool {
         return lhs.id == rhs.id
+    }
+    
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
     }
 }
 
@@ -165,7 +169,7 @@ extension DeviceStatus {
     }
 }
 
-enum NavigationState: Equatable {
+enum AppNavigationState: Equatable {
     case idle
     case navigating
     case arrived
@@ -184,7 +188,7 @@ enum NavigationState: Equatable {
         }
     }
     
-    static func == (lhs: NavigationState, rhs: NavigationState) -> Bool {
+    static func == (lhs: AppNavigationState, rhs: AppNavigationState) -> Bool {
         switch (lhs, rhs) {
         case (.idle, .idle), (.navigating, .navigating), (.arrived, .arrived):
             return true

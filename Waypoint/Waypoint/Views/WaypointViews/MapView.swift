@@ -5,6 +5,11 @@ struct MapView: View {
     @StateObject private var locationManager = LocationManager()
     @StateObject private var waypointManager = WaypointManager()
     @EnvironmentObject var bluetoothManager: BluetoothManager
+    @EnvironmentObject var offlineTileManager: OfflineTileManager
+    @EnvironmentObject var clusteringManager: AnnotationClusteringManager
+    @EnvironmentObject var navigationManager: NavigationManager
+    
+    private let logger = AppLogger.shared
     @State private var position: MapCameraPosition = .automatic
     @State private var mapType: MKMapType = .standard
     @State private var isLoadingSatellite: Bool = false
@@ -62,7 +67,8 @@ struct MapView: View {
                 Button("Send") {
                     if let coordinate = pendingCoordinate {
                         sendWaypointToHelm(coordinate)
-                        let _ = waypointManager.createWaypoint(at: coordinate)
+                        let waypoint = waypointManager.createWaypoint(at: coordinate)
+                        logger.waypointCreated(waypoint.name, coordinate: String(format: "%.6f, %.6f", coordinate.latitude, coordinate.longitude))
                     }
                     pendingCoordinate = nil
                 }
@@ -227,7 +233,9 @@ struct MapView: View {
     }
     
     private func sendWaypointToHelm(_ coordinate: CLLocationCoordinate2D) {
+        logger.startPerformanceMeasurement("waypoint_transmission", category: .bluetooth)
         bluetoothManager.sendWaypoint(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        logger.endPerformanceMeasurement("waypoint_transmission", category: .bluetooth)
     }
     
     private func deleteWaypoint(_ waypoint: Waypoint) {

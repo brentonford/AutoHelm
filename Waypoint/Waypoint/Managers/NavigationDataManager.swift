@@ -4,20 +4,20 @@ import Combine
 
 @MainActor
 class NavigationDataManager: ObservableObject {
-    @Published var currentNavigationState: NavigationState = .idle
+    @Published var currentNavigationState: AppNavigationState = .idle
     @Published var distanceToTarget: CLLocationDistance = 0
     @Published var bearingToTarget: CLLocationDirection = 0
     @Published var isNavigating: Bool = false
     
     private var cancellables = Set<AnyCancellable>()
-    private let navigationStateSubject = PassthroughSubject<NavigationState, Never>()
+    private let navigationStateSubject = PassthroughSubject<AppNavigationState, Never>()
     
     // Dependencies
     private let locationManager: LocationManager
     private let bluetoothManager: BluetoothManager
     
     // Publishers for reactive navigation data
-    var navigationStatePublisher: AnyPublisher<NavigationState, Never> {
+    var navigationStatePublisher: AnyPublisher<AppNavigationState, Never> {
         navigationStateSubject
             .removeDuplicates()
             .eraseToAnyPublisher()
@@ -186,7 +186,7 @@ class NavigationDataManager: ObservableObject {
 
 // MARK: - Supporting Data Models
 struct NavigationData {
-    let state: NavigationState
+    let state: AppNavigationState
     let distance: CLLocationDistance
     let bearing: CLLocationDirection
     let currentLocation: CLLocationCoordinate2D
