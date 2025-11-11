@@ -16,21 +16,112 @@ class BluetoothManager: NSObject, ObservableObject {
     
     private var centralManager: CBCentralManager!
     private var helmPeripheral: CBPeripheral?
-    private var autoScanTimer: Timer?
+    private var cancellables = Set<AnyCancellable>()
     
     private var waypointCharacteristic: CBCharacteristic?
     private var statusCharacteristic: CBCharacteristic?
     private var commandCharacteristic: CBCharacteristic?
     
+    // Combine publishers for reactive data streams
+    private let connectionStateSubject = PassthroughSubject<Bool, Never>()
+    private let deviceStatusSubject = PassthroughSubject<DeviceStatus, Never>()
+    private let scanningStateSubject = PassthroughSubject<Bool, Never>()
+    
+    // Public publishers for external consumption
+    var connectionStatePublisher: AnyPublisher<Bool, Never> {
+        connectionStateSubject.eraseToAnyPublisher()
+    }
+    
+    var deviceStatusPublisher: AnyPublisher<DeviceStatus, Never> {
+        deviceStatusSubject
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+            .eraseToAnyPublisher()
+    }
+    
+    var scanningStatePublisher: AnyPublisher<Bool, Never> {
+        scanningStateSubject.eraseToAnyPublisher()
+    }
+    
     override init() {
         super.init()
         centralManager = CBCentralManager(delegate: self, queue: nil)
-        startAutoScanTimer()
+        setupReactiveDataPipeline()
     }
     
     deinit {
-        autoScanTimer?.invalidate()
-        autoScanTimer = nil
+        cancellables.removeAll()
+    }
+    
+    private func setupReactiveDataPipeline() {
+        // Automatic reconnection using Combine Timer publisher
+        Timer.publish(every: 2.0, on: .main, in: .common)
+            .autoconnect()
+            .filter { [weak self] _ in
+                guard let self = self else { return false }
+                return !self.isConnected && self.centralManager.state == .poweredOn
+            }
+            .sink { [weak self] _ in
+                self?.startScanning()
+            }
+            .store(in: &cancellables)
+        
+        // Reactive connection state updates
+        connectionStateSubject
+            .removeDuplicates()
+            .sink { [weak self] isConnected in
+                self?.isConnected = isConnected
+            }
+            .store(in: &cancellables)
+        
+        // Debounced device status updates
+        deviceStatusSubject
+            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
+            .removeDuplicates { previous, current in
+                // Compare key properties to avoid unnecessary updates
+                previous.hasGpsFix == current.hasGpsFix &&
+                previous.satellites == current.satellites &&
+                abs(previous.distance - current.distance) < 1.0
+            }
+            .sink { [weak self] status in
+                self?.deviceStatus = status
+            }
+            .store(in: &cancellables)
+        
+        // Scanning state reactive updates
+        scanningStateSubject
+            .removeDuplicates()
+            .sink { [weak self] isScanning in
+                self?.isScanning = isScanning
+            }
+            .store(in: &cancellables)
+        
+        // Automatic scanning timeout using Combine
+        scanningStateSubject
+            .filter { $0 } // Only when scanning starts
+            .flatMap { _ in
+                Timer.publish(every: 10.0, on: .main, in: .common)
+                    .autoconnect()
+                    .prefix(1)
+            }
+            .sink { [weak self] _ in
+                if self?.isScanning == true && !(self?.isConnected ?? false) {
+                    self?.stopScanning()
+                    print("Scanning timeout - will retry automatically")
+                }
+            }
+            .store(in: &cancellables)
+        
+        // Connection health monitoring
+        connectionStateSubject
+            .filter { $0 } // Only when connected
+            .flatMap { _ in
+                Timer.publish(every: 30.0, on: .main, in: .common)
+                    .autoconnect()
+            }
+            .sink { [weak self] _ in
+                self?.checkConnectionHealth()
+            }
+            .store(in: &cancellables)
     }
     
     func startScanning() {
@@ -40,12 +131,12 @@ class BluetoothManager: NSObject, ObservableObject {
             withServices: [serviceUUID],
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
         )
-        isScanning = true
+        scanningStateSubject.send(true)
     }
     
     func stopScanning() {
         centralManager.stopScan()
-        isScanning = false
+        scanningStateSubject.send(false)
     }
     
     func connect(peripheral: CBPeripheral) {
@@ -96,20 +187,14 @@ class BluetoothManager: NSObject, ObservableObject {
         print("Sent command: \(command)")
     }
     
-    private func startAutoScanTimer() {
-        autoScanTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self = self else { return }
-                if !self.isConnected && self.centralManager.state == .poweredOn {
-                    self.startScanning()
-                }
-            }
+    private func checkConnectionHealth() {
+        guard isConnected, let peripheral = helmPeripheral else { return }
+        
+        // Check if peripheral is still connected
+        if peripheral.state != .connected {
+            print("Connection health check failed - peripheral disconnected")
+            connectionStateSubject.send(false)
         }
-    }
-    
-    private func stopAutoScanTimer() {
-        autoScanTimer?.invalidate()
-        autoScanTimer = nil
     }
     
     private func parseDeviceStatus(from data: Data) {
@@ -120,7 +205,7 @@ class BluetoothManager: NSObject, ObservableObject {
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             let status = try decoder.decode(DeviceStatus.self, from: jsonData)
-            self.deviceStatus = status
+            deviceStatusSubject.send(status)
         } catch {
             print("Failed to parse device status: \(error)")
         }
@@ -135,8 +220,8 @@ extension BluetoothManager: CBCentralManagerDelegate {
             case .poweredOn:
                 startScanning()
             case .poweredOff, .resetting, .unauthorized, .unknown, .unsupported:
-                isConnected = false
-                isScanning = false
+                connectionStateSubject.send(false)
+                scanningStateSubject.send(false)
                 helmPeripheral = nil
             @unknown default:
                 break
@@ -155,14 +240,14 @@ extension BluetoothManager: CBCentralManagerDelegate {
     
     nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         Task { @MainActor in
-            isConnected = true
+            connectionStateSubject.send(true)
         }
         peripheral.discoverServices([serviceUUID])
     }
     
     nonisolated func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         Task { @MainActor in
-            isConnected = false
+            connectionStateSubject.send(false)
             waypointCharacteristic = nil
             statusCharacteristic = nil
             commandCharacteristic = nil
@@ -172,7 +257,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
     
     nonisolated func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         Task { @MainActor in
-            isConnected = false
+            connectionStateSubject.send(false)
             helmPeripheral = nil
         }
     }

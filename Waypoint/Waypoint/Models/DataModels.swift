@@ -103,7 +103,7 @@ struct DeviceStatus: Codable {
     }
 }
 
-enum NavigationState {
+enum NavigationState: Equatable {
     case idle
     case navigating
     case arrived
@@ -119,6 +119,17 @@ enum NavigationState {
             return "Arrived"
         case .error(let message):
             return "Error: \(message)"
+        }
+    }
+    
+    static func == (lhs: NavigationState, rhs: NavigationState) -> Bool {
+        switch (lhs, rhs) {
+        case (.idle, .idle), (.navigating, .navigating), (.arrived, .arrived):
+            return true
+        case (.error(let lhsMessage), .error(let rhsMessage)):
+            return lhsMessage == rhsMessage
+        default:
+            return false
         }
     }
 }
