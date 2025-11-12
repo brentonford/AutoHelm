@@ -13,6 +13,8 @@ struct ContentView: View {
     @StateObject private var navigationManager = NavigationManager()
     @StateObject private var offlineTileManager = OfflineTileManager()
     @StateObject private var clusteringManager = AnnotationClusteringManager()
+    @StateObject private var stateConnector = StateConnector.shared
+    @StateObject private var networkManager = NetworkManager.shared
     
     private let logger = AppLogger.shared
     
@@ -46,10 +48,13 @@ struct ContentView: View {
         .environmentObject(navigationManager)
         .environmentObject(offlineTileManager)
         .environmentObject(clusteringManager)
+        .environmentObject(stateConnector)
+        .environmentObject(networkManager)
         .onOpenURL { url in
             handleDeepLink(url)
         }
         .onAppear {
+            setupStateConnections()
             logger.info("App launched successfully", category: .general)
         }
     }
@@ -88,6 +93,13 @@ struct ContentView: View {
     private func handleDeepLink(_ url: URL) {
         let handled = navigationManager.handleDeepLink(url)
         logger.info("Deep link handled: \(handled) - \(url.absoluteString)", category: .navigation)
+    }
+    
+    private func setupStateConnections() {
+        stateConnector.register(bluetoothManager: bluetoothManager)
+        stateConnector.register(networkManager: networkManager)
+        stateConnector.register(navigationManager: navigationManager)
+        logger.info("State connections established", category: .general)
     }
 }
 

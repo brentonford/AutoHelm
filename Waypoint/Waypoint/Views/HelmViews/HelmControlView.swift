@@ -4,18 +4,8 @@ import MapKit
 struct HelmControlView: View {
     @EnvironmentObject var bluetoothManager: BluetoothManager
     @StateObject private var locationManager = LocationManager()
-    @State private var showingWaypointAlert = false
-    @State private var testWaypointName = ""
-    @State private var selectedTestWaypoint: TestWaypoint?
     @State private var navigationEnabled = false
     @State private var previousNavigationState = false
-    
-    private let testWaypoints = [
-        TestWaypoint(name: "Sydney Opera House", coordinate: CLLocationCoordinate2D(latitude: -33.8568, longitude: 151.2153)),
-        TestWaypoint(name: "Sydney Harbour Bridge", coordinate: CLLocationCoordinate2D(latitude: -33.8523, longitude: 151.2108)),
-        TestWaypoint(name: "Bondi Beach", coordinate: CLLocationCoordinate2D(latitude: -33.8915, longitude: 151.2767)),
-        TestWaypoint(name: "Manly Beach", coordinate: CLLocationCoordinate2D(latitude: -33.7969, longitude: 151.2840))
-    ]
     
     var body: some View {
         NavigationView {
@@ -29,8 +19,7 @@ struct HelmControlView: View {
                         deviceStatusSection
                     }
                     
-                    // Waypoint Control
-                    waypointControlSection
+                    // Waypoint Control removed
                     
                     // Navigation Control
                     if bluetoothManager.isConnected {
@@ -48,20 +37,7 @@ struct HelmControlView: View {
             .onChange(of: bluetoothManager.deviceStatus?.hasGpsFix) { oldValue, newValue in
                 handleGpsFixChange(newValue)
             }
-            .alert("Send Test Waypoint", isPresented: $showingWaypointAlert) {
-                Button("Send") {
-                    if let waypoint = selectedTestWaypoint {
-                        sendTestWaypoint(waypoint)
-                    }
-                }
-                Button("Cancel") {
-                    selectedTestWaypoint = nil
-                }
-            } message: {
-                if let waypoint = selectedTestWaypoint {
-                    Text("Send \(waypoint.name) (\(String(format: "%.6f", waypoint.coordinate.latitude)), \(String(format: "%.6f", waypoint.coordinate.longitude))) to Helm device?")
-                }
-            }
+
         }
     }
     
@@ -110,9 +86,23 @@ struct HelmControlView: View {
                     
                     if let target = status.targetCoordinate {
                         Divider()
+                        Text("Navigation Active")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .foregroundColor(.green)
+                            .padding(.vertical, 4)
+                        
                         statusRow("Target", value: "\(String(format: "%.6f", target.latitude)), \(String(format: "%.6f", target.longitude))")
                         statusRow("Distance", value: "\(String(format: "%.1f", status.distance))m")
                         statusRow("Bearing", value: "\(String(format: "%.1f", status.bearing))°")
+                        
+                        // Visual navigation indicator
+                        HStack {
+                            Text("Direction:")
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            NavigationArrowView(bearing: status.bearing, currentHeading: status.heading)
+                        }
                     }
                 }
             } else {
@@ -125,44 +115,7 @@ struct HelmControlView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
     
-    private var waypointControlSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Waypoint Testing")
-                .font(.headline)
-            
-            if bluetoothManager.isConnected {
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                    ForEach(testWaypoints, id: \.name) { waypoint in
-                        Button(action: {
-                            selectedTestWaypoint = waypoint
-                            showingWaypointAlert = true
-                        }) {
-                            VStack {
-                                Image(systemName: "mappin.and.ellipse")
-                                    .font(.title2)
-                                    .foregroundColor(.blue)
-                                
-                                Text(waypoint.name)
-                                    .font(.caption)
-                                    .multilineTextAlignment(.center)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color(.systemBlue).opacity(0.1))
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                        }
-                    }
-                }
-            } else {
-                Text("Connect to Helm device to send waypoints")
-                    .foregroundColor(.secondary)
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                    .background(Color(.systemGray5))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-            }
-        }
-    }
+
     
     private var navigationControlSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -237,17 +190,29 @@ struct HelmControlView: View {
         }
     }
     
-    private func sendTestWaypoint(_ waypoint: TestWaypoint) {
-        let coordinate = waypoint.coordinate
-        
-        bluetoothManager.sendWaypoint(latitude: coordinate.latitude, longitude: coordinate.longitude)
-        print("Sent waypoint: \(waypoint.name) (\(coordinate.latitude), \(coordinate.longitude))")
-    }
 }
 
-struct TestWaypoint {
-    let name: String
-    let coordinate: CLLocationCoordinate2D
+struct NavigationArrowView: View {
+    let bearing: Double
+    let currentHeading: Double
+    
+    private var relativeAngle: Double {
+        let angle = bearing - currentHeading
+        if angle > 180 {
+            return angle - 360
+        } else if angle < -180 {
+            return angle + 360
+        }
+        return angle
+    }
+    
+    var body: some View {
+        Image(systemName: "arrow.up")
+            .foregroundColor(.blue)
+            .font(.title2)
+            .rotationEffect(.degrees(relativeAngle))
+            .animation(.easeInOut(duration: 0.3), value: relativeAngle)
+    }
 }
 
 #Preview {

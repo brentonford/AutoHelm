@@ -178,9 +178,9 @@ void DisplayManager::drawCompass(float heading) {
 
 void DisplayManager::updateNavigationDisplay(const NavigationState& nav, float heading) {
     if (!initialized) return;
-    
+
     display.clearDisplay();
-    
+
     // Navigation status in top left
     display.setCursor(0, 0);
     switch(nav.mode) {
@@ -189,6 +189,12 @@ void DisplayManager::updateNavigationDisplay(const NavigationState& nav, float h
             break;
         case NavigationMode::NAVIGATING:
             display.print("NAV: ACTIVE");
+            // Show target coordinates
+            display.setCursor(0, 24);
+            display.print("TGT:");
+            display.println(nav.targetLatitude, 4);
+            display.print("    ");
+            display.println(nav.targetLongitude, 4);
             break;
         case NavigationMode::ARRIVED:
             display.print("ARRIVED!");

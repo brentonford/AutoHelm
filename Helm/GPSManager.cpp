@@ -2,12 +2,7 @@
 #include <Arduino.h>
 
 GPSManager::GPSManager(int rxPin, int txPin) : gpsSerial(rxPin, txPin), bufferIndex(0) {
-    currentData.latitude = 0.0;
-    currentData.longitude = 0.0;
-    currentData.altitude = 0.0;
-    currentData.satellites = 0;
-    currentData.hasFix = false;
-    currentData.timestamp = 0;
+    // GPSData constructor handles initialization
 }
 
 bool GPSManager::begin() {
@@ -64,6 +59,14 @@ void GPSManager::parseGGA(const char* data) {
     }
     
     if (tokenCount >= 13) {
+        // Time (token 1) - format HHMMSS.SS
+        if (strlen(tokens[1]) >= 6) {
+            String timeStr = String(tokens[1]);
+            currentData.timeString = timeStr.substring(0,2) + ":" + 
+                                   timeStr.substring(2,4) + ":" + 
+                                   timeStr.substring(4,6);
+        }
+        
         // Fix quality (token 6)
         int fixQuality = atoi(tokens[6]);
         currentData.hasFix = (fixQuality > 0);
@@ -78,6 +81,11 @@ void GPSManager::parseGGA(const char* data) {
             // Satellites (token 7)
             currentData.satellites = atoi(tokens[7]);
             
+            // HDOP (token 8)
+            if (strlen(tokens[8]) > 0) {
+                currentData.hdop = atof(tokens[8]);
+            }
+            
             // Altitude (token 9)
             currentData.altitude = atof(tokens[9]);
             
@@ -87,7 +95,36 @@ void GPSManager::parseGGA(const char* data) {
 }
 
 void GPSManager::parseRMC(const char* data) {
-    // RMC parsing for additional data if needed in future
+    char* tokens[15];
+    char buffer[128];
+    strcpy(buffer, data);
+    
+    int tokenCount = 0;
+    char* token = strtok(buffer, ",");
+    while (token != NULL && tokenCount < 15) {
+        tokens[tokenCount++] = token;
+        token = strtok(NULL, ",");
+    }
+    
+    if (tokenCount >= 10) {
+        // Status (token 2) - A=active, V=void
+        bool rmc_valid = (tokens[2][0] == 'A');
+        
+        if (rmc_valid) {
+            // Speed over ground in knots (token 7)
+            if (strlen(tokens[7]) > 0) {
+                currentData.speedKnots = atof(tokens[7]);
+            }
+            
+            // Date (token 9) - format DDMMYY
+            if (strlen(tokens[9]) == 6) {
+                String dateStr = String(tokens[9]);
+                currentData.dateString = dateStr.substring(0,2) + "/" + 
+                                        dateStr.substring(2,4) + "/" + 
+                                        dateStr.substring(4,6);
+            }
+        }
+    }
 }
 
 bool GPSManager::isValidChecksum(const char* sentence) {

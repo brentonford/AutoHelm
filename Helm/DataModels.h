@@ -2,6 +2,7 @@
 #define DATA_MODELS_H
 
 #include <stdint.h>
+#include <Arduino.h>
 
 struct GPSData {
     float latitude;
@@ -10,6 +11,16 @@ struct GPSData {
     int satellites;
     bool hasFix;
     unsigned long timestamp;
+    float speedKnots;
+    String timeString;
+    String dateString;
+    float hdop;
+    float vdop;
+    float pdop;
+    
+    GPSData() : latitude(0.0), longitude(0.0), altitude(0.0), satellites(0),
+               hasFix(false), timestamp(0), speedKnots(0.0), timeString(""),
+               dateString(""), hdop(99.9), vdop(99.9), pdop(99.9) {}
 };
 
 class SystemConfig {

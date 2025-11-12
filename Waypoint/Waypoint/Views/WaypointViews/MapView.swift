@@ -83,25 +83,35 @@ struct MapView: View {
             
             VStack {
                 HStack {
-                    // Bluetooth connection indicator
-                    HStack {
-                        Circle()
-                            .fill(bluetoothManager.isConnected ? .green : .red)
-                            .frame(width: 12, height: 12)
+                    // Enhanced status indicator with navigation data
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Circle()
+                                .fill(bluetoothManager.isConnected ? .green : .red)
+                                .frame(width: 12, height: 12)
+                            
+                            Text(bluetoothManager.isConnected ? "Helm Connected" : "Disconnected")
+                                .font(.caption)
+                                .foregroundColor(.primary)
+                            
+                            if bluetoothManager.isScanning {
+                                ProgressView()
+                                    .scaleEffect(0.6)
+                            }
+                        }
                         
-                        Text(bluetoothManager.isConnected ? "Helm Connected" : "Disconnected")
-                            .font(.caption)
-                            .foregroundColor(.primary)
-                        
-                        if bluetoothManager.isScanning {
-                            ProgressView()
-                                .scaleEffect(0.6)
+                        // Show navigation data when available
+                        if let deviceStatus = bluetoothManager.deviceStatus,
+                           let _ = deviceStatus.targetCoordinate {
+                            Text("Distance: \(String(format: "%.0f", deviceStatus.distance))m")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
                         }
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(Color(.systemBackground).opacity(0.9))
-                    .clipShape(Capsule())
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
                     .shadow(radius: 2)
                     
                     Spacer()
@@ -240,171 +250,6 @@ struct MapView: View {
     
     private func deleteWaypoint(_ waypoint: Waypoint) {
         waypointManager.deleteWaypoint(waypoint)
-    }
-    
-
-}
-
-struct WaypointListView: View {
-    let waypoints: [Waypoint]
-    let onSend: (Waypoint) -> Void
-    let onDelete: (Waypoint) -> Void
-    let onEdit: (Waypoint) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject var bluetoothManager: BluetoothManager
-    
-    var body: some View {
-        NavigationView {
-            List {
-                ForEach(waypoints) { waypoint in
-                    WaypointRowView(waypoint: waypoint, onSend: onSend, onEdit: onEdit)
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            Button(role: .destructive) {
-                                onDelete(waypoint)
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                            
-                            Button {
-                                onEdit(waypoint)
-                            } label: {
-                                Label("Edit", systemImage: "pencil")
-                            }
-                            .tint(.blue)
-                        }
-                }
-                .onDelete { indexSet in
-                    for index in indexSet {
-                        onDelete(waypoints[index])
-                    }
-                }
-            }
-            .navigationTitle("Waypoints (\(waypoints.count))")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct WaypointRowView: View {
-    let waypoint: Waypoint
-    let onSend: (Waypoint) -> Void
-    let onEdit: (Waypoint) -> Void
-    @EnvironmentObject var bluetoothManager: BluetoothManager
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Image(systemName: waypoint.iconName)
-                            .foregroundColor(.blue)
-                            .frame(width: 20)
-                        Text(waypoint.name)
-                            .font(.headline)
-                    }
-                    
-                    Text("\(String(format: "%.6f", waypoint.coordinate.latitude)), \(String(format: "%.6f", waypoint.coordinate.longitude))")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    if !waypoint.comments.isEmpty {
-                        Text(waypoint.comments)
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                
-                Spacer()
-                
-                Button(action: {
-                    print("Sending waypoint: \(waypoint.name)")
-                    onSend(waypoint)
-                }) {
-                    HStack {
-                        Image(systemName: "paperplane.fill")
-                        Text("Send")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .disabled(!bluetoothManager.isConnected)
-            }
-            
-            if !bluetoothManager.isConnected {
-                HStack {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.orange)
-                        .font(.caption)
-                    Text("Helm device not connected")
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-}
-
-struct WaypointDetailView: View {
-    let waypoint: Waypoint
-    let onSend: (CLLocationCoordinate2D) -> Void
-    let onDelete: (Waypoint) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject var bluetoothManager: BluetoothManager
-    
-    var body: some View {
-        NavigationView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Waypoint Details")
-                    .font(.title2)
-                    .bold()
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Name: \(waypoint.name)")
-                    Text("Coordinates:")
-                    Text("Lat: \(String(format: "%.6f", waypoint.coordinate.latitude))")
-                    Text("Lon: \(String(format: "%.6f", waypoint.coordinate.longitude))")
-                    Text("Created: \(waypoint.createdDate.formatted(date: .abbreviated, time: .shortened))")
-                }
-                .font(.body)
-                
-                HStack {
-                    Button("Send to Helm") {
-                        onSend(waypoint.coordinate)
-                        dismiss()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!bluetoothManager.isConnected)
-                    
-                    Spacer()
-                    
-                    Button("Delete", role: .destructive) {
-                        onDelete(waypoint)
-                        dismiss()
-                    }
-                    .buttonStyle(.bordered)
-                }
-                
-                if !bluetoothManager.isConnected {
-                    Text("Connect to Helm device to send waypoints")
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                        .padding(.top)
-                }
-                
-                Spacer()
-            }
-            .padding()
-            .navigationBarHidden(true)
-        }
     }
 }
 

@@ -75,6 +75,7 @@ void setup() {
     Serial.println("'n' - Toggle navigation enabled/disabled");
     Serial.println("'c' - Clear navigation target");
     Serial.println("'t' - Show current navigation state");
+    Serial.println("'s' - Show comprehensive status data (BLE JSON)");
     Serial.println("\n=== Audio Test Commands ===");
     Serial.println("'1' - Play navigation enabled sound");
     Serial.println("'2' - Play waypoint set sound");
@@ -114,20 +115,30 @@ void loop() {
     NavigationState navState = navigationManager.getState();
     
     // Output navigation status to serial for testing
-    if (navigationManager.isNavigationEnabled()) {
-        Serial.print("NAV: Mode=");
-        switch(navState.mode) {
-            case NavigationMode::IDLE: Serial.print("IDLE"); break;
-            case NavigationMode::NAVIGATING: Serial.print("NAVIGATING"); break;
-            case NavigationMode::ARRIVED: Serial.print("ARRIVED"); break;
+    if (navigationManager.isNavigationEnabled() && navState.mode != NavigationMode::IDLE) {
+        static unsigned long lastNavOutput = 0;
+        unsigned long currentTime = millis();
+        
+        if (currentTime - lastNavOutput >= 2000) { // Output every 2 seconds
+            Serial.print("NAV: Mode=");
+            switch(navState.mode) {
+                case NavigationMode::IDLE: Serial.print("IDLE"); break;
+                case NavigationMode::NAVIGATING: Serial.print("NAVIGATING"); break;
+                case NavigationMode::ARRIVED: Serial.print("ARRIVED"); break;
+            }
+            Serial.print(" | Target: ");
+            Serial.print(navState.targetLatitude, 6);
+            Serial.print(", ");
+            Serial.print(navState.targetLongitude, 6);
+            Serial.print(" | Dist=");
+            Serial.print(navState.distanceToTarget, 1);
+            Serial.print("m | Bearing=");
+            Serial.print(navState.bearingToTarget, 1);
+            Serial.print("° | RelAngle=");
+            Serial.print(navState.relativeAngle, 1);
+            Serial.println("°");
+            lastNavOutput = currentTime;
         }
-        Serial.print(" | Dist=");
-        Serial.print(navState.distanceToTarget, 1);
-        Serial.print("m | Bearing=");
-        Serial.print(navState.bearingToTarget, 1);
-        Serial.print("° | RelAngle=");
-        Serial.print(navState.relativeAngle, 1);
-        Serial.println("°");
     }
     
     // Output compass heading for testing
@@ -144,7 +155,7 @@ void loop() {
     
     if (displayAvailable) {
         if (navigationManager.isNavigationEnabled() && navState.mode != NavigationMode::IDLE) {
-            // Show navigation display when actively navigating
+            // Show navigation display when navigation is active (regardless of GPS fix)
             displayManager.updateNavigationDisplay(navState, heading);
         } else if (gpsAvailable && compassAvailable) {
             displayManager.updateGPSAndCompass(gpsData, heading);
@@ -226,6 +237,11 @@ void handleSerialCommands() {
             case '7':
                 Serial.println("Playing destination reached sound...");
                 buzzer.playDestinationReached();
+                break;
+                
+            case 's':
+                // Show comprehensive status data for BLE testing
+                showComprehensiveStatusData();
                 break;
         }
     }
@@ -314,6 +330,7 @@ void onNavigationControlReceived(bool enabled) {
     } else {
         Serial.println("Navigation disabled via BLE command");
         navigationManager.setNavigationEnabled(false);
+        buzzer.playAppDisconnected();
     }
 }
 
@@ -336,4 +353,65 @@ void sendBluetoothStatus(const GPSData& gpsData, float heading, const Navigation
             lastJsonOutput = currentTime;
         }
     }
+}
+
+void showComprehensiveStatusData() {
+    Serial.println("\n=== Comprehensive Status Data Test ===");
+    
+    GPSData gpsData = gpsManager.getData();
+    float heading = 0.0;
+    if (compassAvailable) {
+        heading = compassManager.readHeading();
+    }
+    NavigationState navState = navigationManager.getState();
+    
+    // Generate and display the JSON that would be sent to iOS
+    String statusJson = bluetoothController.createStatusJSON(gpsData, navState, heading);
+    
+    Serial.println("Status JSON for iOS app:");
+    Serial.println(statusJson);
+    Serial.println();
+    
+    // Break down the data for testing verification
+    Serial.println("Detailed Status Breakdown:");
+    Serial.print("  GPS Fix: "); Serial.println(gpsData.hasFix ? "YES" : "NO");
+    Serial.print("  Satellites: "); Serial.println(gpsData.satellites);
+    
+    if (gpsData.hasFix) {
+        Serial.print("  Current Position: ");
+        Serial.print(gpsData.latitude, 6); Serial.print(", ");
+        Serial.println(gpsData.longitude, 6);
+        Serial.print("  Altitude: "); Serial.print(gpsData.altitude, 1); Serial.println("m");
+        Serial.print("  Speed: "); Serial.print(gpsData.speedKnots, 2); Serial.println(" knots");
+        Serial.print("  Time: "); Serial.println(gpsData.timeString);
+        Serial.print("  Date: "); Serial.println(gpsData.dateString);
+        Serial.print("  HDOP: "); Serial.println(gpsData.hdop, 1);
+        Serial.print("  VDOP: "); Serial.println(gpsData.vdop, 1);
+        Serial.print("  PDOP: "); Serial.println(gpsData.pdop, 1);
+    }
+    
+    if (compassAvailable) {
+        Serial.print("  Compass Heading: "); Serial.print(heading, 1); Serial.println("°");
+    }
+    
+    Serial.print("  Navigation Mode: ");
+    switch(navState.mode) {
+        case NavigationMode::IDLE: Serial.println("IDLE"); break;
+        case NavigationMode::NAVIGATING: Serial.println("NAVIGATING"); break;
+        case NavigationMode::ARRIVED: Serial.println("ARRIVED"); break;
+    }
+    
+    if (navState.mode != NavigationMode::IDLE) {
+        Serial.print("  Target: "); 
+        Serial.print(navState.targetLatitude, 6); Serial.print(", ");
+        Serial.println(navState.targetLongitude, 6);
+        Serial.print("  Distance to Target: "); Serial.print(navState.distanceToTarget, 1); Serial.println("m");
+        Serial.print("  Bearing to Target: "); Serial.print(navState.bearingToTarget, 1); Serial.println("°");
+    }
+    
+    Serial.print("  Bluetooth Connected: "); Serial.println(bluetoothController.isConnected() ? "YES" : "NO");
+    
+    Serial.println("\n=== Status Data Test Complete ===");
+    Serial.println("This JSON data will be sent to the iOS app for real-time display.");
+    Serial.println("The iOS app will parse this data and update the device status display.\n");
 }
