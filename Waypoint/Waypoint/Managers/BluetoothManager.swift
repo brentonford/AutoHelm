@@ -2,11 +2,13 @@ import Foundation
 import CoreBluetooth
 import Combine
 
-// Non-isolated UUID constants for thread-safe access
-private let serviceUUID = CBUUID(string: "19B10000-E8F2-537E-4F6C-D104768A1214")
-private let waypointCharacteristicUUID = CBUUID(string: "19B10001-E8F2-537E-4F6C-D104768A1214")
-private let statusCharacteristicUUID = CBUUID(string: "19B10002-E8F2-537E-4F6C-D104768A1214")
-private let commandCharacteristicUUID = CBUUID(string: "19B10003-E8F2-537E-4F6C-D104768A1214")
+// BLE Service and Characteristic UUIDs following README architecture exactly
+private let serviceUUID = CBUUID(string: "0000FFE0-0000-1000-8000-00805F9B34FB")
+private let waypointCharacteristicUUID = CBUUID(string: "0000FFE1-0000-1000-8000-00805F9B34FB")
+private let statusCharacteristicUUID = CBUUID(string: "0000FFE2-0000-1000-8000-00805F9B34FB")
+private let commandCharacteristicUUID = CBUUID(string: "0000FFE3-0000-1000-8000-00805F9B34FB")
+private let calibrationDataCharacteristicUUID = CBUUID(string: "0000FFE4-0000-1000-8000-00805F9B34FB")
+private let configCharacteristicUUID = CBUUID(string: "0000FFE5-0000-1000-8000-00805F9B34FB")
 
 @MainActor
 class BluetoothManager: NSObject, ObservableObject {
@@ -18,25 +20,25 @@ class BluetoothManager: NSObject, ObservableObject {
     private var helmPeripheral: CBPeripheral?
     private var cancellables = Set<AnyCancellable>()
     
-    private var waypointCharacteristic: CBCharacteristic?
-    private var statusCharacteristic: CBCharacteristic?
-    private var commandCharacteristic: CBCharacteristic?
+    // All 5 characteristics per README architecture
+    private var waypointCharacteristic: CBCharacteristic?      // FFE1 - Send GPS waypoints
+    private var statusCharacteristic: CBCharacteristic?        // FFE2 - Receive status data
+    private var commandCharacteristic: CBCharacteristic?       // FFE3 - Send commands
+    private var calibrationDataCharacteristic: CBCharacteristic? // FFE4 - Receive calibration data
+    private var configCharacteristic: CBCharacteristic?        // FFE5 - Device configuration
     
-    // MTU Management
+    // MTU Management following README specification
     private var negotiatedMTU: Int = 23
     private var effectivePayload: Int = 20
     
-    // Enhanced Fragment Reassembly
+    // Enhanced Fragment Reassembly - Fixed buffer management
     private var fragmentBuffer = Data()
     private var expectedFragments: UInt8 = 0
     private var expectedTotalLength: UInt16 = 0
-    private var receivedSequence: UInt8 = 0
+    private var receivedFragments: Set<UInt8> = []
     private var fragmentTimeout: Timer?
-    private var currentMessageId: String? // Track current message being assembled
-    private var lastProcessedMessage: String? // Track last processed complete message
-    private var receivedFragments: Set<UInt8> = [] // Track which fragments we've received
-    private var lastMessageHash: Int? // Hash-based duplicate detection
-    private var fragmentReceptionTimes: [UInt8: Date] = [:] // Track fragment timing
+    private var currentMessageId: String?
+    private var lastProcessedMessageHash: Int?
     
     // Combine publishers for reactive data streams
     private let connectionStateSubject = PassthroughSubject<Bool, Never>()
@@ -44,7 +46,7 @@ class BluetoothManager: NSObject, ObservableObject {
     private let scanningStateSubject = PassthroughSubject<Bool, Never>()
     private let logger = AppLogger.shared
     
-    // Public publishers for external consumption
+    // Public publishers following README reactive architecture
     var connectionStatePublisher: AnyPublisher<Bool, Never> {
         connectionStateSubject.eraseToAnyPublisher()
     }
@@ -63,7 +65,7 @@ class BluetoothManager: NSObject, ObservableObject {
         super.init()
         centralManager = CBCentralManager(delegate: self, queue: nil)
         setupReactiveDataPipeline()
-        logger.info("BluetoothManager initialized with MTU negotiation support", category: .bluetooth)
+        logger.info("BluetoothManager initialized", category: .bluetooth)
     }
     
     deinit {
@@ -72,7 +74,7 @@ class BluetoothManager: NSObject, ObservableObject {
     }
     
     private func setupReactiveDataPipeline() {
-        // Automatic reconnection using Combine Timer publisher
+        // Auto-reconnection every 2 seconds per README
         Timer.publish(every: 2.0, on: .main, in: .common)
             .autoconnect()
             .filter { [weak self] _ in
@@ -92,7 +94,7 @@ class BluetoothManager: NSObject, ObservableObject {
             }
             .store(in: &cancellables)
         
-        // Debounced device status updates
+        // Debounced device status updates (300ms per README)
         deviceStatusSubject
             .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
             .removeDuplicates { previous, current in
@@ -105,7 +107,7 @@ class BluetoothManager: NSObject, ObservableObject {
             }
             .store(in: &cancellables)
         
-        // Scanning state reactive updates
+        // Scanning state updates
         scanningStateSubject
             .removeDuplicates()
             .sink { [weak self] isScanning in
@@ -113,7 +115,7 @@ class BluetoothManager: NSObject, ObservableObject {
             }
             .store(in: &cancellables)
         
-        // Automatic scanning timeout using Combine
+        // Scanning timeout (10 seconds per README)
         scanningStateSubject
             .filter { $0 }
             .flatMap { _ in
@@ -124,12 +126,11 @@ class BluetoothManager: NSObject, ObservableObject {
             .sink { [weak self] _ in
                 if self?.isScanning == true && !(self?.isConnected ?? false) {
                     self?.stopScanning()
-                    print("Scanning timeout - will retry automatically")
                 }
             }
             .store(in: &cancellables)
         
-        // Connection health monitoring
+        // Connection health monitoring (30 second intervals per README)
         connectionStateSubject
             .filter { $0 }
             .flatMap { _ in
@@ -150,7 +151,7 @@ class BluetoothManager: NSObject, ObservableObject {
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
         )
         scanningStateSubject.send(true)
-        logger.info("Started scanning for Helm devices", category: .bluetooth)
+        logger.debug("Scanning for Helm devices", category: .bluetooth)
     }
     
     func stopScanning() {
@@ -170,168 +171,143 @@ class BluetoothManager: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - MTU Management
+    // MARK: - MTU Management per README specification
     
     private func requestHigherMTU() {
         guard let peripheral = helmPeripheral else { return }
         
-        // Request maximum MTU immediately after connection
-        // iOS supports up to 512 bytes, but practical limit is often ~185-247
-        let requestedMTU = 512
-        
-        // Check the actual negotiated MTU using maximumWriteValueLength
+        // Request maximum MTU (iOS supports up to 512 bytes, practical ~185-247)
         let maxWriteLength = peripheral.maximumWriteValueLength(for: .withoutResponse)
         let actualMTU = maxWriteLength + 3 // Add ATT overhead back
         
         updateEffectiveMTU(actualMTU)
         
-        logger.info("MTU negotiation - Requested: \(requestedMTU), Actual: \(actualMTU), Write Length: \(maxWriteLength)", category: .bluetooth)
+        logger.debug("MTU negotiated: \(actualMTU) bytes, payload: \(effectivePayload) bytes", category: .bluetooth)
     }
     
     private func updateEffectiveMTU(_ mtu: Int) {
         negotiatedMTU = max(mtu, 23) // Ensure minimum MTU
         effectivePayload = negotiatedMTU - 3 // Account for ATT overhead
-        
-        // Optimize fragmentation threshold based on actual MTU
-        let fragmentThreshold = effectivePayload - 4 // Reserve space for fragment header
-        
-        logger.info("MTU optimized: \(negotiatedMTU) bytes, payload: \(effectivePayload) bytes, fragment threshold: \(fragmentThreshold) bytes", category: .bluetooth)
-        
-        // Test MTU with a small message to verify
-        testMTUCapacity()
     }
     
-    private func testMTUCapacity() {
-        guard let peripheral = helmPeripheral,
-              let characteristic = statusCharacteristic else { return }
-        
-        // Send a test message to verify actual MTU capacity
-        let testMessage = String(repeating: "X", count: min(effectivePayload - 10, 100))
-        let testData = testMessage.data(using: .utf8)!
-        
-        peripheral.writeValue(testData, for: characteristic, type: .withoutResponse)
-        logger.debug("MTU capacity test: sent \(testData.count) bytes", category: .bluetooth)
-    }
-    
-    // MARK: - Fragment Reassembly
+    // MARK: - Fixed Fragment Reassembly
     
     private func handleFragmentedData(_ data: Data) {
-        // First check if this might be a complete JSON message
+        // First check if this is a complete JSON message
         if data.count > 10, let jsonString = String(data: data, encoding: .utf8),
            jsonString.hasPrefix("{") && jsonString.hasSuffix("}") && isValidCompleteJSON(jsonString) {
-            // Hash-based duplicate detection for complete messages
+            
             let messageHash = jsonString.hashValue
-            if lastMessageHash == messageHash {
-                logger.debug("Ignoring duplicate complete JSON message (hash match)", category: .bluetooth)
-                return
+            if lastProcessedMessageHash == messageHash {
+                return // Skip duplicate
             }
-            // This appears to be a complete JSON, try parsing directly
-            logger.debug("Received complete JSON message (\(data.count) bytes), parsing directly", category: .bluetooth)
-            lastMessageHash = messageHash
-            lastProcessedMessage = jsonString
+            
+            logger.debug("Complete JSON (\(data.count) bytes)", category: .bluetooth)
+            lastProcessedMessageHash = messageHash
             parseDeviceStatus(from: data)
             return
         }
         
         guard data.count >= 4 else {
-            logger.warning("Received fragment too small for header", category: .bluetooth)
+            logger.warning("Fragment too small", category: .bluetooth)
             return
         }
         
+        // Parse fragment header: seq(1) + total(1) + length_high(1) + length_low(1)
         let sequenceNum = data[0]
         let totalFragments = data[1]
-        let totalLengthBytes = data.subdata(in: 2..<4)
-        let totalLength = UInt16(totalLengthBytes[0]) << 8 | UInt16(totalLengthBytes[1])
+        let totalLengthHigh = UInt16(data[2])
+        let totalLengthLow = UInt16(data[3])
+        let totalLength = (totalLengthHigh << 8) | totalLengthLow
         let payload = data.subdata(in: 4..<data.count)
-
-        // Create unique message identifier
+        
         let messageId = "\(totalFragments)_\(totalLength)"
         
         // Check for duplicate fragments
         if let currentId = currentMessageId, currentId == messageId {
             if receivedFragments.contains(sequenceNum) {
-                logger.debug("Ignoring duplicate fragment \(sequenceNum + 1)/\(totalFragments)", category: .bluetooth)
-                return
+                return // Skip duplicate
             }
         }
-
-        // Check if we're already processing a different message
+        
+        // Handle new message
         if let currentId = currentMessageId, currentId != messageId {
-            logger.warning("New message started before previous completed, resetting", category: .bluetooth)
+            logger.debug("New message started, resetting buffer", category: .bluetooth)
             resetFragmentBuffer()
         }
         
-        logger.debug("Received fragment \(sequenceNum + 1)/\(totalFragments), payload: \(payload.count) bytes", category: .bluetooth)
+        logger.debug("Fragment \(sequenceNum + 1)/\(totalFragments) (\(payload.count) bytes)", category: .bluetooth)
         
-        // First fragment - initialize reassembly
+        // Initialize for first fragment
         if sequenceNum == 0 {
             resetFragmentBuffer()
             expectedFragments = totalFragments
             expectedTotalLength = totalLength
-            receivedSequence = 0
             currentMessageId = messageId
             receivedFragments = [0]
-            fragmentReceptionTimes = [0: Date()]
             
-            logger.debug("Starting new fragmented message: \(totalFragments) fragments, \(totalLength) bytes total", category: .bluetooth)
+            // Initialize buffer with correct size
+            fragmentBuffer = Data(count: Int(totalLength))
             
-            // Start timeout timer for incomplete messages
+            logger.debug("Starting fragmented message: \(totalFragments) fragments, \(totalLength) bytes", category: .bluetooth)
+            
+            // Start timeout timer
             fragmentTimeout = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
                 Task { @MainActor in
-                    await self?.handleFragmentTimeout()
+                    self?.handleFragmentTimeout()
                 }
             }
         } else if currentMessageId != messageId {
-            logger.warning("Fragment belongs to different message, ignoring", category: .bluetooth)
+            logger.warning("Fragment from different message, ignoring", category: .bluetooth)
             return
         }
         
         // Mark fragment as received
         receivedFragments.insert(sequenceNum)
-        fragmentReceptionTimes[sequenceNum] = Date()
         
-        // Append payload to buffer at correct position (handle out-of-order fragments)
-        let expectedOffset = Int(sequenceNum) * (effectivePayload - 4)
-        if fragmentBuffer.count < expectedOffset + payload.count {
-            fragmentBuffer.count = expectedOffset + payload.count
+        // Calculate correct offset - FIXED bounds checking
+        let fragmentPayloadSize = effectivePayload - 4 // Header size
+        let offset = Int(sequenceNum) * fragmentPayloadSize
+        let endOffset = offset + payload.count
+        
+        // Validate bounds before writing - CRITICAL FIX
+        if endOffset <= fragmentBuffer.count {
+            fragmentBuffer.replaceSubrange(offset..<endOffset, with: payload)
+            logger.debug("Fragment \(sequenceNum + 1) written at offset \(offset)", category: .bluetooth)
+        } else {
+            logger.warning("Fragment \(sequenceNum + 1) exceeds buffer bounds (\(endOffset) > \(fragmentBuffer.count)), dropping", category: .bluetooth)
+            resetFragmentBuffer()
+            return
         }
-        fragmentBuffer.replaceSubrange(expectedOffset..<(expectedOffset + payload.count), with: payload)
         
-        logger.debug("Fragment \(sequenceNum + 1)/\(totalFragments) processed, buffer now \(fragmentBuffer.count) bytes", category: .bluetooth)
-        
-        // Check if message is complete (all fragments received)
+        // Check if complete
         if receivedFragments.count >= expectedFragments {
             fragmentTimeout?.invalidate()
             
-            // Validate that we have all sequence numbers
+            // Validate all fragments received
             let expectedSequences = Set(0..<expectedFragments)
             guard receivedFragments == expectedSequences else {
-                logger.warning("Missing fragments: expected \(expectedSequences), got \(receivedFragments)", category: .bluetooth)
+                logger.warning("Missing fragments, discarding message", category: .bluetooth)
                 resetFragmentBuffer()
                 return
             }
             
-            // Trim buffer to expected length
-            if fragmentBuffer.count > expectedTotalLength {
-                fragmentBuffer = fragmentBuffer.prefix(Int(expectedTotalLength))
-            }
+            // Trim buffer to actual message length
+            let finalData = fragmentBuffer.prefix(Int(expectedTotalLength))
             
-            logger.info("Successfully reassembled message from \(expectedFragments) fragments (\(fragmentBuffer.count) bytes)", category: .bluetooth)
+            logger.info("Reassembled message (\(finalData.count) bytes)", category: .bluetooth)
             
-            // Hash-based duplicate detection for reassembled messages
-            if let jsonString = String(data: fragmentBuffer, encoding: .utf8) {
+            // Duplicate detection
+            if let jsonString = String(data: finalData, encoding: .utf8) {
                 let messageHash = jsonString.hashValue
-                if lastMessageHash == messageHash {
-                    logger.debug("Ignoring duplicate reassembled message (hash match)", category: .bluetooth)
+                if let lastHash = lastProcessedMessageHash, lastHash == messageHash {
                     resetFragmentBuffer()
                     return
                 }
-                lastMessageHash = messageHash
-                lastProcessedMessage = jsonString
+                lastProcessedMessageHash = messageHash
             }
             
-            // Process complete message
-            parseDeviceStatus(from: fragmentBuffer)
+            parseDeviceStatus(from: finalData)
             resetFragmentBuffer()
         }
     }
@@ -340,16 +316,14 @@ class BluetoothManager: NSObject, ObservableObject {
         fragmentBuffer = Data()
         expectedFragments = 0
         expectedTotalLength = 0
-        receivedSequence = 0
         currentMessageId = nil
         receivedFragments.removeAll()
-        fragmentReceptionTimes.removeAll()
         fragmentTimeout?.invalidate()
         fragmentTimeout = nil
     }
     
-    private func handleFragmentTimeout() async {
-        logger.warning("Fragment reassembly timeout - discarding incomplete message", category: .bluetooth)
+    private func handleFragmentTimeout() {
+        logger.warning("Fragment timeout, discarding incomplete message", category: .bluetooth)
         resetFragmentBuffer()
     }
     
@@ -389,12 +363,15 @@ class BluetoothManager: NSObject, ObservableObject {
         return braceCount == 0 && !inString
     }
     
+    // MARK: - Public API following README specification
+    
     func sendWaypoint(latitude: Double, longitude: Double) {
-        guard let characteristic = waypointCharacteristic else { 
-            print("Waypoint characteristic not available")
-            return 
+        guard let characteristic = waypointCharacteristic else {
+            logger.warning("Waypoint characteristic not available", category: .bluetooth)
+            return
         }
         
+        // NMEA-like format per README: $GPS,lat,lon,alt*
         let waypointData = String(format: "$GPS,%.6f,%.6f,0.0*", latitude, longitude)
         let data = waypointData.data(using: .utf8)!
         
@@ -410,43 +387,48 @@ class BluetoothManager: NSObject, ObservableObject {
         sendCommand("NAV_DISABLE")
     }
     
+    func startCalibration() {
+        sendCommand("START_CAL")
+    }
+    
+    func stopCalibration() {
+        sendCommand("STOP_CAL")
+    }
+    
     private func sendCommand(_ command: String) {
         guard let characteristic = commandCharacteristic else {
-            print("Command characteristic not available")
+            logger.warning("Command characteristic not available", category: .bluetooth)
             return
         }
         
         guard let data = command.data(using: .utf8) else {
-            print("Failed to encode command: \(command)")
+            logger.error("Failed to encode command: \(command)", category: .bluetooth)
             return
         }
         
         helmPeripheral?.writeValue(data, for: characteristic, type: .withResponse)
-        logger.info("Sent command to device: \(command)", category: .bluetooth)
+        logger.info("Command sent: \(command)", category: .bluetooth)
     }
     
     private func checkConnectionHealth() {
         guard isConnected, let peripheral = helmPeripheral else { return }
         
         if peripheral.state != .connected {
-            logger.warning("Connection health check failed - peripheral disconnected", category: .bluetooth)
+            logger.warning("Connection health check failed", category: .bluetooth)
             connectionStateSubject.send(false)
         }
     }
     
     private func cleanJSONString(_ jsonString: String) -> String {
-        // Remove control characters and non-printable characters
+        // Remove control characters
         let cleaned = jsonString.unicodeScalars.filter { scalar in
-            // Keep printable ASCII characters and common JSON characters
             return scalar.value >= 32 && scalar.value < 127
         }
         
         let cleanedString = String(String.UnicodeScalarView(cleaned))
-        
-        // Fix common data corruption patterns
         var correctedString = cleanedString
         
-        // Fix corrupted boolean values like "false.9" -> "false"
+        // Fix corruption patterns per README
         correctedString = correctedString.replacingOccurrences(
             of: #""false\.[0-9]+""#,
             with: "false",
@@ -457,22 +439,18 @@ class BluetoothManager: NSObject, ObservableObject {
             with: "true",
             options: .regularExpression
         )
-        
-        // Fix corrupted null values like "null.0" -> "null"
         correctedString = correctedString.replacingOccurrences(
             of: #""null\.[0-9]+""#,
             with: "null",
             options: .regularExpression
         )
-        
-        // Fix corrupted numbers like "123..45" -> "123.45"
         correctedString = correctedString.replacingOccurrences(
             of: #"([0-9]+)\.+([0-9]+)"#,
             with: "$1.$2",
             options: .regularExpression
         )
         
-        // Find the first { and last } to extract JSON object
+        // Extract JSON object
         guard let firstBrace = correctedString.firstIndex(of: "{"),
               let lastBrace = correctedString.lastIndex(of: "}") else {
             return correctedString
@@ -483,24 +461,22 @@ class BluetoothManager: NSObject, ObservableObject {
     
     private func parseDeviceStatus(from data: Data) {
         guard let jsonString = String(data: data, encoding: .utf8) else {
-            logger.error("Failed to decode device status data as UTF8", category: .bluetooth)
+            logger.error("Failed to decode device status data", category: .bluetooth)
             return
         }
         
-        // Clean the JSON string to remove control characters and corruption
         let cleanedJsonString = cleanJSONString(jsonString)
-        logger.debug("Received device status JSON: \(cleanedJsonString)", category: .bluetooth)
+        logger.debug("Device status received", category: .bluetooth)
         
-        // Check if JSON is complete before parsing
         guard isValidCompleteJSON(cleanedJsonString) else {
-            logger.warning("Received incomplete or malformed JSON, ignoring: \(cleanedJsonString.prefix(50))...", category: .bluetooth)
+            logger.warning("Incomplete JSON received", category: .bluetooth)
             return
         }
         
         if let status = DeviceStatus.fromJSONString(cleanedJsonString) {
             deviceStatusSubject.send(status)
         } else {
-            logger.error("Device status parsing failed for JSON: \(cleanedJsonString)", category: .bluetooth)
+            logger.error("Device status parsing failed", category: .bluetooth)
         }
     }
 }
@@ -524,6 +500,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
     
     nonisolated func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
         Task { @MainActor in
+            // Look for device named "Helm" per README
             if peripheral.name?.contains("Helm") == true {
                 stopScanning()
                 connect(peripheral: peripheral)
@@ -534,9 +511,9 @@ extension BluetoothManager: CBCentralManagerDelegate {
     nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         Task { @MainActor in
             connectionStateSubject.send(true)
-            logger.bluetoothConnected(peripheral.name ?? "Unknown Device")
+            logger.bluetoothConnected(peripheral.name ?? "Helm")
             
-            // iOS will auto-negotiate MTU during service discovery
+            // MTU negotiation per README
             requestHigherMTU()
         }
         peripheral.discoverServices([serviceUUID])
@@ -544,16 +521,18 @@ extension BluetoothManager: CBCentralManagerDelegate {
     
     nonisolated func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         Task { @MainActor in
-        connectionStateSubject.send(false)
-        waypointCharacteristic = nil
-        statusCharacteristic = nil
-        commandCharacteristic = nil
-        helmPeripheral = nil
-        negotiatedMTU = 23
-        effectivePayload = 20
-        resetFragmentBuffer()
-        lastProcessedMessage = nil
-        logger.bluetoothDisconnected(peripheral.name ?? "Unknown Device", error: error)
+            connectionStateSubject.send(false)
+            // Clear all characteristics
+            waypointCharacteristic = nil
+            statusCharacteristic = nil
+            commandCharacteristic = nil
+            calibrationDataCharacteristic = nil
+            configCharacteristic = nil
+            helmPeripheral = nil
+            negotiatedMTU = 23
+            effectivePayload = 20
+            resetFragmentBuffer()
+            logger.bluetoothDisconnected(peripheral.name ?? "Helm", error: error)
         }
     }
     
@@ -571,7 +550,15 @@ extension BluetoothManager: CBPeripheralDelegate {
         guard let services = peripheral.services else { return }
         
         for service in services where service.uuid == serviceUUID {
-            peripheral.discoverCharacteristics([waypointCharacteristicUUID, statusCharacteristicUUID, commandCharacteristicUUID], for: service)
+            // Discover all 5 characteristics per README architecture
+            let characteristicUUIDs = [
+                waypointCharacteristicUUID,
+                statusCharacteristicUUID,
+                commandCharacteristicUUID,
+                calibrationDataCharacteristicUUID,
+                configCharacteristicUUID
+            ]
+            peripheral.discoverCharacteristics(characteristicUUIDs, for: service)
         }
     }
     
@@ -588,34 +575,39 @@ extension BluetoothManager: CBPeripheralDelegate {
                     peripheral.setNotifyValue(true, for: characteristic)
                 case commandCharacteristicUUID:
                     commandCharacteristic = characteristic
+                case calibrationDataCharacteristicUUID:
+                    calibrationDataCharacteristic = characteristic
+                    peripheral.setNotifyValue(true, for: characteristic)
+                case configCharacteristicUUID:
+                    configCharacteristic = characteristic
                 default:
                     break
                 }
             }
+            
+            logger.info("BLE characteristics configured", category: .bluetooth)
         }
     }
     
     nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard let data = characteristic.value else { return }
         
-        if characteristic.uuid == statusCharacteristicUUID {
-            Task { @MainActor in
-                // Improved data handling logic
+        Task { @MainActor in
+            if characteristic.uuid == statusCharacteristicUUID {
+                // Handle status data with fragmentation support per README
                 if let dataString = String(data: data, encoding: .utf8), dataString.hasPrefix("{") {
-                    // Looks like JSON - check if complete
                     if isValidCompleteJSON(dataString) {
-                        logger.debug("Received complete JSON (\(data.count) bytes)", category: .bluetooth)
                         parseDeviceStatus(from: data)
                     } else {
-                        logger.debug("Received incomplete JSON, treating as fragment", category: .bluetooth)
                         handleFragmentedData(data)
                     }
                 } else if data.count >= 4 {
-                    // Binary data with header - likely fragmented
-                    logger.debug("Received binary data with header, treating as fragment", category: .bluetooth)
                     handleFragmentedData(data)
-                } else {
-                    logger.warning("Received unknown data format (\(data.count) bytes)", category: .bluetooth)
+                }
+            } else if characteristic.uuid == calibrationDataCharacteristicUUID {
+                // Handle calibration responses per README
+                if let responseString = String(data: data, encoding: .utf8) {
+                    logger.debug("Calibration response: \(responseString)", category: .bluetooth)
                 }
             }
         }
@@ -623,15 +615,13 @@ extension BluetoothManager: CBPeripheralDelegate {
     
     nonisolated func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
-            print("Failed to write to characteristic: \(error)")
-        } else {
-            print("Successfully wrote to characteristic: \(characteristic.uuid)")
+            print("Write error: \(error)")
         }
     }
     
     nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
-            print("Failed to enable notifications: \(error)")
+            print("Notification error: \(error)")
         }
     }
     
@@ -639,18 +629,6 @@ extension BluetoothManager: CBPeripheralDelegate {
         Task { @MainActor in
             logger.warning("BLE services invalidated, reconnecting", category: .bluetooth)
             disconnect()
-        }
-    }
-    
-    // MARK: - MTU Update Handling
-    nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateMTU mtu: Int, error: Error?) {
-        Task { @MainActor in
-            if let error = error {
-                logger.error("MTU negotiation failed", error: error, category: .bluetooth)
-                updateEffectiveMTU(23) // Fall back to default MTU
-            } else {
-                updateEffectiveMTU(mtu)
-            }
         }
     }
 }

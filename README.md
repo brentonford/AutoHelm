@@ -73,6 +73,154 @@ graph TB
 5. System displays navigation arrow and sends RF commands for course corrections
 6. Real-time status transmitted back to iOS app
 
+## Bluetooth Communication Architecture
+
+Based on the AutoHelm implementation, this section describes the best-practice architecture for Bluetooth Low Energy (BLE) communication between the Arduino UNO R4 WiFi and iPhone. The Arduino UNO R4 WiFi uses its built-in ESP32 co-processor for BLE (via the ArduinoBLE library), supporting peripheral mode with low power consumption but constraints like a maximum MTU of ~512 bytes (typically negotiated to 23-185 bytes in practice) and limited concurrent connections.
+
+### 1. Overview
+
+**BLE Role Assignment:**
+- Arduino UNO R4 WiFi acts as the **Peripheral** (advertises and provides services)
+- iPhone acts as the **Central** (scans, connects, and interacts with characteristics)
+
+**Key Data Flows:**
+- **From iPhone to Arduino**: GPS waypoints (target locations) and commands (enable/disable navigation, start calibration)
+- **From Arduino to iPhone**: GPS status (current position, satellites, heading) and responses (calibration data, acknowledgments)
+
+**Design Principles:**
+- **Efficiency**: Use compact, text-based formats (NMEA-inspired strings or JSON) to fit within BLE packet limits (~20-500 bytes per write/notify)
+- **Reliability**: Implement notifications for real-time updates, acknowledgments for critical commands, and auto-reconnection logic
+- **Power Optimization**: Leverage BLE's low-energy features; advertise only when needed, use short connection intervals (15-30ms), and minimize data transmission frequency (status updates every 1-5 seconds)
+- **Security**: Use pairing if sensitive data is involved, but keep it optional for simplicity
+- **Limitations Addressed**: No classic Bluetooth (only BLE on UNO R4 WiFi); handle iOS background mode restrictions; avoid high-bandwidth transfers
+
+### 2. BLE Service Definition
+
+Define a single custom GATT service to encapsulate all functionality, reducing discovery overhead.
+
+- **Service UUID**: `0000FFE0-0000-1000-8000-00805F9B34FB`
+- **Advertisement Data**: Arduino advertises with the device name "Helm" and the service UUID
+- **MTU Negotiation**: Request a higher MTU (e.g., 185 bytes) during connection to allow larger JSON payloads, but fallback gracefully if negotiated lower
+
+### 3. Characteristics
+
+Use 5 characteristics within the service, each with specific properties (Read, Write, Notify):
+
+| Characteristic UUID | Properties | Purpose | Data Format | Max Size |
+|---------------------|------------|---------|-------------|----------|
+| `0000FFE1-0000-1000-8000-00805F9B34FB` | Write (No Response) | Send GPS waypoints or targets from iPhone to Arduino | NMEA-like string: `$GPS,lat,lon,alt*` (e.g., `$GPS,-32.940931,151.718029,45.2*`) | 50 bytes |
+| `0000FFE2-0000-1000-8000-00805F9B34FB` | Notify | Stream GPS status and responses from Arduino to iPhone (current position, fix quality) | JSON object (e.g., `{"has_fix":true,"satellites":8,"lat":-32.940931,"lon":151.718029,"heading":127.5,"dop":1.2}`) | 200 bytes |
+| `0000FFE3-0000-1000-8000-00805F9B34FB` | Write (No Response) | Send commands from iPhone to Arduino (navigation control, calibration) | String commands: `NAV_ENABLE`, `NAV_DISABLE`, `START_CAL`, `STOP_CAL`, etc. | 30 bytes |
+| `0000FFE4-0000-1000-8000-00805F9B34FB` | Notify | Stream real-time data like calibration readings or command acknowledgments from Arduino | JSON (e.g., `{"cmd":"NAV_ENABLE","status":"OK"}` or calibration: `{"x":25.4,"y":-15.2,"z":67.8}`) | 100 bytes |
+| `0000FFE5-0000-1000-8000-00805F9B34FB` | Read/Write | Device configuration (read firmware version, write settings like update interval) | JSON (e.g., `{"version":"1.0","interval_ms":1000}`) | 50 bytes |
+
+**Best Practices:**
+- Use "Write Without Response" for low-latency commands/waypoints to avoid blocking
+- Enable notifications on connect for streaming (iPhone subscribes via `setNotifyValue(true)`)
+- Fragment large data if exceeding MTU (rare here, as payloads are small)
+
+### 4. Data Protocols
+
+**Serialization:**
+- **Strings for Simplicity**: Use ASCII/UTF-8; terminate with `*` for waypoints to enable easy parsing on Arduino
+- **JSON for Structured Data**: Compact keys (e.g., "lat" instead of "latitude") to save bytes. Use libraries like ArduinoJson on Arduino and JSONEncoder/Decoder on iOS
+- **Error Codes**: Include in responses (e.g., `{"status":"ERR_INVALID_CMD"}`) for robustness
+
+**Transmission Frequency:**
+- Status notifications: Every 1-2 seconds when active; reduce to 5-10 seconds in idle mode
+- Commands/Waypoints: On-demand (e.g., user taps in app)
+
+**Validation:**
+- **Arduino**: Parse incoming data, validate checksums (e.g., simple XOR for strings), and send ACK/NAK via notify
+- **iPhone**: Handle partial data with timeouts (e.g., 5s retry)
+
+### 5. Connection Management
+
+**Advertising (Arduino):**
+```cpp
+// Start advertising on boot
+BLE.begin();
+BLE.setLocalName("Helm");
+BLE.advertise();
+// Stop/restart advertising based on battery or state to save power
+```
+
+**Scanning and Connection (iPhone):**
+- Use `CBCentralManager` to scan for the service UUID
+- **Auto-reconnect**: Implement a timer (every 2s) to rescan if disconnected
+- Handle states: Monitor `peripheral.state` and reconnect on `.disconnected`
+
+**Background Mode (iOS):**
+- Enable "Uses Bluetooth LE accessories" in `UIBackgroundModes` (Info.plist) for continued operation in background
+- Request always authorization for Bluetooth to persist connections
+
+**Disconnection Handling:**
+- **Graceful teardown**: On disconnect, reset states (e.g., disable navigation)
+- **Reconnection Policy**: iPhone retries up to 3 times before notifying user
+
+### 6. Error Handling and Reliability
+
+**Common Errors:**
+- **Connection Failures**: Log and retry (e.g., due to interference on 2.4GHz band)
+- **Data Corruption**: Use checksums in strings; validate JSON parsing
+- **Permissions**: iPhone prompts for Bluetooth/Location; handle denials with UI alerts
+
+**Best Practices:**
+- **Queuing**: On Arduino, queue outgoing notifications if not connected
+- **Timeouts**: 5-10s for responses; resend commands if no ACK
+- **Logging**: Use Serial on Arduino and Xcode console on iOS for debugging
+- **Testing**: Simulate drops with `BLE.disconnect()`; use tools like LightBlue app for iOS to mock peripherals
+
+### 7. Security Considerations
+
+- **Pairing/Bonding**: Optional; enable if GPS data is sensitive (use `BLE.setPairable(true)` on Arduino). iPhones support just-works pairing
+- **Encryption**: BLE inherently supports link-layer encryption post-pairing
+- **Data Privacy**: Avoid transmitting unnecessary personal data; comply with iOS location permissions
+- **Limitations**: No advanced auth on UNO R4 WiFi; rely on app-level checks if needed
+
+### 8. Implementation Tips
+
+**Arduino Side (C++ with ArduinoBLE):**
+```cpp
+// Initialize: In setup(), create service/characteristics and add to BLE
+BLEService gpsService("FFE0");
+BLEStringCharacteristic waypointChar("FFE1", BLEWrite, 50);
+// ... Add others
+
+void loop() {
+    if (BLE.connected()) {
+        if (waypointChar.written()) {
+            // Parse and process
+            statusChar.writeValue("{\"status\":\"OK\"}");
+        }
+    }
+}
+```
+
+**iOS Side (Swift with Core Bluetooth):**
+```swift
+class BluetoothManager: NSObject, CBCentralManagerDelegate {
+    var centralManager: CBCentralManager!
+    var peripheral: CBPeripheral?
+    
+    override init() {
+        centralManager = CBCentralManager(delegate: self, queue: nil)
+    }
+    
+    func sendWaypoint(lat: Double, lon: Double) {
+        let data = Data("$GPS,\(lat),\(lon),0*".utf8)
+        peripheral?.writeValue(data, for: waypointChar, type: .withoutResponse)
+    }
+    // Handle discoveries, connections, and notifications
+}
+```
+
+**Integration with Project:**
+- Align with AutoHelm's non-blocking init (e.g., `bleAvailable = gpsReceiver.begin("Helm")`)
+- Test incrementally: Start with connection, then add waypoints, then status streaming
+
+This architecture is scalable, fits within hardware limits, and builds directly on AutoHelm's proven design. The system prioritizes low-latency, low-power exchanges suitable for real-time GPS data and commands, avoiding unnecessary complexity to minimize overhead.
+
 ## Prerequisites
 
 ### Hardware Requirements
@@ -199,16 +347,6 @@ const uint8_t SystemConfig::SCREEN_ADDRESS = 0x3C;
 ```
 
 ### iOS App Configuration
-
-**Bluetooth Service UUIDs:**
-```swift
-// BluetoothManager.swift
-private let serviceUUID = "0000FFE0-0000-1000-8000-00805F9B34FB"
-private let gpsCharacteristic = "0000FFE1-0000-1000-8000-00805F9B34FB"
-private let statusCharacteristic = "0000FFE2-0000-1000-8000-00805F9B34FB"
-private let calibrationCommandUUID = "0000FFE3-0000-1000-8000-00805F9B34FB"
-private let calibrationDataUUID = "0000FFE4-0000-1000-8000-00805F9B34FB"
-```
 
 **Permissions (Info.plist):**
 ```xml
@@ -602,16 +740,19 @@ Test: Use RTL-SDR to verify 433MHz transmissions
 
 ### BLE Protocol
 
+The BLE protocol follows the comprehensive architecture outlined in the [Bluetooth Communication Architecture](#bluetooth-communication-architecture) section.
+
 **Service UUID:** `0000FFE0-0000-1000-8000-00805F9B34FB`
 
 **Characteristics:**
 
 | UUID | Type | Purpose |
 |------|------|---------|
-| 0000FFE1 | Write | GPS waypoint data |
+| 0000FFE1 | Write (No Response) | GPS waypoint data |
 | 0000FFE2 | Notify | Navigation status |
-| 0000FFE3 | Write | Calibration commands |
+| 0000FFE3 | Write (No Response) | Calibration commands |
 | 0000FFE4 | Notify | Calibration data |
+| 0000FFE5 | Read/Write | Device configuration |
 
 **Commands:**
 ```

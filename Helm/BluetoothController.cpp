@@ -6,14 +6,16 @@ BluetoothController::WaypointCallback BluetoothController::waypointCallback = nu
 BluetoothController::NavigationCallback BluetoothController::navigationCallback = nullptr;
 
 BluetoothController::BluetoothController() : 
-    bluetoothService("19B10000-E8F2-537E-4F6C-D104768A1214"),
-    waypointCharacteristic("19B10001-E8F2-537E-4F6C-D104768A1214", BLEWrite, 32),
-    statusCharacteristic("19B10002-E8F2-537E-4F6C-D104768A1214", BLENotify, 1024),
-    calibrationCommandCharacteristic("19B10003-E8F2-537E-4F6C-D104768A1214", BLEWrite, 32),
-    calibrationDataCharacteristic("19B10004-E8F2-537E-4F6C-D104768A1214", BLENotify, 128),
+    // Following exact README architecture UUIDs
+    bluetoothService("0000FFE0-0000-1000-8000-00805F9B34FB"),
+    waypointCharacteristic("0000FFE1-0000-1000-8000-00805F9B34FB", BLEWrite, 50),
+    statusCharacteristic("0000FFE2-0000-1000-8000-00805F9B34FB", BLENotify, 200),
+    commandCharacteristic("0000FFE3-0000-1000-8000-00805F9B34FB", BLEWrite, 30),
+    calibrationDataCharacteristic("0000FFE4-0000-1000-8000-00805F9B34FB", BLENotify, 100),
+    configCharacteristic("0000FFE5-0000-1000-8000-00805F9B34FB", BLERead | BLEWrite, 50),
     initialized(false),
     connected(false),
-    effectiveMTU(23),
+    effectiveMTU(20),
     negotiatedMTU(23) {
     instance = this;
 }
@@ -24,31 +26,39 @@ bool BluetoothController::begin(const char* deviceName) {
         return false;
     }
     
-    // ArduinoBLE handles MTU negotiation automatically
+    // Set device name exactly as "Helm" per README
+    BLE.setLocalName("Helm");
+    BLE.setDeviceName("Helm");
     
-    BLE.setLocalName(deviceName);
-    BLE.setDeviceName(deviceName);
-    
-    BLE.setConnectionInterval(6, 24);
+    // Optimize connection parameters for BLE efficiency
+    BLE.setConnectionInterval(15, 30);  // 15-30ms as per README
     BLE.setSupervisionTimeout(400);
     
+    // Add all characteristics to service following README architecture
     bluetoothService.addCharacteristic(waypointCharacteristic);
     bluetoothService.addCharacteristic(statusCharacteristic);
-    bluetoothService.addCharacteristic(calibrationCommandCharacteristic);
+    bluetoothService.addCharacteristic(commandCharacteristic);
     bluetoothService.addCharacteristic(calibrationDataCharacteristic);
+    bluetoothService.addCharacteristic(configCharacteristic);
     
     BLE.addService(bluetoothService);
     
+    // Set up event handlers
     BLE.setEventHandler(BLEConnected, onConnect);
     BLE.setEventHandler(BLEDisconnected, onDisconnect);
     waypointCharacteristic.setEventHandler(BLEWritten, onWaypointReceived);
-    calibrationCommandCharacteristic.setEventHandler(BLEWritten, onCalibrationCommand);
+    commandCharacteristic.setEventHandler(BLEWritten, onCommandReceived);
+    configCharacteristic.setEventHandler(BLEWritten, onConfigWritten);
     
+    // Set advertising parameters for discoverability
     BLE.setAdvertisingInterval(100);
     BLE.setConnectable(true);
-    
     BLE.setAdvertisedServiceUuid(bluetoothService.uuid());
     BLE.setAppearance(0x0000);
+    
+    // Initialize device configuration
+    String initialConfig = "{\"version\":\"1.0\",\"interval_ms\":1000}";
+    configCharacteristic.writeValue(initialConfig.c_str());
     
     BLE.advertise();
     
@@ -56,27 +66,25 @@ bool BluetoothController::begin(const char* deviceName) {
     Serial.print("BLE advertising as: ");
     Serial.println(deviceName);
     Serial.print("BLE Service UUID: ");
-    Serial.println("19B10000-E8F2-537E-4F6C-D104768A1214");
-    Serial.println("BLE configured for higher MTU negotiation");
+    Serial.println("0000FFE0-0000-1000-8000-00805F9B34FB");
+    Serial.println("BLE configured following README architecture with 5 characteristics");
     
     return true;
 }
 
 void BluetoothController::requestHigherMTU() {
-    // ArduinoBLE handles negotiation, but we can optimize for higher MTU
-    // Set connection parameters that favor higher MTU
-    Serial.println("BLE: Optimizing connection parameters for higher MTU");
+    // Request maximum MTU supported by iOS (up to 512 bytes)
+    Serial.println("BLE: Requesting higher MTU for improved data throughput");
     
     // Start with conservative estimate and detect actual capacity
-    updateEffectiveMTU(185); // Conservative iOS-compatible starting point
+    updateEffectiveMTU(185); // Conservative iOS-compatible starting point per README
 }
 
 void BluetoothController::updateEffectiveMTU(int mtu) {
-    negotiatedMTU = mtu;
-    // Conservative payload calculation accounting for ATT overhead
-    effectiveMTU = mtu - 3;
+    negotiatedMTU = max(mtu, 23); // Ensure minimum MTU
+    effectiveMTU = negotiatedMTU - 3; // Account for ATT overhead
     
-    Serial.print("BLE: MTU negotiated to ");
+    Serial.print("BLE: MTU updated - negotiated: ");
     Serial.print(negotiatedMTU);
     Serial.print(" bytes, effective payload: ");
     Serial.print(effectiveMTU);
@@ -88,6 +96,7 @@ void BluetoothController::update() {
     
     BLE.poll();
     
+    // Auto-restart advertising if disconnected
     static unsigned long lastAdvertiseCheck = 0;
     unsigned long currentTime = millis();
     
@@ -96,7 +105,6 @@ void BluetoothController::update() {
         
         BLE.stopAdvertise();
         delay(100);
-        
         BLE.advertise();
     }
 }
@@ -118,7 +126,7 @@ void BluetoothController::sendStatus(const char* jsonData) {
         return;
     }
     
-    // Try to send complete message first
+    // Try to send complete message first if it fits within MTU
     if (jsonLength <= effectiveMTU) {
         statusCharacteristic.writeValue(jsonData);
         Serial.print("BLE: Sent complete JSON (");
@@ -127,14 +135,14 @@ void BluetoothController::sendStatus(const char* jsonData) {
         Serial.print((jsonLength * 100) / effectiveMTU);
         Serial.println("%");
         
-        // Learn from successful transmissions
+        // Learn from successful transmissions to optimize MTU
         if (jsonLength > effectiveMTU * 0.8) {
             detectActualMTU(jsonLength);
         }
         return;
     }
     
-    // Use fragmentation for larger messages
+    // Use fragmentation for larger messages following README spec
     Serial.print("BLE: JSON too large (");
     Serial.print(jsonLength);
     Serial.println(" bytes), using fragmentation");
@@ -151,21 +159,22 @@ void BluetoothController::sendStatus(const char* jsonData) {
 bool BluetoothController::sendFragmentedMessage(const char* jsonData) {
     int totalLength = strlen(jsonData);
     
-    // Fragment size: MTU - 4 (header: seq + total + length_high + length_low)
+    // Fragment size: MTU - 4 bytes for header (seq + total + length_high + length_low)
     int fragmentSize = effectiveMTU - 4;
     uint8_t totalFragments = (totalLength + fragmentSize - 1) / fragmentSize;
     
     if (totalFragments > 255) {
-        Serial.println("BLE: Message too large for fragmentation");
+        Serial.println("BLE: Message too large for fragmentation (>255 fragments)");
         return false;
     }
     
-    Serial.print("BLE: Sending ");
+    Serial.print("BLE: Fragmenting into ");
     Serial.print(totalFragments);
-    Serial.print(" fragments (fragment size: ");
+    Serial.print(" fragments (size: ");
     Serial.print(fragmentSize);
-    Serial.println(" bytes)");
+    Serial.println(" bytes each)");
     
+    // Send fragments with proper throttling per README
     for (uint8_t seq = 0; seq < totalFragments; seq++) {
         int offset = seq * fragmentSize;
         int remainingLength = totalLength - offset;
@@ -173,8 +182,8 @@ bool BluetoothController::sendFragmentedMessage(const char* jsonData) {
         
         sendFragment(jsonData + offset, currentFragmentSize, seq, totalFragments, totalLength);
         
-        // Increased throttle to prevent overwhelming iOS fragment reassembly
-        delay(75); // Increased delay for better reliability
+        // Throttle transmission to prevent overwhelming iOS fragment reassembly
+        delay(50); // Optimized delay per README recommendations
         
         Serial.print("BLE: Sent fragment ");
         Serial.print(seq + 1);
@@ -189,31 +198,23 @@ bool BluetoothController::sendFragmentedMessage(const char* jsonData) {
 }
 
 void BluetoothController::sendFragment(const char* data, int dataLen, uint8_t seqNum, uint8_t totalFragments, uint16_t totalLength) {
-    // Create fragment with header: seq(1) + total(1) + totalLen_high(1) + totalLen_low(1) + data
-    char fragment[effectiveMTU];
+    // Create fragment with 4-byte header as per README spec
+    char fragment[effectiveMTU + 4];
     
     fragment[0] = seqNum;
     fragment[1] = totalFragments;
-    fragment[2] = (totalLength >> 8) & 0xFF;
-    fragment[3] = totalLength & 0xFF;
+    fragment[2] = (totalLength >> 8) & 0xFF; // High byte
+    fragment[3] = totalLength & 0xFF;        // Low byte
     
-    // Copy exact number of data bytes
+    // Copy payload data
     memcpy(fragment + 4, data, dataLen);
     
     // Send fragment with exact size
     statusCharacteristic.writeValue((const void*)fragment, dataLen + 4);
-    
-    Serial.print("BLE: Fragment header - seq:");
-    Serial.print(seqNum);
-    Serial.print(" total:");
-    Serial.print(totalFragments);
-    Serial.print(" len:");
-    Serial.print(totalLength);
-    Serial.print(" payload:");
-    Serial.println(dataLen);
 }
 
 String BluetoothController::createEssentialStatusJSON() {
+    // Minimal JSON structure per README fallback specification
     String json = "{";
     json += "\"has_fix\":false,";
     json += "\"satellites\":0,";
@@ -232,11 +233,10 @@ String BluetoothController::createEssentialStatusJSON() {
 void BluetoothController::probeMTUCapacity() {
     if (!connected) return;
     
-    // Send progressively larger test messages to detect actual MTU
-    Serial.println("BLE: Probing MTU capacity");
+    Serial.println("BLE: Probing MTU capacity to optimize throughput");
     
-    // Test with larger payload to see if we can exceed 185 bytes
-    String testJson = createTestJSON(200);  // Try 200 byte message
+    // Test progressively larger messages to detect actual MTU limits
+    String testJson = createTestJSON(200);
     statusCharacteristic.writeValue(testJson.c_str());
     
     Serial.print("BLE: MTU probe sent ");
@@ -245,12 +245,12 @@ void BluetoothController::probeMTUCapacity() {
 }
 
 void BluetoothController::detectActualMTU(int successfulLength) {
-    // Learn from successful large transmissions
+    // Learn from successful large transmissions to optimize MTU
     if (successfulLength > effectiveMTU && successfulLength <= 512) {
         Serial.print("BLE: Detected higher MTU capacity, updating from ");
         Serial.print(effectiveMTU);
         Serial.print(" to ");
-        Serial.println(successfulLength + 10); // Add small buffer
+        Serial.println(successfulLength + 10);
         
         updateEffectiveMTU(successfulLength + 10);
     }
@@ -260,7 +260,7 @@ String BluetoothController::createTestJSON(int targetSize) {
     String json = "{\"test\":true,\"mtu_probe\":\"";
     
     // Fill with padding to reach target size
-    int paddingNeeded = targetSize - json.length() - 3; // Account for closing
+    int paddingNeeded = targetSize - json.length() - 3;
     for (int i = 0; i < paddingNeeded && i < 300; i++) {
         json += (char)('A' + (i % 26));
     }
@@ -277,22 +277,20 @@ bool BluetoothController::isValidCompleteJSON(const char* jsonData) {
     int len = strlen(jsonData);
     if (jsonData[len - 1] != '}') return false;
     
-    // Check for common corruption patterns
+    // Check for corruption patterns per README validation
     String jsonStr = String(jsonData);
     
-    // Check for corrupted boolean values like "false.9"
     if (jsonStr.indexOf("false.") >= 0 || jsonStr.indexOf("true.") >= 0) {
-        Serial.println("BLE: Detected corrupted boolean values in JSON");
+        Serial.println("BLE: Detected corrupted boolean values");
         return false;
     }
     
-    // Check for corrupted null values
     if (jsonStr.indexOf("null.") >= 0) {
-        Serial.println("BLE: Detected corrupted null values in JSON");
+        Serial.println("BLE: Detected corrupted null values");
         return false;
     }
     
-    // Basic brace matching
+    // Basic brace matching validation
     int braceCount = 0;
     bool inString = false;
     bool escaped = false;
@@ -334,7 +332,6 @@ uint8_t BluetoothController::calculateChecksum(const char* data, int length) {
 
 void BluetoothController::sendCalibrationData(const char* jsonData) {
     if (!initialized || !connected) return;
-    
     calibrationDataCharacteristic.writeValue(jsonData);
 }
 
@@ -343,115 +340,119 @@ void BluetoothController::broadcastStatus(const GPSData& gps, const NavigationSt
     
     String statusJson = createStatusJSON(gps, nav, heading);
     
-    // Throttle identical status messages
+    // Throttle identical status messages to optimize BLE bandwidth
     static String lastStatusJson = "";
     static unsigned long lastSendTime = 0;
     unsigned long currentTime = millis();
     
-    // Only send if content changed or minimum interval passed
-    if (statusJson != lastStatusJson || (currentTime - lastSendTime) >= 500) {
+    // Send if content changed or minimum interval passed (1-2 seconds per README)
+    if (statusJson != lastStatusJson || (currentTime - lastSendTime) >= 1000) {
         sendStatus(statusJson.c_str());
         lastStatusJson = statusJson;
         lastSendTime = currentTime;
     }
 }
 
-String BluetoothController::createCompressedStatusJSON() {
-    return createEssentialStatusJSON();
-}
-
 String BluetoothController::createStatusJSON(const GPSData& gps, const NavigationState& nav, float heading) {
+    // Create JSON following exact README specification
     String json = "{";
     
-    // Ensure boolean values are properly formatted
+    // GPS fix status (boolean)
     json += "\"has_fix\":";
     json += gps.hasFix ? "true" : "false";
     json += ",";
     
+    // Satellite count
     json += "\"satellites\":" + String(gps.satellites) + ",";
     
-    // Validate and format floating point numbers
+    // Current position with validation
     float lat = (gps.latitude >= -90.0 && gps.latitude <= 90.0) ? gps.latitude : 0.0;
     float lon = (gps.longitude >= -180.0 && gps.longitude <= 180.0) ? gps.longitude : 0.0;
-    float alt = (gps.altitude >= -1000.0 && gps.altitude <= 50000.0) ? gps.altitude : 0.0;
     
     json += "\"currentLat\":" + String(lat, 6) + ",";
     json += "\"currentLon\":" + String(lon, 6) + ",";
-    json += "\"altitude\":" + String(alt, 1) + ",";
+    json += "\"altitude\":" + String(gps.altitude, 1) + ",";
     
-    // Validate speed
-    float speed = (gps.speedKnots >= 0.0 && gps.speedKnots < 999.0) ? gps.speedKnots : 0.0;
-    json += "\"speed_knots\":" + String(speed, 2) + ",";
+    // Speed and time data
+    json += "\"speed_knots\":" + String(gps.speedKnots, 2) + ",";
+    json += "\"time\":\"" + gps.timeString + "\",";
+    json += "\"date\":\"" + gps.dateString + "\",";
     
-    // Clean and validate time/date strings
-    String cleanTime = gps.timeString;
-    String cleanDate = gps.dateString;
+    // DOP values per README specification
+    json += "\"hdop\":" + String(gps.hdop, 2) + ",";
+    json += "\"vdop\":" + String(gps.vdop, 2) + ",";
+    json += "\"pdop\":" + String(gps.pdop, 2) + ",";
     
-    // Remove problematic characters
-    cleanTime.replace("\"", "");
-    cleanTime.replace("\n", "");
-    cleanTime.replace("\r", "");
-    cleanTime.replace("*", "");
-    cleanTime.trim();
-    
-    cleanDate.replace("\"", "");
-    cleanDate.replace("\n", "");
-    cleanDate.replace("\r", "");
-    cleanDate.replace("*", "");
-    cleanDate.trim();
-    
-    // Validate format
-    if (cleanTime.length() < 6 || cleanTime.length() > 8) {
-        cleanTime = "00:00:00";
-    }
-    if (cleanDate.length() < 6 || cleanDate.length() > 10) {
-        cleanDate = "01/01/00";
-    }
-    
-    json += "\"time\":\"" + cleanTime + "\",";
-    json += "\"date\":\"" + cleanDate + "\",";
-    
-    // Validate DOP values
-    float hdop = (gps.hdop > 0.0 && gps.hdop < 50.0) ? gps.hdop : 99.9;
-    float vdop = (gps.vdop > 0.0 && gps.vdop < 50.0) ? gps.vdop : 99.9;
-    float pdop = (gps.pdop > 0.0 && gps.pdop < 50.0) ? gps.pdop : 99.9;
-    
-    json += "\"hdop\":" + String(hdop, 1) + ",";
-    json += "\"vdop\":" + String(vdop, 1) + ",";
-    json += "\"pdop\":" + String(pdop, 1) + ",";
-    
-    // Validate heading
+    // Current heading
     float validHeading = (heading >= 0.0 && heading <= 360.0) ? heading : 0.0;
     json += "\"heading\":" + String(validHeading, 1) + ",";
     
-    // Validate navigation values
-    float distance = (nav.distanceToTarget >= 0.0) ? nav.distanceToTarget : 0.0;
-    float bearing = (nav.bearingToTarget >= 0.0 && nav.bearingToTarget <= 360.0) ? nav.bearingToTarget : 0.0;
+    // Navigation data
+    json += "\"distance\":" + String(nav.distanceToTarget, 1) + ",";
+    json += "\"bearing\":" + String(nav.bearingToTarget, 1);
     
-    json += "\"distance\":" + String(distance, 1) + ",";
-    json += "\"bearing\":" + String(bearing, 1);
-    
-    // Target coordinates
+    // Target coordinates (null if no target)
     if (nav.mode != NavigationMode::IDLE && (nav.targetLatitude != 0.0 || nav.targetLongitude != 0.0)) {
-        float targetLat = (nav.targetLatitude >= -90.0 && nav.targetLatitude <= 90.0) ? nav.targetLatitude : 0.0;
-        float targetLon = (nav.targetLongitude >= -180.0 && nav.targetLongitude <= 180.0) ? nav.targetLongitude : 0.0;
-        json += ",\"targetLat\":" + String(targetLat, 6);
-        json += ",\"targetLon\":" + String(targetLon, 6);
+        json += ",\"targetLat\":" + String(nav.targetLatitude, 6);
+        json += ",\"targetLon\":" + String(nav.targetLongitude, 6);
     } else {
         json += ",\"targetLat\":null,\"targetLon\":null";
     }
     
     json += "}";
     
-    // Final validation check
+    // Final validation
     if (!isValidCompleteJSON(json.c_str())) {
         Serial.println("BLE: Generated JSON failed validation, using fallback");
-        Serial.print("BLE: Invalid JSON was: ");
-        Serial.println(json);
         return createEssentialStatusJSON();
     }
     
     return json;
+}
+
+void BluetoothController::processCommand(const String& command) {
+    Serial.print("BLE: Processing command: ");
+    Serial.println(command);
+    
+    if (command == "NAV_ENABLE") {
+        if (navigationCallback) {
+            navigationCallback(true);
+            sendCommandResponse("NAV_ENABLE", "OK");
+        }
+    } else if (command == "NAV_DISABLE") {
+        if (navigationCallback) {
+            navigationCallback(false);
+            sendCommandResponse("NAV_DISABLE", "OK");
+        }
+    } else if (command == "START_CAL") {
+        Serial.println("Starting compass calibration via BLE");
+        sendCommandResponse("START_CAL", "OK");
+    } else if (command == "STOP_CAL") {
+        Serial.println("Stopping compass calibration via BLE");
+        sendCommandResponse("STOP_CAL", "OK");
+    } else {
+        sendCommandResponse(command, "ERR_UNKNOWN_COMMAND");
+    }
+}
+
+void BluetoothController::sendCommandResponse(const String& command, const String& status) {
+    String response = "{\"cmd\":\"" + command + "\",\"status\":\"" + status + "\"}";
+    calibrationDataCharacteristic.writeValue(response.c_str());
+}
+
+void BluetoothController::updateDeviceConfig(const String& key, const String& value) {
+    // Update device configuration and notify via config characteristic
+    String config = "{\"" + key + "\":\"" + value + "\"}";
+    configCharacteristic.writeValue(config.c_str());
+}
+
+String BluetoothController::getDeviceConfig() {
+    String config = "{";
+    config += "\"version\":\"" + String(SystemConfig::VERSION) + "\",";
+    config += "\"interval_ms\":1000,";
+    config += "\"mtu\":" + String(negotiatedMTU);
+    config += "}";
+    return config;
 }
 
 bool BluetoothController::isInitialized() const {
@@ -472,14 +473,9 @@ void BluetoothController::onConnect(BLEDevice central) {
         Serial.print("BLE connected to: ");
         Serial.println(central.address());
         
-        // Request higher MTU optimization
+        // Initialize MTU optimization following README architecture
         instance->requestHigherMTU();
-        
-        // Start with conservative MTU and probe for higher capacity
-        int startingMTU = 185; // iOS-compatible baseline
-        instance->updateEffectiveMTU(startingMTU);
-        
-        // Probe for actual MTU capacity
+        instance->updateEffectiveMTU(185); // Start with iOS-compatible baseline
         instance->probeMTUCapacity();
         
         BLE.stopAdvertise();
@@ -497,9 +493,8 @@ void BluetoothController::onDisconnect(BLEDevice central) {
         Serial.println(central.address());
         
         delay(500);
-        
         BLE.advertise();
-        Serial.println("BLE advertising restarted - ready for new connections");
+        Serial.println("BLE advertising restarted");
     }
 }
 
@@ -516,6 +511,7 @@ void BluetoothController::onWaypointReceived(BLEDevice central, BLECharacteristi
         Serial.print("BLE waypoint received: ");
         Serial.println(waypointData);
         
+        // Parse NMEA-like format per README: $GPS,lat,lon,alt*
         if (waypointData.startsWith("$GPS,") && waypointData.endsWith("*")) {
             int firstComma = waypointData.indexOf(',');
             int secondComma = waypointData.indexOf(',', firstComma + 1);
@@ -526,7 +522,7 @@ void BluetoothController::onWaypointReceived(BLEDevice central, BLECharacteristi
                 float latitude = waypointData.substring(firstComma + 1, secondComma).toFloat();
                 float longitude = waypointData.substring(secondComma + 1, thirdComma).toFloat();
                 
-                Serial.print("Waypoint received via BLE: ");
+                Serial.print("Parsed waypoint: ");
                 Serial.print(latitude, 6);
                 Serial.print(", ");
                 Serial.println(longitude, 6);
@@ -539,7 +535,7 @@ void BluetoothController::onWaypointReceived(BLEDevice central, BLECharacteristi
     }
 }
 
-void BluetoothController::onCalibrationCommand(BLEDevice central, BLECharacteristic characteristic) {
+void BluetoothController::onCommandReceived(BLEDevice central, BLECharacteristic characteristic) {
     const uint8_t* data = characteristic.value();
     int length = characteristic.valueLength();
     
@@ -549,23 +545,23 @@ void BluetoothController::onCalibrationCommand(BLEDevice central, BLECharacteris
             command += (char)data[i];
         }
         
-        Serial.print("BLE calibration command: ");
-        Serial.println(command);
-        
-        if (command == "START_CAL") {
-            Serial.println("Starting compass calibration via BLE");
-        } else if (command == "STOP_CAL") {
-            Serial.println("Stopping compass calibration via BLE");
-        } else if (command == "NAV_ENABLE") {
-            Serial.println("Navigation enabled via BLE");
-            if (navigationCallback) {
-                navigationCallback(true);
-            }
-        } else if (command == "NAV_DISABLE") {
-            Serial.println("Navigation disabled via BLE");
-            if (navigationCallback) {
-                navigationCallback(false);
-            }
+        if (instance) {
+            instance->processCommand(command);
         }
+    }
+}
+
+void BluetoothController::onConfigWritten(BLEDevice central, BLECharacteristic characteristic) {
+    const uint8_t* data = characteristic.value();
+    int length = characteristic.valueLength();
+    
+    if (length > 0) {
+        String configData = "";
+        for (int i = 0; i < length; i++) {
+            configData += (char)data[i];
+        }
+        
+        Serial.print("BLE configuration updated: ");
+        Serial.println(configData);
     }
 }

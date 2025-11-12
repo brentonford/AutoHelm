@@ -94,34 +94,30 @@ struct WaypointListView: View {
     private var waypointsList: some View {
         List {
             ForEach(filteredWaypoints) { waypoint in
-                WaypointRowView(
-                    waypoint: waypoint,
-                    onSend: { onSend(waypoint) },
-                    onEdit: { onEdit(waypoint) }
-                )
-                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                    Button(role: .destructive) {
-                        onDelete(waypoint)
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                    
-                    Button {
-                        onEdit(waypoint)
-                    } label: {
-                        Label("Edit", systemImage: "pencil")
-                    }
-                    .tint(.blue)
-                    
-                    if bluetoothManager.isConnected {
-                        Button {
-                            onSend(waypoint)
+                WaypointRowView(waypoint: waypoint)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            onDelete(waypoint)
                         } label: {
-                            Label("Send", systemImage: "paperplane")
+                            Label("Delete", systemImage: "trash")
                         }
-                        .tint(.green)
+                        
+                        Button {
+                            onEdit(waypoint)
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                        }
+                        .tint(.blue)
+                        
+                        if bluetoothManager.isConnected {
+                            Button {
+                                onSend(waypoint)
+                            } label: {
+                                Label("Send", systemImage: "paperplane")
+                            }
+                            .tint(.green)
+                        }
                     }
-                }
             }
             .onDelete { indexSet in
                 for index in indexSet {
@@ -134,8 +130,6 @@ struct WaypointListView: View {
 
 struct WaypointRowView: View {
     let waypoint: Waypoint
-    let onSend: () -> Void
-    let onEdit: () -> Void
     @EnvironmentObject var bluetoothManager: BluetoothManager
     
     var body: some View {
@@ -170,44 +164,21 @@ struct WaypointRowView: View {
                 
                 Spacer()
                 
-                VStack(spacing: 8) {
-                    Button(action: onSend) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "paperplane.fill")
-                                .font(.caption)
-                            Text("Send")
-                                .font(.caption)
-                        }
+                // Connection status indicator only
+                if !bluetoothManager.isConnected {
+                    VStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                            .font(.caption)
+                        Text("Not Connected")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(!bluetoothManager.isConnected)
-                    
-                    Button(action: onEdit) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "pencil")
-                                .font(.caption)
-                            Text("Edit")
-                                .font(.caption)
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-            }
-            
-            if !bluetoothManager.isConnected {
-                HStack {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.orange)
-                        .font(.caption)
-                    Text("Helm device not connected")
-                        .font(.caption)
-                        .foregroundColor(.orange)
                 }
             }
         }
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
     }
     
     private var coordinateString: String {

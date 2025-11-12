@@ -11,15 +11,24 @@ struct Waypoint: Identifiable, Codable, Equatable, Hashable {
     let createdDate: Date
     var lastUpdatedDate: Date
     
-    init(coordinate: CLLocationCoordinate2D, name: String = "Waypoint", comments: String = "", iconName: String = "mappin.circle.fill") {
+    init(coordinate: CLLocationCoordinate2D, name: String? = nil, comments: String = "", iconName: String = "mappin.circle.fill") {
         self.id = UUID()
         self.coordinate = coordinate
-        self.name = name
+        self.name = name ?? Self.generateLocationBasedName(for: coordinate)
         self.comments = comments
         self.photoData = nil
         self.iconName = iconName
         self.createdDate = Date()
         self.lastUpdatedDate = Date()
+    }
+    
+    private static func generateLocationBasedName(for coordinate: CLLocationCoordinate2D) -> String {
+        let latDirection = coordinate.latitude >= 0 ? "N" : "S"
+        let lonDirection = coordinate.longitude >= 0 ? "E" : "W"
+        let latDegrees = abs(coordinate.latitude)
+        let lonDegrees = abs(coordinate.longitude)
+        
+        return String(format: "%.4f°%@ %.4f°%@", latDegrees, latDirection, lonDegrees, lonDirection)
     }
     
     mutating func updateLastModified() {
