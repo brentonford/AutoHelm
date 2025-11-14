@@ -100,6 +100,19 @@ struct MapView: View {
                             }
                         }
                         
+                        // Enhanced: Show navigation enabled status in Map tab
+                        if bluetoothManager.isConnected {
+                            HStack {
+                                Circle()
+                                    .fill(isNavigationActive ? .green : .gray)
+                                    .frame(width: 8, height: 8)
+                                
+                                Text(navigationStatusText)
+                                    .font(.caption2)
+                                    .foregroundColor(isNavigationActive ? .green : .secondary)
+                            }
+                        }
+                        
                         // Show navigation data when available
                         if let deviceStatus = bluetoothManager.deviceStatus,
                            let _ = deviceStatus.targetCoordinate {
@@ -190,6 +203,31 @@ struct MapView: View {
             })
         }
     }
+    
+    // MARK: - Navigation State Computed Properties
+    
+    private var isNavigationActive: Bool {
+        guard let deviceStatus = bluetoothManager.deviceStatus else { return false }
+        return deviceStatus.targetCoordinate != nil && deviceStatus.hasGpsFix
+    }
+    
+    private var navigationStatusText: String {
+        guard bluetoothManager.isConnected else { return "Not Connected" }
+        
+        if let deviceStatus = bluetoothManager.deviceStatus {
+            if !deviceStatus.hasGpsFix {
+                return "No GPS Fix"
+            } else if deviceStatus.targetCoordinate == nil {
+                return "No Waypoint"
+            } else {
+                return "Navigation Active"
+            }
+        }
+        
+        return "Status Unknown"
+    }
+    
+    // MARK: - Map Functionality
     
     private var currentMapStyle: MapStyle {
         switch mapType {

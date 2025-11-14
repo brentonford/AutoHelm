@@ -114,13 +114,15 @@ void loop() {
     // Get current navigation state
     NavigationState navState = navigationManager.getState();
     
-    // Output navigation status to serial for testing
+    // Enhanced navigation status output with safety information
     if (navigationManager.isNavigationEnabled() && navState.mode != NavigationMode::IDLE) {
         static unsigned long lastNavOutput = 0;
         unsigned long currentTime = millis();
         
         if (currentTime - lastNavOutput >= 2000) { // Output every 2 seconds
-            Serial.print("NAV: Mode=");
+            Serial.print("NAV: Status=");
+            Serial.print(navigationManager.getNavigationStatus());
+            Serial.print(" | Mode=");
             switch(navState.mode) {
                 case NavigationMode::IDLE: Serial.print("IDLE"); break;
                 case NavigationMode::NAVIGATING: Serial.print("NAVIGATING"); break;
@@ -136,7 +138,13 @@ void loop() {
             Serial.print(navState.bearingToTarget, 1);
             Serial.print("° | RelAngle=");
             Serial.print(navState.relativeAngle, 1);
-            Serial.println("°");
+            Serial.print("° | SafetyOK=");
+            Serial.print(navigationManager.canNavigate(gpsData) ? "YES" : "NO");
+            if (gpsData.hdop < 99.0) {
+                Serial.print(" | HDOP=");
+                Serial.print(gpsData.hdop, 1);
+            }
+            Serial.println();
             lastNavOutput = currentTime;
         }
     }
@@ -323,8 +331,21 @@ void onWaypointReceived(float latitude, float longitude) {
 }
 
 void onNavigationControlReceived(bool enabled) {
+    GPSData gpsData = gpsManager.getData();
+    
     if (enabled) {
-        Serial.println("Navigation enabled via BLE command");
+        // Enhanced safety checks before enabling navigation
+        if (!navigationManager.canNavigate(gpsData)) {
+            Serial.println("Navigation enable rejected - safety requirements not met");
+            Serial.print("GPS Fix: "); Serial.println(gpsData.hasFix ? "YES" : "NO");
+            Serial.print("Satellites: "); Serial.println(gpsData.satellites);
+            Serial.print("HDOP: "); Serial.println(gpsData.hdop);
+            Serial.print("Has Target: "); Serial.println(navigationManager.hasValidTarget() ? "YES" : "NO");
+            buzzer.playGpsFixLost(); // Error sound
+            return;
+        }
+        
+        Serial.println("Navigation enabled via BLE command - all safety checks passed");
         navigationManager.setNavigationEnabled(true);
         buzzer.playNavigationEnabled();
     } else {

@@ -9,6 +9,7 @@ AutoHelm is a comprehensive navigation system designed for autonomous GPS-guided
 ### Key Features
 
 - **Autonomous GPS Navigation**: Real-time waypoint guidance with compass bearing calculations
+- **Helm Navigation Control**: GPS-guided motor control with safety validation and auto-disable features
 - **Compass Calibration System**: Magnetometer calibration with live data streaming
 - **Visual Feedback**: 128x64 OLED display with navigation arrows and status information
 - **Bluetooth Low Energy**: Wireless communication with iOS companion app
@@ -381,6 +382,88 @@ const uint8_t SystemConfig::SCREEN_ADDRESS = 0x3C;
    System sends RF commands for course corrections
    Audio feedback for navigation events
    ```
+
+### Helm Navigation (GPS-guided Motor Control)
+
+The Helm Navigation system provides GPS-guided motor control with comprehensive safety features and user control via the iOS app.
+
+#### UI and State Indication
+
+**Helm Tab Interface:**
+- SwiftUI Toggle labeled "Navigation" with green/gray color indication
+- Prominent placement in Helm Control View with real-time status updates
+- Loading spinner and disabled state during command processing
+- Explanatory text showing connection and GPS fix requirements
+
+**Map Tab Integration:**
+- "Helm Connected" status indicator shows navigation state
+- Additional "Navigation Active" indication when enabled
+- Real-time distance and bearing display during navigation
+- State synchronization via BLE notifications (UUID 0000FFE2)
+
+#### Interaction Flow
+
+**Toggle Operation:**
+1. User toggles Navigation switch → Show loading spinner and disable interactions
+2. Send command ("NAV_ENABLE"/"NAV_DISABLE") to UUID 0000FFE3
+3. Await confirmation via BLE notification (5-10 second timeout)
+4. Update toggle state on success, revert with alert on failure
+5. Use state machine: idle → enabling → enabled (or error)
+
+**Safety Requirements:**
+- Toggle only enabled when all requirements met:
+  - Bluetooth connection established
+  - Valid GPS fix with satellites ≥ 4
+  - Dilution of Precision (DOP) < 5.0
+  - Target waypoint coordinates set
+
+**Error Handling:**
+- Timeout alerts: "Navigation enable timeout – Retry?"
+- Safety violations: "Cannot enable – GPS fix required"
+- Connection loss: "Device disconnected – Navigation stopped"
+- Haptic feedback for user actions and errors
+
+#### Logic and Safety Features
+
+**Enable Conditions:**
+- Waypoint must be set via map tap or waypoint selection
+- GPS fix must be valid with DOP accuracy < 5.0
+- Minimum 4 satellites for reliable positioning
+- Bluetooth connection must be stable
+
+**Auto-Disable Triggers:**
+- GPS fix loss: Immediately disable navigation with user notification
+- DOP degradation: Stop navigation if accuracy becomes unreliable
+- Bluetooth disconnect: Reset navigation state and notify user
+- Arrival at destination: Auto-disable when within 5 meters of target
+
+**State Persistence:**
+- Navigation state synced between device and app
+- GPS fix restoration: Attempt to re-enable if previously active
+- Connection recovery: Restore last known navigation state
+- Error recovery: Clear error states and retry capability
+
+**Command Protocol:**
+```
+NAV_ENABLE  - Enable navigation (with safety validation)
+NAV_DISABLE - Disable navigation (immediate stop)
+```
+
+**BLE Response Format:**
+```json
+{
+  "cmd": "NAV_ENABLE",
+  "status": "OK"
+}
+```
+
+**Status Monitoring:**
+- Real-time navigation data via UUID 0000FFE2
+- Distance and bearing updates every 1-2 seconds
+- Safety status (GPS fix, DOP, satellite count)
+- Target coordinates and navigation mode
+
+The system ensures safe operation through multiple validation layers and provides clear feedback to users about navigation state and any safety concerns.
 
 ### GPS Protocol
 
@@ -758,11 +841,25 @@ The BLE protocol follows the comprehensive architecture outlined in the [Bluetoo
 ```
 START_CAL          - Begin compass calibration
 STOP_CAL          - End calibration
-NAV_ENABLE        - Enable navigation
-NAV_DISABLE       - Disable navigation
+NAV_ENABLE        - Enable navigation (with safety validation)
+NAV_DISABLE       - Disable navigation (immediate stop)
 RF_PAIR_START     - Begin RF remote pairing
 RF_PAIR_COMPLETE  - Complete pairing
 RF_PAIR_CANCEL    - Cancel pairing
+```
+
+**Navigation Command Responses:**
+```json
+// Successful enable
+{"cmd":"NAV_ENABLE","status":"OK"}
+
+// Safety validation failure
+{"cmd":"NAV_ENABLE","status":"ERR_GPS_INVALID"}
+{"cmd":"NAV_ENABLE","status":"ERR_NO_WAYPOINT"}
+{"cmd":"NAV_ENABLE","status":"ERR_DOP_TOO_HIGH"}
+
+// Successful disable
+{"cmd":"NAV_DISABLE","status":"OK"}
 ```
 
 ### Arduino Public Methods

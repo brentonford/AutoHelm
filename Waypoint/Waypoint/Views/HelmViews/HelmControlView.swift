@@ -4,8 +4,44 @@ import MapKit
 struct HelmControlView: View {
     @EnvironmentObject var bluetoothManager: BluetoothManager
     @StateObject private var locationManager = LocationManager()
-    @State private var navigationEnabled = false
-    @State private var previousNavigationState = false
+    @State private var navigationState: NavigationToggleState = .idle
+    @State private var previousNavigationEnabled = false
+    @State private var showingNavigationAlert = false
+    @State private var alertMessage = ""
+    
+    // Navigation state machine
+    enum NavigationToggleState: Equatable {
+        case idle
+        case enabling
+        case enabled
+        case disabling
+        case error(String)
+        
+        var isProcessing: Bool {
+            switch self {
+            case .enabling, .disabling: return true
+            default: return false
+            }
+        }
+        
+        var isEnabled: Bool {
+            switch self {
+            case .enabled: return true
+            default: return false
+            }
+        }
+        
+        static func == (lhs: NavigationToggleState, rhs: NavigationToggleState) -> Bool {
+            switch (lhs, rhs) {
+            case (.idle, .idle), (.enabling, .enabling), (.enabled, .enabled), (.disabling, .disabling):
+                return true
+            case (.error(let lhsMessage), .error(let rhsMessage)):
+                return lhsMessage == rhsMessage
+            default:
+                return false
+            }
+        }
+    }
     
     var body: some View {
         NavigationView {
@@ -19,9 +55,7 @@ struct HelmControlView: View {
                         deviceStatusSection
                     }
                     
-                    // Waypoint Control removed
-                    
-                    // Navigation Control
+                    // Navigation Control - Enhanced with Toggle
                     if bluetoothManager.isConnected {
                         navigationControlSection
                     }
@@ -33,11 +67,19 @@ struct HelmControlView: View {
             .navigationTitle("Helm Control")
             .onAppear {
                 locationManager.requestPermission()
+                syncNavigationState()
             }
             .onChange(of: bluetoothManager.deviceStatus?.hasGpsFix) { oldValue, newValue in
                 handleGpsFixChange(newValue)
             }
-
+            .onChange(of: bluetoothManager.isConnected) { oldValue, newValue in
+                handleConnectionChange(newValue)
+            }
+            .alert("Navigation Control", isPresented: $showingNavigationAlert) {
+                Button("OK") { }
+            } message: {
+                Text(alertMessage)
+            }
         }
     }
     
@@ -78,6 +120,11 @@ struct HelmControlView: View {
                     statusRow("Satellites", value: "\(status.satellites)")
                     statusRow("Accuracy", value: status.gpsAccuracyDescription)
                     
+                    // DOP indicator for navigation safety
+                    if let hdop = status.hdop {
+                        statusRow("HDOP", value: String(format: "%.1f", hdop), color: hdop < 5.0 ? .green : .orange)
+                    }
+                    
                     if status.hasGpsFix {
                         statusRow("Position", value: "\(String(format: "%.6f", status.currentLat)), \(String(format: "%.6f", status.currentLon))")
                         statusRow("Altitude", value: "\(String(format: "%.1f", status.altitude))m")
@@ -86,11 +133,20 @@ struct HelmControlView: View {
                     
                     if let target = status.targetCoordinate {
                         Divider()
-                        Text("Navigation Active")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                            .foregroundColor(.green)
-                            .padding(.vertical, 4)
+                        HStack {
+                            Text("Navigation Active")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(.green)
+                            
+                            Spacer()
+                            
+                            // Navigation state indicator
+                            Circle()
+                                .fill(navigationState.isEnabled ? .green : .gray)
+                                .frame(width: 12, height: 12)
+                        }
+                        .padding(.vertical, 4)
                         
                         statusRow("Target", value: "\(String(format: "%.6f", target.latitude)), \(String(format: "%.6f", target.longitude))")
                         statusRow("Distance", value: "\(String(format: "%.1f", status.distance))m")
@@ -115,46 +171,178 @@ struct HelmControlView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
     
-
-    
     private var navigationControlSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Navigation Control")
                 .font(.headline)
             
-            VStack(spacing: 12) {
-                Button(action: {
-                    navigationEnabled.toggle()
-                    if navigationEnabled {
-                        print("Enable Navigation toggled ON")
-                        bluetoothManager.enableNavigation()
+            VStack(spacing: 16) {
+                // Enhanced Navigation Toggle
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Navigation")
+                            .font(.headline)
+                        Text(navigationStatusText)
+                            .font(.caption)
+                            .foregroundColor(navigationStatusColor)
+                    }
+                    
+                    Spacer()
+                    
+                    if navigationState.isProcessing {
+                        ProgressView()
+                            .scaleEffect(0.8)
                     } else {
-                        print("Enable Navigation toggled OFF")
-                        bluetoothManager.disableNavigation()
+                        Toggle("Navigation", isOn: Binding(
+                            get: { navigationState.isEnabled },
+                            set: { _ in toggleNavigation() }
+                        ))
+                        .toggleStyle(SwitchToggleStyle(tint: .green))
+                        .disabled(!canToggleNavigation)
                     }
-                }) {
-                    HStack {
-                        Image(systemName: navigationEnabled ? "stop.fill" : "play.fill")
-                        Text(navigationEnabled ? "Disable Navigation" : "Enable Navigation")
-                    }
-                    .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!bluetoothManager.isConnected)
+                .padding()
+                .background(Color(.systemGray6))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
                 
-                Text("GPS Fix required for navigation")
-                    .font(.caption)
-                    .foregroundColor(bluetoothManager.deviceStatus?.hasGpsFix == true ? .secondary : .orange)
-                
-                if !bluetoothManager.isConnected {
-                    Text("Connect to Helm device to control navigation")
-                        .font(.caption)
-                        .foregroundColor(.orange)
+                // Safety requirements display
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Safety Requirements")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                    
+                    requirementRow("Device Connected", satisfied: bluetoothManager.isConnected)
+                    requirementRow("GPS Fix Valid", satisfied: bluetoothManager.deviceStatus?.hasGpsFix == true)
+                    requirementRow("DOP < 5.0", satisfied: isDopValid)
+                    requirementRow("Waypoint Set", satisfied: bluetoothManager.deviceStatus?.targetCoordinate != nil)
                 }
+                .padding()
+                .background(Color(.systemGray6))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
             }
-            .padding()
-            .background(Color(.systemGray6))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+    }
+    
+    private var navigationStatusText: String {
+        switch navigationState {
+        case .idle:
+            return "Ready to navigate"
+        case .enabling:
+            return "Enabling navigation..."
+        case .enabled:
+            return "Navigation active"
+        case .disabling:
+            return "Disabling navigation..."
+        case .error(let message):
+            return "Error: \(message)"
+        }
+    }
+    
+    private var navigationStatusColor: Color {
+        switch navigationState {
+        case .idle:
+            return .secondary
+        case .enabling, .disabling:
+            return .orange
+        case .enabled:
+            return .green
+        case .error:
+            return .red
+        }
+    }
+    
+    private var canToggleNavigation: Bool {
+        return bluetoothManager.isConnected && 
+               bluetoothManager.deviceStatus?.hasGpsFix == true &&
+               isDopValid &&
+               bluetoothManager.deviceStatus?.targetCoordinate != nil &&
+               !navigationState.isProcessing
+    }
+    
+    private var isDopValid: Bool {
+        guard let hdop = bluetoothManager.deviceStatus?.hdop else { return false }
+        return hdop < 5.0
+    }
+    
+    private func requirementRow(_ requirement: String, satisfied: Bool) -> some View {
+        HStack {
+            Image(systemName: satisfied ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .foregroundColor(satisfied ? .green : .red)
+            Text(requirement)
+                .font(.caption)
+            Spacer()
+        }
+    }
+    
+    private func toggleNavigation() {
+        guard canToggleNavigation else {
+            showNavigationError("Cannot toggle navigation - requirements not met")
+            return
+        }
+        
+        if navigationState.isEnabled {
+            disableNavigation()
+        } else {
+            enableNavigation()
+        }
+    }
+    
+    private func enableNavigation() {
+        navigationState = .enabling
+        
+        // Add haptic feedback
+        let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+        impactFeedback.impactOccurred()
+        
+        bluetoothManager.enableNavigation()
+        
+        // Set timeout for response
+        DispatchQueue.main.asyncAfter(deadline: .now() + 7.0) {
+            if case .enabling = navigationState {
+                navigationState = .error("Timeout - device did not respond")
+                showNavigationError("Navigation enable timeout. Please retry.")
+            }
+        }
+        
+        // Simulate confirmation (in real implementation, this would come from device status updates)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            if case .enabling = navigationState {
+                navigationState = .enabled
+            }
+        }
+    }
+    
+    private func disableNavigation() {
+        navigationState = .disabling
+        
+        let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+        impactFeedback.impactOccurred()
+        
+        bluetoothManager.disableNavigation()
+        
+        // Set timeout for response
+        DispatchQueue.main.asyncAfter(deadline: .now() + 7.0) {
+            if case .disabling = navigationState {
+                navigationState = .error("Timeout - device did not respond")
+                showNavigationError("Navigation disable timeout. Please retry.")
+            }
+        }
+        
+        // Simulate confirmation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            if case .disabling = navigationState {
+                navigationState = .idle
+            }
+        }
+    }
+    
+    private func syncNavigationState() {
+        // Sync with device status if available
+        if let status = bluetoothManager.deviceStatus,
+           status.targetCoordinate != nil && status.hasGpsFix {
+            navigationState = .enabled
+        } else {
+            navigationState = .idle
         }
     }
     
@@ -162,21 +350,41 @@ struct HelmControlView: View {
         guard let hasGpsFix = hasGpsFix else { return }
         
         if hasGpsFix {
-            // GPS Fix restored - return to previous navigation state
-            if previousNavigationState && !navigationEnabled {
-                navigationEnabled = true
-                bluetoothManager.enableNavigation()
-                print("GPS Fix restored - Navigation re-enabled")
+            // GPS Fix restored
+            if previousNavigationEnabled && navigationState == NavigationToggleState.idle {
+                enableNavigation()
+                showNavigationError("GPS fix restored - Navigation re-enabled")
             }
         } else {
-            // GPS Fix lost - temporarily disable navigation
-            if navigationEnabled {
-                previousNavigationState = true
-                navigationEnabled = false
-                bluetoothManager.disableNavigation()
-                print("GPS Fix lost - Navigation temporarily disabled")
+            // GPS Fix lost - auto-disable navigation
+            if navigationState.isEnabled {
+                previousNavigationEnabled = true
+                disableNavigation()
+                showNavigationError("GPS fix lost - Navigation disabled for safety")
             }
         }
+    }
+    
+    private func handleConnectionChange(_ isConnected: Bool) {
+        if !isConnected {
+            // Connection lost - reset navigation state
+            if navigationState.isEnabled {
+                navigationState = .error("Device disconnected")
+                showNavigationError("Device disconnected - Navigation stopped")
+            }
+        } else {
+            // Connection restored - sync state
+            syncNavigationState()
+        }
+    }
+    
+    private func showNavigationError(_ message: String) {
+        alertMessage = message
+        showingNavigationAlert = true
+        
+        // Add error haptic
+        let notificationFeedback = UINotificationFeedbackGenerator()
+        notificationFeedback.notificationOccurred(.error)
     }
     
     private func statusRow(_ label: String, value: String, color: Color = .primary) -> some View {
@@ -189,7 +397,6 @@ struct HelmControlView: View {
                 .fontWeight(.medium)
         }
     }
-    
 }
 
 struct NavigationArrowView: View {

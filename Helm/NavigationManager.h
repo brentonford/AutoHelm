@@ -22,7 +22,11 @@ class NavigationManager {
 private:
     NavigationState state;
     bool navigationEnabled;
+    bool lastGpsFix; // Track GPS fix state changes
     unsigned long lastUpdateTime;
+    
+    // Enhanced safety validation methods
+    bool isGpsAccuracyValid(const GPSData& gpsData) const;
     
 public:
     NavigationManager();
@@ -33,6 +37,13 @@ public:
     bool hasArrived() const;
     bool isNavigationEnabled() const;
     void clearTarget();
+    
+    // Enhanced navigation control methods
+    bool canNavigate(const GPSData& gpsData) const;
+    bool hasValidTarget() const;
+    String getNavigationStatus() const;
+    bool shouldCorrectHeading(const GPSData& gpsData, float currentHeading) const;
+    float getHeadingCorrection() const;
 };
 
 #endif
