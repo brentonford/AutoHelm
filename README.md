@@ -8,7 +8,7 @@ AutoHelm is a comprehensive navigation system designed for autonomous GPS-guided
 - **Helm Navigation Control**: GPS-guided motor control with safety validation and auto-disable features
 - **Compass Calibration System**: Magnetometer calibration with live data streaming
 - **Bluetooth Low Energy**: Wireless communication with iOS companion app
-- **RF Motor Control**: 433MHz wireless control for compatible trolling motors (Watersnake)
+- **RF Motor Control**: 433MHz wireless control
 - **Offline Map Support**: Download and store OpenStreetMap tiles for offline navigation
 - **Waypoint Management**: Create, edit, and manage waypoints with photos and custom icons
 
@@ -240,7 +240,7 @@ writeReg(CC1101Reg::PKTCTRL0, 0x32); // Async serial mode
 
 Run calibration procedure via iOS app for accurate readings. Default calibration values are stored in CompassCalibration struct.
 
-## RF Protocol (Watersnake Motor)
+## RF Protocol
 
 ### Signal Parameters
 
@@ -385,7 +385,7 @@ The ESP32 uses its native BLE stack (BLEDevice, BLEServer, BLECharacteristic). T
 ```bash
 # Monitor transmissions
 rtl_433 -f 433.017M -s 250k -g 40 -R 0 \
-  -X 'n=Watersnake,m=FSK_MC_ZEROBIT,s=52,l=104,r=200'
+  -X 'n=remote,m=FSK_MC_ZEROBIT,s=52,l=104,r=200'
 
 # View in GQRX
 # Set frequency to 433.017 MHz
@@ -400,7 +400,7 @@ Initializing CC1101... Version: 0x14 SUCCESS
 Initializing GPS... SUCCESS
 Initializing compass... SUCCESS
 Initializing BLE... SUCCESS
-[Watersnake] Ready
+Ready
 Commands: R/L/U/D/M/S (hold), r/l/u/d/m/s (single), 0 (release)
 ```
 
