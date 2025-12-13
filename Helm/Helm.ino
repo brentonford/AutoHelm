@@ -1,5 +1,6 @@
 #include "DataModels.h"
 #include "CC1101.h"
+#include "Remote.h"
 
 CC1101 cc1101(
     Pins::cc1101Cs,
@@ -8,7 +9,13 @@ CC1101 cc1101(
     Pins::cc1101Mosi
 );
 
+Remote remote(cc1101, Pins::cc1101Gdo0);
+
 bool cc1101Available = false;
+bool rmtAvailable = false;
+
+// Test payload: preamble + sync (no device ID or command)
+const char* testPayload = "2aaaaaaad391d391";
 
 void setup() {
     Serial.begin(Config::serialBaud);
@@ -22,13 +29,15 @@ void setup() {
     cc1101Available = cc1101.begin();
     Serial.println(cc1101Available ? "SUCCESS" : "FAILED");
 
-    if (!cc1101Available) {
-        Serial.println("[CC1101] Check wiring and power (3.3V only)");
+    if (cc1101Available) {
+        Serial.print("[RMT] Initializing... ");
+        rmtAvailable = remote.begin();
+        Serial.println(rmtAvailable ? "SUCCESS" : "FAILED");
     }
 
     Serial.println();
     Serial.println("[Helm] Setup complete");
-    Serial.println("[Helm] Commands: 't' = test TX carrier");
+    Serial.println("[Helm] Commands: 't' = test TX carrier, 'm' = test Manchester");
 }
 
 void loop() {
@@ -42,6 +51,12 @@ void loop() {
         cc1101.startTx();
         delay(100);
         cc1101.stopTx();
+        Serial.println("[TX] Done");
+    }
+
+    if (c == 'm' && rmtAvailable) {
+        Serial.println("[TX] Test Manchester payload");
+        remote.transmitPayload(testPayload);
         Serial.println("[TX] Done");
     }
 }
