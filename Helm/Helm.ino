@@ -1,4 +1,14 @@
 #include "DataModels.h"
+#include "CC1101.h"
+
+CC1101 cc1101(
+    Pins::cc1101Cs,
+    Pins::cc1101Sck,
+    Pins::cc1101Miso,
+    Pins::cc1101Mosi
+);
+
+bool cc1101Available = false;
 
 void setup() {
     Serial.begin(Config::serialBaud);
@@ -8,18 +18,15 @@ void setup() {
     Serial.println("=== Helm System Starting ===");
     Serial.println();
 
-    Serial.println("[Config] Pin assignments:");
-    Serial.printf("  CC1101 CS:   GPIO %d\n", Pins::cc1101Cs);
-    Serial.printf("  CC1101 GDO0: GPIO %d\n", Pins::cc1101Gdo0);
-    Serial.printf("  CC1101 SCK:  GPIO %d\n", Pins::cc1101Sck);
-    Serial.printf("  CC1101 MISO: GPIO %d\n", Pins::cc1101Miso);
-    Serial.printf("  CC1101 MOSI: GPIO %d\n", Pins::cc1101Mosi);
-    Serial.printf("  GPS RX:      GPIO %d\n", Pins::gpsRx);
-    Serial.printf("  GPS TX:      GPIO %d\n", Pins::gpsTx);
-    Serial.printf("  I2C SDA:     GPIO %d\n", Pins::i2cSda);
-    Serial.printf("  I2C SCL:     GPIO %d\n", Pins::i2cScl);
-    Serial.println();
+    Serial.print("[CC1101] Initializing... ");
+    cc1101Available = cc1101.begin();
+    Serial.println(cc1101Available ? "SUCCESS" : "FAILED");
 
+    if (!cc1101Available) {
+        Serial.println("[CC1101] Check wiring and power (3.3V only)");
+    }
+
+    Serial.println();
     Serial.println("[Helm] Setup complete");
 }
 
