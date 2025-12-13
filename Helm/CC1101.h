@@ -51,6 +51,9 @@ public:
     CC1101(uint8_t csPin, uint8_t sckPin, uint8_t misoPin, uint8_t mosiPin);
 
     bool begin();
+    void configure();
+    void startTx();
+    void stopTx();
     void writeReg(uint8_t addr, uint8_t value);
     uint8_t readStatusReg(uint8_t addr);
     void strobe(uint8_t cmd);

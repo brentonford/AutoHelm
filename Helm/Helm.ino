@@ -28,7 +28,20 @@ void setup() {
 
     Serial.println();
     Serial.println("[Helm] Setup complete");
+    Serial.println("[Helm] Commands: 't' = test TX carrier");
 }
 
 void loop() {
+    if (!Serial.available())
+        return;
+
+    char c = Serial.read();
+
+    if (c == 't' && cc1101Available) {
+        Serial.println("[TX] Test carrier 100ms");
+        cc1101.startTx();
+        delay(100);
+        cc1101.stopTx();
+        Serial.println("[TX] Done");
+    }
 }
