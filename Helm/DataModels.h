@@ -23,3 +23,27 @@ namespace Config {
     constexpr uint32_t serialBaud = 115200;
     constexpr uint32_t gpsBaud    = 9600;
 }
+
+struct GpsData {
+    float latitude;
+    float longitude;
+    float altitude;
+    float hdop;
+    float vdop;
+    float pdop;
+    uint8_t satellites;
+    bool hasFix;
+    uint32_t timestamp;
+
+    GpsData()
+        : latitude(0.0f)
+        , longitude(0.0f)
+        , altitude(0.0f)
+        , hdop(99.0f)
+        , vdop(99.0f)
+        , pdop(99.0f)
+        , satellites(0)
+        , hasFix(false)
+        , timestamp(0) {
+    }
+};
