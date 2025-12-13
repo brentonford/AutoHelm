@@ -12,10 +12,7 @@ CC1101 cc1101(
 Remote remote(cc1101, Pins::cc1101Gdo0);
 
 bool cc1101Available = false;
-bool rmtAvailable = false;
-
-// Test payload: preamble + sync (no device ID or command)
-const char* testPayload = "2aaaaaaad391d391";
+bool remoteAvailable = false;
 
 void setup() {
     Serial.begin(Config::serialBaud);
@@ -30,33 +27,47 @@ void setup() {
     Serial.println(cc1101Available ? "SUCCESS" : "FAILED");
 
     if (cc1101Available) {
-        Serial.print("[RMT] Initializing... ");
-        rmtAvailable = remote.begin();
-        Serial.println(rmtAvailable ? "SUCCESS" : "FAILED");
+        Serial.print("[Remote] Initializing... ");
+        remoteAvailable = remote.begin();
+        Serial.println(remoteAvailable ? "SUCCESS" : "FAILED");
     }
 
     Serial.println();
     Serial.println("[Helm] Setup complete");
-    Serial.println("[Helm] Commands: 't' = test TX carrier, 'm' = test Manchester");
+    Serial.println();
+    Serial.println("Commands:");
+    Serial.println("  Hold:   R/L/U/D/M/S (right/left/up/down/motor/momentary)");
+    Serial.println("  Single: r/l/u/d/m/s");
+    Serial.println("  Release: 0");
 }
 
 void loop() {
     if (!Serial.available())
         return;
 
+    if (!remoteAvailable)
+        return;
+
     char c = Serial.read();
 
-    if (c == 't' && cc1101Available) {
-        Serial.println("[TX] Test carrier 100ms");
-        cc1101.startTx();
-        delay(100);
-        cc1101.stopTx();
-        Serial.println("[TX] Done");
-    }
+    switch (c) {
+        // Hold commands (uppercase)
+        case 'R': remote.transmitHold(Button::Right); break;
+        case 'L': remote.transmitHold(Button::Left); break;
+        case 'U': remote.transmitHold(Button::Up); break;
+        case 'D': remote.transmitHold(Button::Down); break;
+        case 'M': remote.transmitHold(Button::Motor); break;
+        case 'S': remote.transmitHold(Button::Momentary); break;
 
-    if (c == 'm' && rmtAvailable) {
-        Serial.println("[TX] Test Manchester payload");
-        remote.transmitPayload(testPayload);
-        Serial.println("[TX] Done");
+        // Single commands (lowercase)
+        case 'r': remote.transmitSingle(Button::Right); break;
+        case 'l': remote.transmitSingle(Button::Left); break;
+        case 'u': remote.transmitSingle(Button::Up); break;
+        case 'd': remote.transmitSingle(Button::Down); break;
+        case 'm': remote.transmitSingle(Button::Motor); break;
+        case 's': remote.transmitSingle(Button::Momentary); break;
+
+        // Release
+        case '0': remote.transmitSingle(Button::Release); break;
     }
 }

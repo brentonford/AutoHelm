@@ -44,7 +44,7 @@ Build the minimum viable product (MVP) through incremental, testable phases. Eac
 
 ## Phase 1: ESP32 + CC1101 RF Control
 
-**Goal:** Transmit RF commands that control the Watersnake trolling motor.
+**Goal:** Transmit RF commands that control the device.
 
 **Why First:** RF transmission is the core differentiator. Validating motor control early confirms the fundamental capability works before investing in navigation logic.
 
@@ -105,9 +105,9 @@ Build the minimum viable product (MVP) through incremental, testable phases. Eac
 
 ---
 
-### Step 1.5: Watersnake Button Transmission
+### Step 1.5: Remote Button Transmission
 
-**Objective:** Transmit complete Watersnake remote button codes.
+**Objective:** Transmit complete remote button codes.
 
 - Define button payload constants (preamble + sync + device ID + command)
 - Implement single burst transmission method
