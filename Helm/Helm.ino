@@ -48,6 +48,27 @@ void printCompassHeading() {
     Serial.printf("[Compass] Heading: %.1f°\n", heading);
 }
 
+void printSensorStatus() {
+    SensorStatus status;
+    status.gpsAvailable = gpsAvailable;
+    status.compassAvailable = compassAvailable;
+
+    if (gpsAvailable) {
+        status.gpsFixValid = gps.hasValidFix();
+        status.gpsDopValid = gps.hasAcceptableDop();
+    }
+
+    Serial.println();
+    Serial.println("[Sensors] Status:");
+    Serial.printf("  GPS Available:    %s\n", status.gpsAvailable ? "YES" : "NO");
+    Serial.printf("  GPS Fix Valid:    %s\n", status.gpsFixValid ? "YES" : "NO");
+    Serial.printf("  GPS DOP Valid:    %s (< %.1f)\n",
+        status.gpsDopValid ? "YES" : "NO", NavigationConfig::maxDop);
+    Serial.printf("  Compass Available: %s\n", status.compassAvailable ? "YES" : "NO");
+    Serial.println();
+    Serial.printf("  Navigation Ready: %s\n", status.isNavigationReady() ? "YES" : "NO");
+}
+
 void setup() {
     Serial.begin(Config::serialBaud);
     delay(1000);
@@ -83,6 +104,7 @@ void setup() {
     Serial.println("  Release: 0");
     Serial.println("  GPS:     g (print status)");
     Serial.println("  Compass: c (print heading)");
+    Serial.println("  Sensors: v (validation status)");
 }
 
 void loop() {
@@ -117,6 +139,9 @@ void loop() {
 
             // Compass heading
             case 'c': printCompassHeading(); break;
+
+            // Sensor validation
+            case 'v': printSensorStatus(); break;
         }
     }
 }

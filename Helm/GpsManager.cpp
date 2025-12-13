@@ -187,3 +187,15 @@ bool GpsManager::isDataFresh() const {
         return false;
     return (millis() - _data.timestamp) < GpsConfig::staleThresholdMs;
 }
+
+bool GpsManager::hasValidFix() const {
+    return _data.hasFix && isDataFresh();
+}
+
+bool GpsManager::hasSufficientSatellites() const {
+    return _data.satellites >= NavigationConfig::minSatellites;
+}
+
+bool GpsManager::hasAcceptableDop() const {
+    return _data.hdop < NavigationConfig::maxDop;
+}

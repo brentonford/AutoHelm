@@ -17,6 +17,9 @@ public:
     void update();
     GpsData getData() const;
     bool isDataFresh() const;
+    bool hasValidFix() const;
+    bool hasSufficientSatellites() const;
+    bool hasAcceptableDop() const;
 
 private:
     uint8_t _rxPin;
