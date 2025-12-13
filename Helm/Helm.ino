@@ -2,6 +2,7 @@
 #include "CC1101.h"
 #include "Remote.h"
 #include "GpsManager.h"
+#include "CompassManager.h"
 
 CC1101 cc1101(
     Pins::cc1101Cs,
@@ -14,12 +15,12 @@ Remote remote(cc1101, Pins::cc1101Gdo0);
 
 GpsManager gps(Pins::gpsRx, Pins::gpsTx);
 
+CompassManager compass(Pins::i2cSda, Pins::i2cScl);
+
 bool cc1101Available = false;
 bool remoteAvailable = false;
 bool gpsAvailable = false;
-
-uint32_t lastGpsPrint = 0;
-constexpr uint32_t gpsPrintInterval = 2000;
+bool compassAvailable = false;
 
 void printGpsStatus() {
     GpsData data = gps.getData();
@@ -35,6 +36,16 @@ void printGpsStatus() {
         Serial.printf("  HDOP: %.1f  VDOP: %.1f  PDOP: %.1f\n",
             data.hdop, data.vdop, data.pdop);
     }
+}
+
+void printCompassHeading() {
+    if (!compassAvailable) {
+        Serial.println("[Compass] Not available");
+        return;
+    }
+
+    float heading = compass.readHeading();
+    Serial.printf("[Compass] Heading: %.1f°\n", heading);
 }
 
 void setup() {
@@ -59,14 +70,19 @@ void setup() {
     gpsAvailable = gps.begin();
     Serial.println(gpsAvailable ? "SUCCESS" : "FAILED");
 
+    Serial.print("[Compass] Initializing... ");
+    compassAvailable = compass.begin();
+    Serial.println(compassAvailable ? "SUCCESS" : "FAILED");
+
     Serial.println();
     Serial.println("[Helm] Setup complete");
     Serial.println();
     Serial.println("Commands:");
-    Serial.println("  Hold:   R/L/U/D/M/S (right/left/up/down/motor/momentary)");
-    Serial.println("  Single: r/l/u/d/m/s");
+    Serial.println("  Hold:    R/L/U/D/M/S (right/left/up/down/motor/momentary)");
+    Serial.println("  Single:  r/l/u/d/m/s");
     Serial.println("  Release: 0");
-    Serial.println("  GPS:    g (print status)");
+    Serial.println("  GPS:     g (print status)");
+    Serial.println("  Compass: c (print heading)");
 }
 
 void loop() {
@@ -98,6 +114,9 @@ void loop() {
 
             // GPS status
             case 'g': printGpsStatus(); break;
+
+            // Compass heading
+            case 'c': printCompassHeading(); break;
         }
     }
 }

@@ -47,3 +47,21 @@ struct GpsData {
         , timestamp(0) {
     }
 };
+
+struct CompassCalibration {
+    float offsetX;
+    float offsetY;
+    float offsetZ;
+    float scaleX;
+    float scaleY;
+    float scaleZ;
+
+    CompassCalibration()
+        : offsetX(0.0f)
+        , offsetY(0.0f)
+        , offsetZ(0.0f)
+        , scaleX(1.0f)
+        , scaleY(1.0f)
+        , scaleZ(1.0f) {
+    }
+};
