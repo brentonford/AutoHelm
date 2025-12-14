@@ -27,7 +27,52 @@ namespace Config {
 namespace NavigationConfig {
     constexpr uint8_t minSatellites = 4;
     constexpr float maxDop = 5.0f;
+    constexpr float arrivalThresholdM = 5.0f;
+    constexpr float headingToleranceDeg = 15.0f;
+    constexpr uint32_t correctionIntervalMs = 2000;
 }
+
+enum class NavigationState : uint8_t {
+    Idle,
+    Navigating,
+    Arrived
+};
+
+struct Waypoint {
+    float latitude;
+    float longitude;
+    bool isSet;
+
+    Waypoint()
+        : latitude(0.0f)
+        , longitude(0.0f)
+        , isSet(false) {
+    }
+
+    void set(float lat, float lon) {
+        latitude = lat;
+        longitude = lon;
+        isSet = true;
+    }
+
+    void clear() {
+        latitude = 0.0f;
+        longitude = 0.0f;
+        isSet = false;
+    }
+};
+
+struct NavigationData {
+    float distanceToTarget;
+    float bearingToTarget;
+    float relativeAngle;
+
+    NavigationData()
+        : distanceToTarget(0.0f)
+        , bearingToTarget(0.0f)
+        , relativeAngle(0.0f) {
+    }
+};
 
 struct GpsData {
     float latitude;

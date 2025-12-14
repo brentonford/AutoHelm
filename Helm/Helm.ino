@@ -4,6 +4,7 @@
 #include "GpsManager.h"
 #include "CompassManager.h"
 #include "NavigationUtils.h"
+#include "NavigationManager.h"
 
 CC1101 cc1101(
     Pins::cc1101Cs,
@@ -18,10 +19,16 @@ GpsManager gps(Pins::gpsRx, Pins::gpsTx);
 
 CompassManager compass(Pins::i2cSda, Pins::i2cScl);
 
+NavigationManager navigation;
+
 bool cc1101Available = false;
 bool remoteAvailable = false;
 bool gpsAvailable = false;
 bool compassAvailable = false;
+
+// Test waypoint (Sydney Harbour Bridge)
+constexpr float testWaypointLat = -33.8523f;
+constexpr float testWaypointLon = 151.2108f;
 
 void printGpsStatus() {
     GpsData data = gps.getData();
@@ -101,6 +108,43 @@ void testNavigationCalculations() {
         NavigationUtils::calculateRelativeAngle(350.0f, 10.0f));
 }
 
+void printNavigationStatus() {
+    Serial.println();
+    Serial.println("[Nav] Status:");
+
+    const char* stateStr = "UNKNOWN";
+    switch (navigation.getState()) {
+        case NavigationState::Idle:      stateStr = "IDLE"; break;
+        case NavigationState::Navigating: stateStr = "NAVIGATING"; break;
+        case NavigationState::Arrived:   stateStr = "ARRIVED"; break;
+    }
+
+    Serial.printf("  State: %s\n", stateStr);
+    Serial.printf("  Enabled: %s\n", navigation.isEnabled() ? "YES" : "NO");
+
+    if (navigation.hasTarget()) {
+        Waypoint target = navigation.getTarget();
+        Serial.printf("  Target: %.6f, %.6f\n", target.latitude, target.longitude);
+
+        if (navigation.isEnabled()) {
+            NavigationData navData = navigation.getNavigationData();
+            Serial.printf("  Distance: %.1f m\n", navData.distanceToTarget);
+            Serial.printf("  Bearing:  %.1f°\n", navData.bearingToTarget);
+            Serial.printf("  Relative: %+.1f°\n", navData.relativeAngle);
+        }
+    } else {
+        Serial.println("  Target: NOT SET");
+    }
+}
+
+void setTestWaypoint() {
+    navigation.setTarget(testWaypointLat, testWaypointLon);
+}
+
+void toggleNavigation() {
+    navigation.setEnabled(!navigation.isEnabled());
+}
+
 void setup() {
     Serial.begin(Config::serialBaud);
     delay(1000);
@@ -138,6 +182,10 @@ void setup() {
     Serial.println("  Compass: c (print heading)");
     Serial.println("  Sensors: v (validation status)");
     Serial.println("  Nav:     t (test calculations)");
+    Serial.println("  Nav:     n (navigation status)");
+    Serial.println("  Nav:     w (set test waypoint)");
+    Serial.println("  Nav:     e (enable/disable navigation)");
+    Serial.println("  Nav:     x (clear waypoint)");
 }
 
 void loop() {
