@@ -5,6 +5,7 @@
 #include "CompassManager.h"
 #include "NavigationUtils.h"
 #include "NavigationManager.h"
+#include "BleManager.h"
 
 CC1101 cc1101(
     Pins::cc1101Cs,
@@ -21,10 +22,15 @@ CompassManager compass(Pins::i2cSda, Pins::i2cScl);
 
 NavigationManager navigation;
 
+BleManager ble;
+
 bool cc1101Available = false;
 bool remoteAvailable = false;
 bool gpsAvailable = false;
 bool compassAvailable = false;
+bool bleAvailable = false;
+
+float currentHeading = 0.0f;
 
 // Test waypoint (Sydney Harbour Bridge)
 constexpr float testWaypointLat = -33.8523f;
@@ -52,8 +58,7 @@ void printCompassHeading() {
         return;
     }
 
-    float heading = compass.readHeading();
-    Serial.printf("[Compass] Heading: %.1f°\n", heading);
+    Serial.printf("[Compass] Heading: %.1f°\n", currentHeading);
 }
 
 void printSensorStatus() {
@@ -68,20 +73,21 @@ void printSensorStatus() {
 
     Serial.println();
     Serial.println("[Sensors] Status:");
-    Serial.printf("  GPS Available:    %s\n", status.gpsAvailable ? "YES" : "NO");
-    Serial.printf("  GPS Fix Valid:    %s\n", status.gpsFixValid ? "YES" : "NO");
-    Serial.printf("  GPS DOP Valid:    %s (< %.1f)\n",
+    Serial.printf("  GPS Available:     %s\n", status.gpsAvailable ? "YES" : "NO");
+    Serial.printf("  GPS Fix Valid:     %s\n", status.gpsFixValid ? "YES" : "NO");
+    Serial.printf("  GPS DOP Valid:     %s (< %.1f)\n",
         status.gpsDopValid ? "YES" : "NO", NavigationConfig::maxDop);
     Serial.printf("  Compass Available: %s\n", status.compassAvailable ? "YES" : "NO");
+    Serial.printf("  BLE Available:     %s\n", bleAvailable ? "YES" : "NO");
+    Serial.printf("  BLE Connected:     %s\n", ble.isConnected() ? "YES" : "NO");
     Serial.println();
-    Serial.printf("  Navigation Ready: %s\n", status.isNavigationReady() ? "YES" : "NO");
+    Serial.printf("  Navigation Ready:  %s\n", status.isNavigationReady() ? "YES" : "NO");
 }
 
 void testNavigationCalculations() {
     Serial.println();
     Serial.println("[Nav] Testing navigation calculations...");
 
-    // Test case: Sydney Opera House to Sydney Harbour Bridge
     float lat1 = -33.8568f;
     float lon1 = 151.2153f;
     float lat2 = -33.8523f;
@@ -95,7 +101,6 @@ void testNavigationCalculations() {
     Serial.printf("  Distance: %.1f m (expected ~680m)\n", distance);
     Serial.printf("  Bearing:  %.1f° (expected ~315°)\n", bearing);
 
-    // Test relative angle calculations
     Serial.println();
     Serial.println("  Relative angle tests:");
     Serial.printf("    Heading 0°, Bearing 90°:   %+.1f° (expected +90)\n",
@@ -114,9 +119,9 @@ void printNavigationStatus() {
 
     const char* stateStr = "UNKNOWN";
     switch (navigation.getState()) {
-        case NavigationState::Idle:      stateStr = "IDLE"; break;
+        case NavigationState::Idle:       stateStr = "IDLE"; break;
         case NavigationState::Navigating: stateStr = "NAVIGATING"; break;
-        case NavigationState::Arrived:   stateStr = "ARRIVED"; break;
+        case NavigationState::Arrived:    stateStr = "ARRIVED"; break;
     }
 
     Serial.printf("  State: %s\n", stateStr);
@@ -164,6 +169,69 @@ void processHeadingCorrection() {
     }
 }
 
+void processBleWaypoint() {
+    if (!ble.hasWaypointPending())
+        return;
+
+    Waypoint wp = ble.consumeWaypoint();
+    if (wp.isSet) {
+        navigation.setTarget(wp.latitude, wp.longitude);
+    }
+}
+
+void processBleCommand() {
+    BleCommand cmd = ble.consumeCommand();
+
+    switch (cmd) {
+        case BleCommand::NavEnable:
+            if (!gps.hasValidFix()) {
+                Serial.println("[BLE] Cannot enable nav: no GPS fix");
+                ble.sendResponse("{\"error\":\"No GPS fix\"}");
+                return;
+            }
+            if (!gps.hasAcceptableDop()) {
+                Serial.println("[BLE] Cannot enable nav: poor GPS accuracy");
+                ble.sendResponse("{\"error\":\"Poor GPS accuracy\"}");
+                return;
+            }
+            if (!navigation.hasTarget()) {
+                Serial.println("[BLE] Cannot enable nav: no target set");
+                ble.sendResponse("{\"error\":\"No target set\"}");
+                return;
+            }
+            navigation.setEnabled(true);
+            break;
+
+        case BleCommand::NavDisable:
+            navigation.setEnabled(false);
+            break;
+
+        case BleCommand::StartCalibration:
+            Serial.println("[BLE] Calibration start requested");
+            // Calibration implementation deferred
+            break;
+
+        case BleCommand::StopCalibration:
+            Serial.println("[BLE] Calibration stop requested");
+            // Calibration implementation deferred
+            break;
+
+        case BleCommand::None:
+            break;
+    }
+}
+
+void broadcastStatus() {
+    if (!bleAvailable || !ble.isConnected())
+        return;
+
+    GpsData gpsData = gps.getData();
+    NavigationData navData = navigation.getNavigationData();
+    Waypoint target = navigation.getTarget();
+
+    ble.sendStatus(gpsData, currentHeading, navData, target);
+}
+
 void setup() {
     Serial.begin(Config::serialBaud);
     delay(1000);
@@ -190,6 +258,10 @@ void setup() {
     compassAvailable = compass.begin();
     Serial.println(compassAvailable ? "SUCCESS" : "FAILED");
 
+    Serial.print("[BLE] Initializing... ");
+    bleAvailable = ble.begin();
+    Serial.println(bleAvailable ? "SUCCESS" : "FAILED");
+
     Serial.println();
     Serial.println("[Helm] Setup complete");
     Serial.println();
@@ -208,17 +280,38 @@ void setup() {
 }
 
 void loop() {
+    // Update GPS
     if (gpsAvailable)
         gps.update();
 
-    // Update navigation with current sensor data
+    // Update compass
+    if (compassAvailable)
+        currentHeading = compass.readHeading();
+
+    // Process BLE inputs
+    if (bleAvailable) {
+        ble.update();
+        processBleWaypoint();
+        processBleCommand();
+    }
+
+    // Update navigation
     if (navigation.isEnabled() && gpsAvailable && compassAvailable) {
         GpsData gpsData = gps.getData();
-        float heading = compass.readHeading();
-        navigation.update(gpsData, heading);
+        navigation.update(gpsData, currentHeading);
         processHeadingCorrection();
     }
 
+    // Broadcast status via BLE
+    broadcastStatus();
+
+    // Safety: disable navigation on BLE disconnect
+    if (navigation.isEnabled() && bleAvailable && !ble.isConnected()) {
+        Serial.println("[Nav] BLE disconnected - disabling navigation");
+        navigation.setEnabled(false);
+    }
+
+    // Process serial commands
     if (!Serial.available())
         return;
 
