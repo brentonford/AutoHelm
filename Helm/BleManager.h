@@ -5,7 +5,7 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
-#include "DataModels.h",
+#include "DataModels.h"
 
 namespace BleConfig {
     constexpr const char* deviceName = "Helm";
