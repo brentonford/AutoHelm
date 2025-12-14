@@ -3,6 +3,7 @@
 #include "Remote.h"
 #include "GpsManager.h"
 #include "CompassManager.h"
+#include "NavigationUtils.h"
 
 CC1101 cc1101(
     Pins::cc1101Cs,
@@ -69,6 +70,37 @@ void printSensorStatus() {
     Serial.printf("  Navigation Ready: %s\n", status.isNavigationReady() ? "YES" : "NO");
 }
 
+void testNavigationCalculations() {
+    Serial.println();
+    Serial.println("[Nav] Testing navigation calculations...");
+
+    // Test case: Sydney Opera House to Sydney Harbour Bridge
+    float lat1 = -33.8568f;
+    float lon1 = 151.2153f;
+    float lat2 = -33.8523f;
+    float lon2 = 151.2108f;
+
+    float distance = NavigationUtils::calculateDistance(lat1, lon1, lat2, lon2);
+    float bearing = NavigationUtils::calculateBearing(lat1, lon1, lat2, lon2);
+
+    Serial.println("  From: Sydney Opera House (-33.8568, 151.2153)");
+    Serial.println("  To:   Sydney Harbour Bridge (-33.8523, 151.2108)");
+    Serial.printf("  Distance: %.1f m (expected ~680m)\n", distance);
+    Serial.printf("  Bearing:  %.1f° (expected ~315°)\n", bearing);
+
+    // Test relative angle calculations
+    Serial.println();
+    Serial.println("  Relative angle tests:");
+    Serial.printf("    Heading 0°, Bearing 90°:   %+.1f° (expected +90)\n",
+        NavigationUtils::calculateRelativeAngle(0.0f, 90.0f));
+    Serial.printf("    Heading 0°, Bearing 270°:  %+.1f° (expected -90)\n",
+        NavigationUtils::calculateRelativeAngle(0.0f, 270.0f));
+    Serial.printf("    Heading 90°, Bearing 0°:   %+.1f° (expected -90)\n",
+        NavigationUtils::calculateRelativeAngle(90.0f, 0.0f));
+    Serial.printf("    Heading 350°, Bearing 10°: %+.1f° (expected +20)\n",
+        NavigationUtils::calculateRelativeAngle(350.0f, 10.0f));
+}
+
 void setup() {
     Serial.begin(Config::serialBaud);
     delay(1000);
@@ -105,6 +137,7 @@ void setup() {
     Serial.println("  GPS:     g (print status)");
     Serial.println("  Compass: c (print heading)");
     Serial.println("  Sensors: v (validation status)");
+    Serial.println("  Nav:     t (test calculations)");
 }
 
 void loop() {
@@ -142,6 +175,9 @@ void loop() {
 
             // Sensor validation
             case 'v': printSensorStatus(); break;
+
+            // Navigation test
+            case 't': testNavigationCalculations(); break;
         }
     }
 }
