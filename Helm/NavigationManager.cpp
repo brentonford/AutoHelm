@@ -2,7 +2,8 @@
 
 NavigationManager::NavigationManager()
     : _state(NavigationState::Idle)
-    , _enabled(false) {
+    , _enabled(false)
+    , _lastCorrectionTime(0) {
 }
 
 void NavigationManager::setTarget(float latitude, float longitude) {
@@ -14,6 +15,7 @@ void NavigationManager::clearTarget() {
     _target.clear();
     _state = NavigationState::Idle;
     _enabled = false;
+    _lastCorrectionTime = 0;
     Serial.println("[Nav] Target cleared");
 }
 
@@ -27,6 +29,7 @@ void NavigationManager::setEnabled(bool enabled) {
     
     if (_enabled) {
         _state = NavigationState::Navigating;
+        _lastCorrectionTime = 0;
         Serial.println("[Nav] Navigation ENABLED");
     } else {
         _state = NavigationState::Idle;
@@ -70,6 +73,44 @@ void NavigationManager::calculateNavigation(const GpsData& gpsData, float headin
 
 bool NavigationManager::checkArrival() {
     return _navData.distanceToTarget <= NavigationConfig::arrivalThresholdM;
+}
+
+bool NavigationManager::isCorrectionIntervalElapsed() const {
+    if (_lastCorrectionTime == 0)
+        return true;
+    return (millis() - _lastCorrectionTime) >= NavigationConfig::correctionIntervalMs;
+}
+
+bool NavigationManager::needsCorrection() const {
+    if (!_enabled || _state != NavigationState::Navigating)
+        return false;
+
+    float absAngle = fabs(_navData.relativeAngle);
+    return absAngle > NavigationConfig::headingToleranceDeg;
+}
+
+HeadingCorrection NavigationManager::getRequiredCorrection() {
+    if (!_enabled || _state != NavigationState::Navigating)
+        return HeadingCorrection::None;
+
+    if (!isCorrectionIntervalElapsed())
+        return HeadingCorrection::None;
+
+    float absAngle = fabs(_navData.relativeAngle);
+    if (absAngle <= NavigationConfig::headingToleranceDeg)
+        return HeadingCorrection::None;
+
+    _lastCorrectionTime = millis();
+
+    // Positive relative angle = target is to the right
+    // Negative relative angle = target is to the left
+    if (_navData.relativeAngle > 0) {
+        Serial.printf("[Nav] Correction: RIGHT (relative angle: %+.1f°)\n", _navData.relativeAngle);
+        return HeadingCorrection::Right;
+    }
+
+    Serial.printf("[Nav] Correction: LEFT (relative angle: %+.1f°)\n", _navData.relativeAngle);
+    return HeadingCorrection::Left;
 }
 
 bool NavigationManager::isEnabled() const {

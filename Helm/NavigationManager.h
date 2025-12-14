@@ -20,12 +20,17 @@ public:
     NavigationData getNavigationData() const;
     Waypoint getTarget() const;
 
+    HeadingCorrection getRequiredCorrection();
+    bool needsCorrection() const;
+
 private:
     Waypoint _target;
     NavigationState _state;
     NavigationData _navData;
     bool _enabled;
+    uint32_t _lastCorrectionTime;
 
     void calculateNavigation(const GpsData& gpsData, float heading);
     bool checkArrival();
+    bool isCorrectionIntervalElapsed() const;
 };

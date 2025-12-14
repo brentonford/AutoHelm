@@ -38,6 +38,12 @@ enum class NavigationState : uint8_t {
     Arrived
 };
 
+enum class HeadingCorrection : uint8_t {
+    None,
+    Left,
+    Right
+};
+
 struct Waypoint {
     float latitude;
     float longitude;

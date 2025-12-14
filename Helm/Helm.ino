@@ -131,6 +131,7 @@ void printNavigationStatus() {
             Serial.printf("  Distance: %.1f m\n", navData.distanceToTarget);
             Serial.printf("  Bearing:  %.1f°\n", navData.bearingToTarget);
             Serial.printf("  Relative: %+.1f°\n", navData.relativeAngle);
+            Serial.printf("  Needs Correction: %s\n", navigation.needsCorrection() ? "YES" : "NO");
         }
     } else {
         Serial.println("  Target: NOT SET");
@@ -143,6 +144,24 @@ void setTestWaypoint() {
 
 void toggleNavigation() {
     navigation.setEnabled(!navigation.isEnabled());
+}
+
+void processHeadingCorrection() {
+    if (!remoteAvailable)
+        return;
+
+    HeadingCorrection correction = navigation.getRequiredCorrection();
+
+    switch (correction) {
+        case HeadingCorrection::Left:
+            remote.transmitSingle(Button::Left);
+            break;
+        case HeadingCorrection::Right:
+            remote.transmitSingle(Button::Right);
+            break;
+        case HeadingCorrection::None:
+            break;
+    }
 }
 
 void setup() {
@@ -192,40 +211,53 @@ void loop() {
     if (gpsAvailable)
         gps.update();
 
-    if (Serial.available()) {
-        char c = Serial.read();
+    // Update navigation with current sensor data
+    if (navigation.isEnabled() && gpsAvailable && compassAvailable) {
+        GpsData gpsData = gps.getData();
+        float heading = compass.readHeading();
+        navigation.update(gpsData, heading);
+        processHeadingCorrection();
+    }
 
-        switch (c) {
-            // Hold commands (uppercase)
-            case 'R': remote.transmitHold(Button::Right); break;
-            case 'L': remote.transmitHold(Button::Left); break;
-            case 'U': remote.transmitHold(Button::Up); break;
-            case 'D': remote.transmitHold(Button::Down); break;
-            case 'M': remote.transmitHold(Button::Motor); break;
-            case 'S': remote.transmitHold(Button::Momentary); break;
+    if (!Serial.available())
+        return;
 
-            // Single commands (lowercase)
-            case 'r': remote.transmitSingle(Button::Right); break;
-            case 'l': remote.transmitSingle(Button::Left); break;
-            case 'u': remote.transmitSingle(Button::Up); break;
-            case 'd': remote.transmitSingle(Button::Down); break;
-            case 'm': remote.transmitSingle(Button::Motor); break;
-            case 's': remote.transmitSingle(Button::Momentary); break;
+    char c = Serial.read();
 
-            // Release
-            case '0': remote.transmitSingle(Button::Release); break;
+    switch (c) {
+        // Hold commands (uppercase)
+        case 'R': remote.transmitHold(Button::Right); break;
+        case 'L': remote.transmitHold(Button::Left); break;
+        case 'U': remote.transmitHold(Button::Up); break;
+        case 'D': remote.transmitHold(Button::Down); break;
+        case 'M': remote.transmitHold(Button::Motor); break;
+        case 'S': remote.transmitHold(Button::Momentary); break;
 
-            // GPS status
-            case 'g': printGpsStatus(); break;
+        // Single commands (lowercase)
+        case 'r': remote.transmitSingle(Button::Right); break;
+        case 'l': remote.transmitSingle(Button::Left); break;
+        case 'u': remote.transmitSingle(Button::Up); break;
+        case 'd': remote.transmitSingle(Button::Down); break;
+        case 'm': remote.transmitSingle(Button::Motor); break;
+        case 's': remote.transmitSingle(Button::Momentary); break;
 
-            // Compass heading
-            case 'c': printCompassHeading(); break;
+        // Release
+        case '0': remote.transmitSingle(Button::Release); break;
 
-            // Sensor validation
-            case 'v': printSensorStatus(); break;
+        // GPS status
+        case 'g': printGpsStatus(); break;
 
-            // Navigation test
-            case 't': testNavigationCalculations(); break;
-        }
+        // Compass heading
+        case 'c': printCompassHeading(); break;
+
+        // Sensor validation
+        case 'v': printSensorStatus(); break;
+
+        // Navigation commands
+        case 't': testNavigationCalculations(); break;
+        case 'n': printNavigationStatus(); break;
+        case 'w': setTestWaypoint(); break;
+        case 'e': toggleNavigation(); break;
+        case 'x': navigation.clearTarget(); break;
     }
 }
