@@ -7,38 +7,14 @@ struct MapView: View {
     @Binding var selectedWaypoint: Waypoint?
     @Binding var waypoints: [Waypoint]
     
-    @State private var cameraPosition: MapCameraPosition = .automatic
+    @State private var cameraPosition: MapCameraPosition = .userLocation(fallback: .automatic)
     @State private var showingWaypointSheet = false
     @State private var pendingCoordinate: CLLocationCoordinate2D?
     @State private var waypointName = ""
     
     var body: some View {
         ZStack {
-            MapReader { proxy in
-                Map(position: $cameraPosition, selection: $selectedWaypoint) {
-                    UserAnnotation()
-                    
-                    ForEach(waypoints) { waypoint in
-                        Annotation(waypoint.name, coordinate: waypoint.coordinate) {
-                            WaypointMarker(isSelected: selectedWaypoint?.id == waypoint.id)
-                        }
-                        .tag(waypoint)
-                    }
-                }
-                .mapStyle(.standard)
-                .mapControls {
-                    MapUserLocationButton()
-                    MapCompass()
-                    MapScaleView()
-                }
-                .onTapGesture { position in
-                    if let coordinate = proxy.convert(position, from: .local) {
-                        pendingCoordinate = coordinate
-                        waypointName = ""
-                        showingWaypointSheet = true
-                    }
-                }
-            }
+            mapContent
             
             VStack {
                 Spacer()
@@ -49,9 +25,6 @@ struct MapView: View {
                     .padding()
                 }
             }
-        }
-        .onAppear {
-            centerOnUser()
         }
         .sheet(isPresented: $showingWaypointSheet) {
             AddWaypointSheet(
@@ -64,12 +37,31 @@ struct MapView: View {
         }
     }
     
-    private func centerOnUser() {
-        if let location = locationManager.location {
-            cameraPosition = .region(MKCoordinateRegion(
-                center: location,
-                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
-            ))
+    private var mapContent: some View {
+        MapReader { proxy in
+            Map(position: $cameraPosition, selection: $selectedWaypoint) {
+                UserAnnotation()
+                
+                ForEach(waypoints) { waypoint in
+                    Annotation(waypoint.name, coordinate: waypoint.coordinate) {
+                        WaypointMarker(isSelected: selectedWaypoint?.id == waypoint.id)
+                    }
+                    .tag(waypoint)
+                }
+            }
+            .mapStyle(.standard)
+            .mapControls {
+                MapUserLocationButton()
+                MapCompass()
+                MapScaleView()
+            }
+            .onTapGesture { position in
+                if let coordinate = proxy.convert(position, from: .local) {
+                    pendingCoordinate = coordinate
+                    waypointName = ""
+                    showingWaypointSheet = true
+                }
+            }
         }
     }
     

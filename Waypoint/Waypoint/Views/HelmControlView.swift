@@ -103,15 +103,30 @@ struct HelmControlView: View {
     
     private var navigationSection: some View {
         Section("Navigation") {
-            if let status = bluetooth.deviceStatus, status.distance > 0 {
-                LabeledContent("Distance", value: formatDistance(status.distance))
-                LabeledContent("Bearing", value: String(format: "%.1f°", status.bearing))
-                
-                if let target = status.targetLocation {
-                    LabeledContent("Target") {
-                        Text(String(format: "%.6f, %.6f", target.latitude, target.longitude))
-                            .font(.caption)
+            if let status = bluetooth.deviceStatus {
+                if status.hasTarget == true {
+                    LabeledContent("Distance", value: formatDistance(status.distance))
+                    LabeledContent("Bearing", value: String(format: "%.1f°", status.bearing))
+                    
+                    if let relative = status.relative {
+                        LabeledContent("Correction") {
+                            HStack {
+                                Text(correctionDirection(relative))
+                                Text(String(format: "%+.1f°", relative))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
                     }
+                    
+                    if let target = status.targetLocation {
+                        LabeledContent("Target") {
+                            Text(String(format: "%.6f, %.6f", target.latitude, target.longitude))
+                                .font(.caption)
+                        }
+                    }
+                } else {
+                    Text("No target waypoint set")
+                        .foregroundColor(.secondary)
                 }
             }
             
@@ -121,6 +136,13 @@ struct HelmControlView: View {
                     toggleNavigation(enabled)
                 }
         }
+    }
+    
+    private func correctionDirection(_ relative: Double) -> String {
+        if abs(relative) <= 15.0 {
+            return "✓ On course"
+        }
+        return relative > 0 ? "→ Turn RIGHT" : "← Turn LEFT"
     }
     
     private var canEnableNavigation: Bool {

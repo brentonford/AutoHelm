@@ -29,8 +29,11 @@ bool remoteAvailable = false;
 bool gpsAvailable = false;
 bool compassAvailable = false;
 bool bleAvailable = false;
+bool bleWasConnected = false;
 
 float currentHeading = 0.0f;
+uint32_t lastStatusPrintTime = 0;
+constexpr uint32_t statusPrintIntervalMs = 5000;
 
 // Test waypoint (Sydney Harbour Bridge)
 constexpr float testWaypointLat = -33.8523f;
@@ -183,37 +186,42 @@ void processBleCommand() {
     BleCommand cmd = ble.consumeCommand();
 
     switch (cmd) {
-        case BleCommand::NavEnable:
-            if (!gps.hasValidFix()) {
-                Serial.println("[BLE] Cannot enable nav: no GPS fix");
-                ble.sendResponse("{\"error\":\"No GPS fix\"}");
-                return;
-            }
-            if (!gps.hasAcceptableDop()) {
-                Serial.println("[BLE] Cannot enable nav: poor GPS accuracy");
-                ble.sendResponse("{\"error\":\"Poor GPS accuracy\"}");
-                return;
-            }
-            if (!navigation.hasTarget()) {
-                Serial.println("[BLE] Cannot enable nav: no target set");
-                ble.sendResponse("{\"error\":\"No target set\"}");
+        case BleCommand::NavEnable: {
+            GpsData gpsData = gps.getData();
+            if (!navigation.canEnableNavigation(gpsData)) {
+                String error = "{\"error\":\"";
+                if (!navigation.hasTarget()) {
+                    error += "No target set";
+                } else if (!gpsData.hasFix) {
+                    error += "No GPS fix";
+                } else if (gpsData.satellites < NavigationConfig::minSatellites) {
+                    error += "Insufficient satellites";
+                } else if (gpsData.hdop >= NavigationConfig::maxDop) {
+                    error += "Poor GPS accuracy";
+                }
+                error += "\"}";
+                Serial.printf("[BLE] Cannot enable nav: %s\n", error.c_str());
+                ble.sendResponse(error);
                 return;
             }
             navigation.setEnabled(true);
+            ble.sendResponse("{\"ack\":\"NAV_ENABLED\"}");
             break;
+        }
 
         case BleCommand::NavDisable:
             navigation.setEnabled(false);
+            ble.sendResponse("{\"ack\":\"NAV_DISABLED\"}");
             break;
 
         case BleCommand::StartCalibration:
             Serial.println("[BLE] Calibration start requested");
-            // Calibration implementation deferred
+            ble.sendResponse("{\"ack\":\"CAL_STARTED\"}");
             break;
 
         case BleCommand::StopCalibration:
             Serial.println("[BLE] Calibration stop requested");
-            // Calibration implementation deferred
+            ble.sendResponse("{\"ack\":\"CAL_STOPPED\"}");
             break;
 
         case BleCommand::None:
@@ -230,6 +238,61 @@ void broadcastStatus() {
     Waypoint target = navigation.getTarget();
 
     ble.sendStatus(gpsData, currentHeading, navData, target);
+}
+
+void checkSafetyConditions() {
+    if (!navigation.isEnabled())
+        return;
+
+    GpsData gpsData = gps.getData();
+    navigation.checkSafetyConditions(gpsData);
+
+    if (!navigation.isEnabled()) {
+        const char* reason = navigation.getDisableReason();
+        if (reason) {
+            String response = "{\"nav_disabled\":\"";
+            response += reason;
+            response += "\"}";
+            ble.sendResponse(response);
+        }
+    }
+}
+
+void checkBleConnection() {
+    bool bleConnected = ble.isConnected();
+
+    if (bleWasConnected && !bleConnected) {
+        if (navigation.isEnabled()) {
+            Serial.println("[Safety] BLE disconnected - disabling navigation");
+            navigation.setEnabled(false);
+        }
+    }
+
+    bleWasConnected = bleConnected;
+}
+
+void printPeriodicStatus() {
+    if (!navigation.isEnabled())
+        return;
+
+    uint32_t now = millis();
+    if ((now - lastStatusPrintTime) < statusPrintIntervalMs)
+        return;
+
+    lastStatusPrintTime = now;
+
+    GpsData gpsData = gps.getData();
+    NavigationData navData = navigation.getNavigationData();
+
+    Serial.println();
+    Serial.println("[Nav] Periodic Status:");
+    Serial.printf("  GPS: %s, Sats: %d, HDOP: %.1f\n",
+        gpsData.hasFix ? "FIX" : "NO FIX",
+        gpsData.satellites,
+        gpsData.hdop);
+    Serial.printf("  Position: %.6f, %.6f\n", gpsData.latitude, gpsData.longitude);
+    Serial.printf("  Heading: %.1f°, Target Bearing: %.1f°\n", currentHeading, navData.bearingToTarget);
+    Serial.printf("  Distance: %.1f m, Relative: %+.1f°\n", navData.distanceToTarget, navData.relativeAngle);
 }
 
 void setup() {
@@ -295,6 +358,10 @@ void loop() {
         processBleCommand();
     }
 
+    // Safety checks
+    checkBleConnection();
+    checkSafetyConditions();
+
     // Update navigation
     if (navigation.isEnabled() && gpsAvailable && compassAvailable) {
         GpsData gpsData = gps.getData();
@@ -305,11 +372,8 @@ void loop() {
     // Broadcast status via BLE
     broadcastStatus();
 
-    // Safety: disable navigation on BLE disconnect
-    if (navigation.isEnabled() && bleAvailable && !ble.isConnected()) {
-        Serial.println("[Nav] BLE disconnected - disabling navigation");
-        navigation.setEnabled(false);
-    }
+    // Periodic status to serial
+    printPeriodicStatus();
 
     // Process serial commands
     if (!Serial.available())

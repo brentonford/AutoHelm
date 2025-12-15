@@ -3,7 +3,8 @@
 NavigationManager::NavigationManager()
     : _state(NavigationState::Idle)
     , _enabled(false)
-    , _lastCorrectionTime(0) {
+    , _lastCorrectionTime(0)
+    , _disableReason(nullptr) {
 }
 
 void NavigationManager::setTarget(float latitude, float longitude) {
@@ -16,16 +17,62 @@ void NavigationManager::clearTarget() {
     _state = NavigationState::Idle;
     _enabled = false;
     _lastCorrectionTime = 0;
+    _disableReason = nullptr;
     Serial.println("[Nav] Target cleared");
+}
+
+bool NavigationManager::canEnableNavigation(const GpsData& gpsData) const {
+    if (!_target.isSet)
+        return false;
+    if (!gpsData.hasFix)
+        return false;
+    if (gpsData.satellites < NavigationConfig::minSatellites)
+        return false;
+    if (gpsData.hdop >= NavigationConfig::maxDop)
+        return false;
+    return true;
+}
+
+void NavigationManager::disableWithReason(const char* reason) {
+    _enabled = false;
+    _state = NavigationState::Idle;
+    _disableReason = reason;
+    Serial.printf("[Nav] DISABLED: %s\n", reason);
+}
+
+void NavigationManager::checkSafetyConditions(const GpsData& gpsData) {
+    if (!_enabled)
+        return;
+
+    if (!gpsData.hasFix) {
+        disableWithReason("GPS fix lost");
+        return;
+    }
+
+    if (gpsData.satellites < NavigationConfig::minSatellites) {
+        disableWithReason("Insufficient satellites");
+        return;
+    }
+
+    if (gpsData.hdop >= NavigationConfig::maxDop) {
+        disableWithReason("GPS accuracy degraded (high DOP)");
+        return;
+    }
+}
+
+const char* NavigationManager::getDisableReason() const {
+    return _disableReason;
 }
 
 void NavigationManager::setEnabled(bool enabled) {
     if (enabled && !_target.isSet) {
         Serial.println("[Nav] Cannot enable: no target set");
+        _disableReason = "No target set";
         return;
     }
 
     _enabled = enabled;
+    _disableReason = nullptr;
     
     if (_enabled) {
         _state = NavigationState::Navigating;
@@ -42,7 +89,7 @@ void NavigationManager::update(const GpsData& gpsData, float heading) {
         return;
 
     if (!gpsData.hasFix) {
-        _state = NavigationState::Idle;
+        disableWithReason("GPS fix lost");
         return;
     }
 
@@ -51,6 +98,7 @@ void NavigationManager::update(const GpsData& gpsData, float heading) {
     if (checkArrival()) {
         _state = NavigationState::Arrived;
         _enabled = false;
+        _disableReason = "Arrived at destination";
         Serial.println("[Nav] ARRIVED at destination!");
     }
 }
@@ -102,8 +150,6 @@ HeadingCorrection NavigationManager::getRequiredCorrection() {
 
     _lastCorrectionTime = millis();
 
-    // Positive relative angle = target is to the right
-    // Negative relative angle = target is to the left
     if (_navData.relativeAngle > 0) {
         Serial.printf("[Nav] Correction: RIGHT (relative angle: %+.1f°)\n", _navData.relativeAngle);
         return HeadingCorrection::Right;

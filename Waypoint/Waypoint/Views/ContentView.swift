@@ -37,8 +37,9 @@ struct ContentView: View {
         }
         .environmentObject(bluetooth)
         .environmentObject(locationManager)
-        .onAppear {
+        .task {
             locationManager.requestAuthorization()
+            bluetooth.initialize()
         }
     }
 }

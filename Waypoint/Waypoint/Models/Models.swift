@@ -31,8 +31,10 @@ struct DeviceStatus: Codable {
     let heading: Double
     let distance: Double
     let bearing: Double
+    let relative: Double?
     let targetLat: Double?
     let targetLon: Double?
+    let hasTarget: Bool?
     
     var currentLocation: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: currentLat, longitude: currentLon)
@@ -53,8 +55,10 @@ struct DeviceStatus: Codable {
         case heading
         case distance
         case bearing
+        case relative
         case targetLat
         case targetLon
+        case hasTarget
     }
 }
 

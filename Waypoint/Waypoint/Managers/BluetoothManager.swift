@@ -2,6 +2,14 @@ import Foundation
 import CoreBluetooth
 import Combine
 
+// UUIDs defined as nonisolated to avoid MainActor isolation issues
+private nonisolated(unsafe) let helmServiceUuid = CBUUID(string: "FFE0")
+private nonisolated(unsafe) let helmWaypointCharUuid = CBUUID(string: "FFE1")
+private nonisolated(unsafe) let helmStatusCharUuid = CBUUID(string: "FFE2")
+private nonisolated(unsafe) let helmCommandCharUuid = CBUUID(string: "FFE3")
+private nonisolated(unsafe) let helmCalibrationCharUuid = CBUUID(string: "FFE4")
+
+@MainActor
 class BluetoothManager: NSObject, ObservableObject {
     
     // MARK: - Published Properties
@@ -11,17 +19,9 @@ class BluetoothManager: NSObject, ObservableObject {
     @Published var lastResponse: BleResponse?
     @Published var lastError: String?
     
-    // MARK: - BLE UUIDs
-    
-    private let serviceUuid = CBUUID(string: "FFE0")
-    private let waypointCharUuid = CBUUID(string: "FFE1")
-    private let statusCharUuid = CBUUID(string: "FFE2")
-    private let commandCharUuid = CBUUID(string: "FFE3")
-    private let calibrationCharUuid = CBUUID(string: "FFE4")
-    
     // MARK: - BLE Objects
     
-    private var centralManager: CBCentralManager!
+    private var centralManager: CBCentralManager?
     private var peripheral: CBPeripheral?
     private var waypointChar: CBCharacteristic?
     private var statusChar: CBCharacteristic?
@@ -37,20 +37,24 @@ class BluetoothManager: NSObject, ObservableObject {
     
     override init() {
         super.init()
-        centralManager = CBCentralManager(delegate: self, queue: nil)
+    }
+    
+    func initialize() {
+        guard centralManager == nil else { return }
+        centralManager = CBCentralManager(delegate: self, queue: nil, options: [CBCentralManagerOptionShowPowerAlertKey: true])
     }
     
     // MARK: - Public Methods
     
     func startScanning() {
-        guard centralManager.state == .poweredOn else { return }
+        guard let central = centralManager, central.state == .poweredOn else { return }
         
         connectionState = .scanning
-        centralManager.scanForPeripherals(withServices: [serviceUuid], options: nil)
+        central.scanForPeripherals(withServices: [helmServiceUuid], options: nil)
     }
     
     func stopScanning() {
-        centralManager.stopScan()
+        centralManager?.stopScan()
         if connectionState == .scanning {
             connectionState = .disconnected
         }
@@ -60,8 +64,8 @@ class BluetoothManager: NSObject, ObservableObject {
         shouldReconnect = false
         reconnectTimer?.invalidate()
         
-        if let peripheral = peripheral {
-            centralManager.cancelPeripheralConnection(peripheral)
+        if let peripheral = peripheral, let central = centralManager {
+            central.cancelPeripheralConnection(peripheral)
         }
     }
     
@@ -108,7 +112,10 @@ class BluetoothManager: NSObject, ObservableObject {
         
         reconnectTimer?.invalidate()
         reconnectTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
-            self?.startScanning()
+            guard let self else { return }
+            Task { @MainActor in
+                self.startScanning()
+            }
         }
     }
     
@@ -124,51 +131,61 @@ class BluetoothManager: NSObject, ObservableObject {
 
 extension BluetoothManager: CBCentralManagerDelegate {
     
-    func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        switch central.state {
-        case .poweredOn:
-            startScanning()
-        case .poweredOff:
-            connectionState = .disconnected
-            lastError = "Bluetooth is off"
-        case .unauthorized:
-            lastError = "Bluetooth permission denied"
-        default:
-            break
+    nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        Task { @MainActor in
+            switch central.state {
+            case .poweredOn:
+                startScanning()
+            case .poweredOff:
+                connectionState = .disconnected
+                lastError = "Bluetooth is off"
+            case .unauthorized:
+                lastError = "Bluetooth permission denied"
+            default:
+                break
+            }
         }
     }
     
-    func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
+    nonisolated func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
         
         let name = peripheral.name ?? "Unknown"
         guard name == "Helm" else { return }
         
-        centralManager.stopScan()
-        self.peripheral = peripheral
-        peripheral.delegate = self
+        central.stopScan()
         
-        connectionState = .connecting
-        centralManager.connect(peripheral, options: nil)
+        Task { @MainActor in
+            self.peripheral = peripheral
+            peripheral.delegate = self
+            self.connectionState = .connecting
+            central.connect(peripheral, options: nil)
+        }
     }
     
-    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        connectionState = .connected
-        shouldReconnect = true
-        peripheral.discoverServices([serviceUuid])
+    nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        Task { @MainActor in
+            connectionState = .connected
+            shouldReconnect = true
+            peripheral.discoverServices([helmServiceUuid])
+        }
     }
     
-    func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        connectionState = .disconnected
-        lastError = error?.localizedDescription ?? "Connection failed"
-        clearCharacteristics()
-        scheduleReconnect()
+    nonisolated func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        Task { @MainActor in
+            connectionState = .disconnected
+            lastError = error?.localizedDescription ?? "Connection failed"
+            clearCharacteristics()
+            scheduleReconnect()
+        }
     }
     
-    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        connectionState = .disconnected
-        clearCharacteristics()
-        scheduleReconnect()
+    nonisolated func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        Task { @MainActor in
+            connectionState = .disconnected
+            clearCharacteristics()
+            scheduleReconnect()
+        }
     }
 }
 
@@ -176,57 +193,59 @@ extension BluetoothManager: CBCentralManagerDelegate {
 
 extension BluetoothManager: CBPeripheralDelegate {
     
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard let service = peripheral.services?.first(where: { $0.uuid == serviceUuid }) else { return }
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        guard let service = peripheral.services?.first(where: { $0.uuid == helmServiceUuid }) else { return }
         
         peripheral.discoverCharacteristics([
-            waypointCharUuid,
-            statusCharUuid,
-            commandCharUuid,
-            calibrationCharUuid
+            helmWaypointCharUuid,
+            helmStatusCharUuid,
+            helmCommandCharUuid,
+            helmCalibrationCharUuid
         ], for: service)
     }
     
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         guard let characteristics = service.characteristics else { return }
         
-        for char in characteristics {
-            switch char.uuid {
-            case waypointCharUuid:
-                waypointChar = char
-            case statusCharUuid:
-                statusChar = char
-                peripheral.setNotifyValue(true, for: char)
-            case commandCharUuid:
-                commandChar = char
-            case calibrationCharUuid:
-                calibrationChar = char
-                peripheral.setNotifyValue(true, for: char)
+        Task { @MainActor in
+            for char in characteristics {
+                switch char.uuid {
+                case helmWaypointCharUuid:
+                    waypointChar = char
+                case helmStatusCharUuid:
+                    statusChar = char
+                    peripheral.setNotifyValue(true, for: char)
+                case helmCommandCharUuid:
+                    commandChar = char
+                case helmCalibrationCharUuid:
+                    calibrationChar = char
+                    peripheral.setNotifyValue(true, for: char)
+                default:
+                    break
+                }
+            }
+        }
+    }
+    
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        guard let data = characteristic.value else { return }
+        
+        Task { @MainActor in
+            switch characteristic.uuid {
+            case helmStatusCharUuid:
+                parseStatus(data)
+            case helmCalibrationCharUuid:
+                parseResponse(data)
             default:
                 break
             }
         }
     }
     
-    func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard let data = characteristic.value else { return }
-        
-        switch characteristic.uuid {
-        case statusCharUuid:
-            parseStatus(data)
-        case calibrationCharUuid:
-            parseResponse(data)
-        default:
-            break
-        }
-    }
-    
     private func parseStatus(_ data: Data) {
         do {
             let status = try JSONDecoder().decode(DeviceStatus.self, from: data)
-            DispatchQueue.main.async {
-                self.deviceStatus = status
-            }
+            self.deviceStatus = status
         } catch {
             print("Status parse error: \(error)")
         }
@@ -235,11 +254,9 @@ extension BluetoothManager: CBPeripheralDelegate {
     private func parseResponse(_ data: Data) {
         do {
             let response = try JSONDecoder().decode(BleResponse.self, from: data)
-            DispatchQueue.main.async {
-                self.lastResponse = response
-                if let error = response.error {
-                    self.lastError = error
-                }
+            self.lastResponse = response
+            if let error = response.error {
+                self.lastError = error
             }
         } catch {
             print("Response parse error: \(error)")

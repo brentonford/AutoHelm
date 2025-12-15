@@ -163,11 +163,15 @@ String BleManager::buildStatusJson(const GpsData& gpsData, float heading, const 
     json += "\"hdop\":" + String(gpsData.hdop, 1) + ",";
     json += "\"heading\":" + String(heading, 1) + ",";
     json += "\"distance\":" + String(navData.distanceToTarget, 1) + ",";
-    json += "\"bearing\":" + String(navData.bearingToTarget, 1);
+    json += "\"bearing\":" + String(navData.bearingToTarget, 1) + ",";
+    json += "\"relative\":" + String(navData.relativeAngle, 1);
 
     if (target.isSet) {
         json += ",\"targetLat\":" + String(target.latitude, 6);
         json += ",\"targetLon\":" + String(target.longitude, 6);
+        json += ",\"hasTarget\":true";
+    } else {
+        json += ",\"hasTarget\":false";
     }
 
     json += "}";
