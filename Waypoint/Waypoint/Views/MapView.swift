@@ -9,8 +9,10 @@ struct MapView: View {
     
     @State private var cameraPosition: MapCameraPosition = .userLocation(fallback: .automatic)
     @State private var showingWaypointSheet = false
+    @State private var showingWaypointList = false
     @State private var pendingCoordinate: CLLocationCoordinate2D?
     @State private var waypointName = ""
+    @State private var isGeocodingName = false
     
     var body: some View {
         ZStack {
@@ -26,14 +28,30 @@ struct MapView: View {
                 }
             }
         }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showingWaypointList = true
+                } label: {
+                    Label("Waypoints", systemImage: "list.bullet")
+                }
+            }
+        }
         .sheet(isPresented: $showingWaypointSheet) {
             AddWaypointSheet(
                 coordinate: pendingCoordinate,
                 name: $waypointName,
+                isLoading: isGeocodingName,
                 onSave: addWaypoint,
-                onCancel: { showingWaypointSheet = false }
+                onCancel: {
+                    showingWaypointSheet = false
+                    waypointName = ""
+                }
             )
-            .presentationDetents([.height(200)])
+            .presentationDetents([.height(250)])
+        }
+        .sheet(isPresented: $showingWaypointList) {
+            WaypointListView(waypoints: $waypoints, selectedWaypoint: $selectedWaypoint)
         }
     }
     
@@ -58,9 +76,47 @@ struct MapView: View {
             .onTapGesture { position in
                 if let coordinate = proxy.convert(position, from: .local) {
                     pendingCoordinate = coordinate
-                    waypointName = ""
+                    getLocationName(for: coordinate)
                     showingWaypointSheet = true
                 }
+            }
+        }
+    }
+    
+    private func getLocationName(for coordinate: CLLocationCoordinate2D) {
+        isGeocodingName = true
+        waypointName = ""
+        
+        let location = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        let geocoder = CLGeocoder()
+        
+        geocoder.reverseGeocodeLocation(location) { placemarks, error in
+            isGeocodingName = false
+            
+            if let placemark = placemarks?.first {
+                var components: [String] = []
+                
+                if let name = placemark.name {
+                    components.append(name)
+                } else if let thoroughfare = placemark.thoroughfare {
+                    components.append(thoroughfare)
+                }
+                
+                if let locality = placemark.locality {
+                    components.append(locality)
+                } else if let subLocality = placemark.subLocality {
+                    components.append(subLocality)
+                }
+                
+                if components.isEmpty {
+                    if let administrativeArea = placemark.administrativeArea {
+                        components.append(administrativeArea)
+                    }
+                }
+                
+                waypointName = components.isEmpty ? "Waypoint \(waypoints.count + 1)" : components.joined(separator: ", ")
+            } else {
+                waypointName = "Waypoint \(waypoints.count + 1)"
             }
         }
     }
@@ -73,6 +129,7 @@ struct MapView: View {
         waypoints.append(waypoint)
         selectedWaypoint = waypoint
         showingWaypointSheet = false
+        waypointName = ""
     }
     
     private func deleteWaypoint(_ waypoint: Waypoint) {
@@ -138,6 +195,7 @@ struct SelectedWaypointCard: View {
 struct AddWaypointSheet: View {
     let coordinate: CLLocationCoordinate2D?
     @Binding var name: String
+    let isLoading: Bool
     let onSave: () -> Void
     let onCancel: () -> Void
     
@@ -152,7 +210,15 @@ struct AddWaypointSheet: View {
                 }
                 
                 Section("Name") {
-                    TextField("Waypoint name", text: $name)
+                    if isLoading {
+                        HStack {
+                            ProgressView()
+                            Text("Getting location name...")
+                                .foregroundColor(.secondary)
+                        }
+                    } else {
+                        TextField("Waypoint name", text: $name)
+                    }
                 }
             }
             .navigationTitle("New Waypoint")
@@ -162,6 +228,7 @@ struct AddWaypointSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add", action: onSave)
+                        .disabled(isLoading)
                 }
             }
         }

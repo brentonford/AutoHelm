@@ -7,11 +7,20 @@ struct Waypoint: Identifiable, Codable, Equatable, Hashable {
     let id: UUID
     var coordinate: CLLocationCoordinate2D
     var name: String
+    var dateCreated: Date
+    var dateModified: Date
     
-    init(id: UUID = UUID(), coordinate: CLLocationCoordinate2D, name: String = "") {
+    init(id: UUID = UUID(), coordinate: CLLocationCoordinate2D, name: String = "", dateCreated: Date = Date(), dateModified: Date = Date()) {
         self.id = id
         self.coordinate = coordinate
         self.name = name
+        self.dateCreated = dateCreated
+        self.dateModified = dateModified
+    }
+    
+    mutating func updateName(_ newName: String) {
+        name = newName
+        dateModified = Date()
     }
     
     func toGpsString() -> String {
@@ -43,6 +52,10 @@ struct DeviceStatus: Codable {
     var targetLocation: CLLocationCoordinate2D? {
         guard let lat = targetLat, let lon = targetLon else { return nil }
         return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+    
+    var isNavigationReady: Bool {
+        hasFix && satellites >= 4 && hdop < 5.0
     }
     
     enum CodingKeys: String, CodingKey {

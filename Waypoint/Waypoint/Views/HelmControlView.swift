@@ -13,13 +13,23 @@ struct HelmControlView: View {
     @State private var activeMomentaryButton: String?
     @State private var commandFeedback: String?
     
+    private var navigationBlocked: Bool {
+        guard bluetooth.connectionState == .connected else { return true }
+        guard let status = bluetooth.deviceStatus else { return true }
+        return !status.isNavigationReady
+    }
+    
+    private var navigationFunctioning: Bool {
+        navigationEnabled && !navigationBlocked
+    }
+    
     var body: some View {
         List {
             connectionSection
             gpsStatusSection
             compassSection
+            navigationControlSection
             motorControlSection
-            navigationSection
             waypointSection
         }
         .navigationTitle("Helm Control")
@@ -158,6 +168,99 @@ struct HelmControlView: View {
         }
     }
     
+    // MARK: - Navigation Control Section
+    
+    private var navigationControlSection: some View {
+        Section {
+            if let status = bluetooth.deviceStatus {
+                if status.hasTarget == true {
+                    LabeledContent("Distance", value: formatDistance(status.distance))
+                    LabeledContent("Bearing", value: String(format: "%.1f°", status.bearing))
+                    
+                    if let relative = status.relative {
+                        LabeledContent("Correction") {
+                            HStack {
+                                Text(correctionDirection(relative))
+                                Text(String(format: "%+.1f°", relative))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    
+                    if let target = status.targetLocation {
+                        LabeledContent("Target") {
+                            Text(String(format: "%.6f, %.6f", target.latitude, target.longitude))
+                                .font(.caption)
+                        }
+                    }
+                } else {
+                    Text("No target waypoint set")
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Navigation Enabled", isOn: $navigationEnabled)
+                    .onChange(of: navigationEnabled) { _, enabled in
+                        toggleNavigation(enabled)
+                    }
+                
+                if navigationBlocked {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                            .font(.caption)
+                        Text(blockReason)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                if navigationFunctioning {
+                    HStack(spacing: 8) {
+                        Image(systemName: "location.fill")
+                            .foregroundColor(.green)
+                            .font(.caption)
+                        Text("Navigation Active - Autonomous Control")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    }
+                }
+            }
+        } header: {
+            Text("Autonomous Navigation")
+        } footer: {
+            Text(navigationFunctioning ? "Helm is autonomously navigating to waypoint" : "Enable navigation when GPS is ready and Helm is connected")
+                .font(.caption)
+        }
+    }
+    
+    private var blockReason: String {
+        guard bluetooth.connectionState == .connected else {
+            return "Navigation blocked: Helm not connected"
+        }
+        guard let status = bluetooth.deviceStatus else {
+            return "Navigation blocked: No GPS data"
+        }
+        if !status.hasFix {
+            return "Navigation blocked: No GPS fix"
+        }
+        if status.satellites < 4 {
+            return "Navigation blocked: Insufficient satellites (\(status.satellites)/4)"
+        }
+        if status.hdop >= 5.0 {
+            return "Navigation blocked: Poor GPS accuracy (HDOP: \(String(format: "%.1f", status.hdop)))"
+        }
+        return "Navigation blocked"
+    }
+    
+    private func correctionDirection(_ relative: Double) -> String {
+        if abs(relative) <= 15.0 {
+            return "✓ On course"
+        }
+        return relative > 0 ? "→ Turn RIGHT" : "← Turn LEFT"
+    }
+    
     // MARK: - Motor Control Section
     
     private var motorControlSection: some View {
@@ -210,7 +313,7 @@ struct HelmControlView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
         } header: {
-            Text("Motor Control")
+            Text("Manual Motor Control")
         } footer: {
             Text("Left/Right: Hold to steer • Others: Tap for 1 second pulse")
                 .font(.caption)
@@ -247,58 +350,6 @@ struct HelmControlView: View {
         }
     }
     
-    // MARK: - Navigation Section
-    
-    private var navigationSection: some View {
-        Section("Navigation") {
-            if let status = bluetooth.deviceStatus {
-                if status.hasTarget == true {
-                    LabeledContent("Distance", value: formatDistance(status.distance))
-                    LabeledContent("Bearing", value: String(format: "%.1f°", status.bearing))
-                    
-                    if let relative = status.relative {
-                        LabeledContent("Correction") {
-                            HStack {
-                                Text(correctionDirection(relative))
-                                Text(String(format: "%+.1f°", relative))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                    }
-                    
-                    if let target = status.targetLocation {
-                        LabeledContent("Target") {
-                            Text(String(format: "%.6f, %.6f", target.latitude, target.longitude))
-                                .font(.caption)
-                        }
-                    }
-                } else {
-                    Text("No target waypoint set")
-                        .foregroundColor(.secondary)
-                }
-            }
-            
-            Toggle("Navigation Enabled", isOn: $navigationEnabled)
-                .disabled(!canEnableNavigation)
-                .onChange(of: navigationEnabled) { _, enabled in
-                    toggleNavigation(enabled)
-                }
-        }
-    }
-    
-    private func correctionDirection(_ relative: Double) -> String {
-        if abs(relative) <= 15.0 {
-            return "✓ On course"
-        }
-        return relative > 0 ? "→ Turn RIGHT" : "← Turn LEFT"
-    }
-    
-    private var canEnableNavigation: Bool {
-        guard bluetooth.connectionState == .connected else { return false }
-        guard let status = bluetooth.deviceStatus else { return false }
-        return status.hasFix && status.hdop < 5.0
-    }
-    
     // MARK: - Waypoint Section
     
     private var waypointSection: some View {
@@ -323,14 +374,14 @@ struct HelmControlView: View {
                             ProgressView()
                                 .scaleEffect(0.8)
                         }
-                        Text("Send to Helm")
+                        Text("Send to Helm & Enable Navigation")
                     }
                 }
                 .disabled(bluetooth.connectionState != .connected || isLoading)
             } else {
                 Text("No waypoint selected")
                     .foregroundColor(.secondary)
-                Text("Tap on the map to create a waypoint")
+                Text("Tap on the map or select from waypoint list")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -358,6 +409,12 @@ struct HelmControlView: View {
         isLoading = true
         commandFeedback = "Sending waypoint..."
         bluetooth.sendWaypoint(waypoint)
+        
+        // Auto-enable navigation after sending waypoint
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            navigationEnabled = true
+            bluetooth.enableNavigation()
+        }
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             commandFeedback = nil
