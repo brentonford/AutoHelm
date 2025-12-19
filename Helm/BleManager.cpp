@@ -148,6 +148,21 @@ void BleManager::parseCommand(const String& data) {
     } else if (cmd == "STOP_CAL") {
         _status.pendingCommand = BleCommand::StopCalibration;
         sendResponse("{\"ack\":\"STOP_CAL\"}");
+    } else if (cmd.startsWith("RF_")) {
+        String rfCmd = cmd.substring(3);
+        
+        // Check if it's a hold command (LEFT_HOLD or RIGHT_HOLD)
+        if (rfCmd.endsWith("_HOLD")) {
+            rfCmd = rfCmd.substring(0, rfCmd.length() - 5); // Remove "_HOLD"
+            _status.pendingRfCommand = rfCmd;
+            _status.isHoldCommand = true;
+        } else {
+            // Momentary command (UP, DOWN, MOTOR, MOMENTARY)
+            _status.pendingRfCommand = rfCmd;
+            _status.isHoldCommand = false;
+        }
+        
+        sendResponse("{\"ack\":\"" + cmd + "\"}");
     } else {
         sendResponse("{\"error\":\"Unknown command\"}");
     }
@@ -231,5 +246,20 @@ Waypoint BleManager::consumeWaypoint() {
 BleCommand BleManager::consumeCommand() {
     BleCommand cmd = _status.pendingCommand;
     _status.pendingCommand = BleCommand::None;
+    return cmd;
+}
+
+bool BleManager::hasRfCommandPending() const {
+    return _status.pendingRfCommand.length() > 0;
+}
+
+bool BleManager::isRfHoldCommand() const {
+    return _status.isHoldCommand;
+}
+
+String BleManager::consumeRfCommand() {
+    String cmd = _status.pendingRfCommand;
+    _status.pendingRfCommand = "";
+    _status.isHoldCommand = false;
     return cmd;
 }

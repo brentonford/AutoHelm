@@ -35,6 +35,14 @@ float currentHeading = 0.0f;
 uint32_t lastStatusPrintTime = 0;
 constexpr uint32_t statusPrintIntervalMs = 5000;
 
+// Hold transmission state
+Button activeHoldButton = Button::Count;
+bool isHoldActive = false;
+uint32_t lastHoldTransmitTime = 0;
+uint32_t holdStartTime = 0;
+constexpr uint32_t holdTransmitIntervalMs = 68;
+constexpr uint32_t holdTransmitTimeoutMs = 30000;
+
 // Test waypoint (Sydney Harbour Bridge)
 constexpr float testWaypointLat = -33.8523f;
 constexpr float testWaypointLon = 151.2108f;
@@ -182,6 +190,72 @@ void processBleWaypoint() {
     }
 }
 
+void processBleRfCommand() {
+    if (!ble.hasRfCommandPending())
+        return;
+
+    if (!remoteAvailable)
+        return;
+
+    bool isHold = ble.isRfHoldCommand();
+    String cmd = ble.consumeRfCommand();
+    Serial.printf("[BLE] RF Command: %s (Hold: %s)\n", cmd.c_str(), isHold ? "YES" : "NO");
+
+    if (cmd == "LEFT") {
+        if (isHold) {
+            activeHoldButton = Button::Left;
+            isHoldActive = true;
+            lastHoldTransmitTime = 0;
+            holdStartTime = millis();
+            Serial.println("[BLE] Starting LEFT hold transmission");
+        } else {
+            remote.transmitHold(Button::Left, 1000);
+        }
+    } else if (cmd == "RIGHT") {
+        if (isHold) {
+            activeHoldButton = Button::Right;
+            isHoldActive = true;
+            lastHoldTransmitTime = 0;
+            holdStartTime = millis();
+            Serial.println("[BLE] Starting RIGHT hold transmission");
+        } else {
+            remote.transmitHold(Button::Right, 1000);
+        }
+    } else if (cmd == "UP") {
+        remote.transmitHold(Button::Up, 1000);
+    } else if (cmd == "DOWN") {
+        remote.transmitHold(Button::Down, 1000);
+    } else if (cmd == "MOTOR") {
+        remote.transmitHold(Button::Motor, 1000);
+    } else if (cmd == "MOMENTARY") {
+        remote.transmitHold(Button::Momentary, 1000);
+    } else if (cmd == "RELEASE") {
+        isHoldActive = false;
+        remote.transmitSingle(Button::Release);
+        Serial.println("[BLE] Stopping hold transmission");
+    }
+}
+
+void processHoldTransmission() {
+    if (!isHoldActive || !remoteAvailable)
+        return;
+
+    uint32_t now = millis();
+    
+    // Safety timeout
+    if ((now - holdStartTime) >= holdTransmitTimeoutMs) {
+        Serial.println("[Safety] Hold transmission timeout - releasing");
+        isHoldActive = false;
+        remote.transmitSingle(Button::Release);
+        return;
+    }
+
+    if (lastHoldTransmitTime == 0 || (now - lastHoldTransmitTime) >= holdTransmitIntervalMs) {
+        remote.transmitSingle(activeHoldButton);
+        lastHoldTransmitTime = now;
+    }
+}
+
 void processBleCommand() {
     BleCommand cmd = ble.consumeCommand();
 
@@ -262,6 +336,16 @@ void checkBleConnection() {
     bool bleConnected = ble.isConnected();
 
     if (bleWasConnected && !bleConnected) {
+        // Stop hold transmission immediately on disconnect
+        if (isHoldActive) {
+            Serial.println("[Safety] BLE disconnected - stopping hold transmission");
+            isHoldActive = false;
+            if (remoteAvailable) {
+                remote.transmitSingle(Button::Release);
+            }
+        }
+        
+        // Disable navigation
         if (navigation.isEnabled()) {
             Serial.println("[Safety] BLE disconnected - disabling navigation");
             navigation.setEnabled(false);
@@ -356,6 +440,8 @@ void loop() {
         ble.update();
         processBleWaypoint();
         processBleCommand();
+        processBleRfCommand();
+        processHoldTransmission();
     }
 
     // Safety checks

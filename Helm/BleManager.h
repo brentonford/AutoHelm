@@ -1,10 +1,14 @@
 #pragma once
 
 #include <Arduino.h>
+
+// ESP32 native BLE library (not ArduinoBLE)
+// If you get conflicts, remove ~/Documents/Arduino/libraries/ArduinoBLE
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+
 #include "DataModels.h"
 
 namespace BleConfig {
@@ -31,13 +35,17 @@ struct BleStatus {
     float waypointLat;
     float waypointLon;
     BleCommand pendingCommand;
+    String pendingRfCommand;
+    bool isHoldCommand;
 
     BleStatus()
         : connected(false)
         , waypointReceived(false)
         , waypointLat(0.0f)
         , waypointLon(0.0f)
-        , pendingCommand(BleCommand::None) {
+        , pendingCommand(BleCommand::None)
+        , pendingRfCommand("")
+        , isHoldCommand(false) {
     }
 };
 
@@ -55,6 +63,9 @@ public:
     bool hasWaypointPending() const;
     Waypoint consumeWaypoint();
     BleCommand consumeCommand();
+    bool hasRfCommandPending() const;
+    String consumeRfCommand();
+    bool isRfHoldCommand() const;
 
     // BLEServerCallbacks
     void onConnect(BLEServer* server) override;
