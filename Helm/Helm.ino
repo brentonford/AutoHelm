@@ -205,9 +205,10 @@ void processBleRfCommand() {
         if (isHold) {
             activeHoldButton = Button::Left;
             isHoldActive = true;
-            lastHoldTransmitTime = 0;
             holdStartTime = millis();
+            lastHoldTransmitTime = millis();
             Serial.println("[BLE] Starting LEFT hold transmission");
+            remote.transmitSingle(Button::Left);  // Transmit immediately
         } else {
             remote.transmitHold(Button::Left, 1000);
         }
@@ -215,9 +216,10 @@ void processBleRfCommand() {
         if (isHold) {
             activeHoldButton = Button::Right;
             isHoldActive = true;
-            lastHoldTransmitTime = 0;
             holdStartTime = millis();
+            lastHoldTransmitTime = millis();
             Serial.println("[BLE] Starting RIGHT hold transmission");
+            remote.transmitSingle(Button::Right);  // Transmit immediately
         } else {
             remote.transmitHold(Button::Right, 1000);
         }

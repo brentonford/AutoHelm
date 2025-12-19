@@ -41,7 +41,7 @@ struct HelmControlView: View {
         .onChange(of: bluetooth.lastResponse) { _, response in
             isLoading = false
             if response != nil {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                     commandFeedback = nil
                 }
             }
@@ -229,7 +229,7 @@ struct HelmControlView: View {
             commandFeedback = "Releasing..."
             bluetooth.sendCommand("RF_RELEASE")
             
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 activeHoldButton = nil
                 commandFeedback = nil
             }
@@ -241,7 +241,7 @@ struct HelmControlView: View {
         commandFeedback = "Sending \(label) (1s)..."
         bluetooth.sendCommand(command)
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
             activeMomentaryButton = nil
             commandFeedback = nil
         }
@@ -349,7 +349,7 @@ struct HelmControlView: View {
             bluetooth.disableNavigation()
         }
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             commandFeedback = nil
         }
     }
@@ -359,7 +359,7 @@ struct HelmControlView: View {
         commandFeedback = "Sending waypoint..."
         bluetooth.sendWaypoint(waypoint)
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             commandFeedback = nil
         }
     }
