@@ -11,23 +11,26 @@ struct HelmControlView: View {
     @State private var activeHoldButton: String?
     @State private var activeMomentaryButton: String?
     @State private var commandFeedback: String?
-    
+    @State private var targetSpeedKmh: Double = 3.6
+
     private var navigationBlocked: Bool {
         guard bluetooth.connectionState == .connected else { return true }
         guard let status = bluetooth.deviceStatus else { return true }
         return !status.isNavigationReady
     }
-    
+
     private var navigationFunctioning: Bool {
         navigationEnabled && !navigationBlocked
     }
-    
+
     var body: some View {
         List {
             connectionSection
             gpsStatusSection
             compassSection
             navigationControlSection
+            spotLockSection
+            speedControlSection
             motorControlSection
             waypointSection
         }
@@ -56,9 +59,9 @@ struct HelmControlView: View {
             }
         }
     }
-    
+
     // MARK: - Connection Section
-    
+
     private var connectionSection: some View {
         Section("Connection") {
             HStack {
@@ -73,13 +76,13 @@ struct HelmControlView: View {
             }
         }
     }
-    
+
     private var connectionIndicator: some View {
         Circle()
             .fill(connectionColor)
             .frame(width: 12, height: 12)
     }
-    
+
     private var connectionColor: Color {
         switch bluetooth.connectionState {
         case .connected: return .green
@@ -87,9 +90,9 @@ struct HelmControlView: View {
         case .disconnected: return .red
         }
     }
-    
+
     // MARK: - GPS Status Section
-    
+
     private var gpsStatusSection: some View {
         Section {
             if let status = bluetooth.deviceStatus {
@@ -101,15 +104,14 @@ struct HelmControlView: View {
                         Text(status.hasFix ? "Valid" : "No Fix")
                     }
                 }
-                
+
                 LabeledContent("Satellites", value: "\(status.satellites)")
                 LabeledContent("HDOP", value: String(format: "%.1f", status.hdop))
-                
+
                 if status.hasFix {
                     LabeledContent("Position") {
-                        Text(String(format: "%.6f, %.6f",
-                                    status.currentLat, status.currentLon))
-                        .font(.caption)
+                        Text(String(format: "%.6f, %.6f", status.currentLat, status.currentLon))
+                            .font(.caption)
                     }
                 }
             } else {
@@ -126,16 +128,16 @@ struct HelmControlView: View {
             }
         }
     }
-    
+
     private var gpsStatusColor: Color {
         guard let status = bluetooth.deviceStatus else { return .red }
         if !status.hasFix { return .red }
         if status.hdop >= 5.0 { return .orange }
         return .green
     }
-    
+
     // MARK: - Compass Section
-    
+
     private var compassSection: some View {
         Section {
             if let status = bluetooth.deviceStatus {
@@ -146,9 +148,9 @@ struct HelmControlView: View {
                     Spacer()
                 }
                 .listRowBackground(Color.clear)
-                
+
                 LabeledContent("Heading", value: String(format: "%.1f°", status.heading))
-                
+
                 if status.hasTarget == true {
                     LabeledContent("Bearing to Target", value: String(format: "%.1f°", status.bearing))
                 }
@@ -166,16 +168,18 @@ struct HelmControlView: View {
             }
         }
     }
-    
+
     // MARK: - Navigation Control Section
-    
+
     private var navigationControlSection: some View {
         Section {
             if let status = bluetooth.deviceStatus {
+                LabeledContent("State", value: status.navState?.capitalized ?? "Unknown")
+
                 if status.hasTarget == true {
                     LabeledContent("Distance", value: formatDistance(status.distance))
                     LabeledContent("Bearing", value: String(format: "%.1f°", status.bearing))
-                    
+
                     if let relative = status.relative {
                         LabeledContent("Correction") {
                             HStack {
@@ -185,25 +189,15 @@ struct HelmControlView: View {
                             }
                         }
                     }
-                    
-                    if let target = status.targetLocation {
-                        LabeledContent("Target") {
-                            Text(String(format: "%.6f, %.6f", target.latitude, target.longitude))
-                                .font(.caption)
-                        }
-                    }
-                } else {
-                    Text("No target waypoint set")
-                        .foregroundColor(.secondary)
                 }
             }
-            
+
             VStack(alignment: .leading, spacing: 8) {
                 Toggle("Navigation Enabled", isOn: $navigationEnabled)
                     .onChange(of: navigationEnabled) { _, enabled in
                         toggleNavigation(enabled)
                     }
-                
+
                 if navigationBlocked {
                     HStack(spacing: 8) {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -214,13 +208,13 @@ struct HelmControlView: View {
                             .foregroundColor(.secondary)
                     }
                 }
-                
+
                 if navigationFunctioning {
                     HStack(spacing: 8) {
                         Image(systemName: "location.fill")
                             .foregroundColor(.green)
                             .font(.caption)
-                        Text("Navigation Active - Autonomous Control")
+                        Text("Navigation Active")
                             .font(.caption)
                             .foregroundColor(.green)
                     }
@@ -228,12 +222,9 @@ struct HelmControlView: View {
             }
         } header: {
             Text("Autonomous Navigation")
-        } footer: {
-            Text(navigationFunctioning ? "Helm is autonomously navigating to waypoint" : "Enable navigation when GPS is ready and Helm is connected")
-                .font(.caption)
         }
     }
-    
+
     private var blockReason: String {
         guard bluetooth.connectionState == .connected else {
             return "Navigation blocked: Helm not connected"
@@ -252,53 +243,155 @@ struct HelmControlView: View {
         }
         return "Navigation blocked"
     }
-    
+
     private func correctionDirection(_ relative: Double) -> String {
         if abs(relative) <= 15.0 {
             return "✓ On course"
         }
         return relative > 0 ? "→ Turn RIGHT" : "← Turn LEFT"
     }
-    
+
+    // MARK: - Spot Lock Section
+
+    private var spotLockSection: some View {
+        Section {
+            if let status = bluetooth.deviceStatus {
+                HStack {
+                    Text("Spot Lock")
+                    Spacer()
+                    Text(status.isSpotLockActive ? "ACTIVE" : "OFF")
+                        .foregroundColor(status.isSpotLockActive ? .green : .secondary)
+                }
+
+                if status.isSpotLockActive {
+                    LabeledContent("Distance from Lock", value: formatDistance(status.distance))
+                }
+
+                HStack(spacing: 16) {
+                    Button(status.isSpotLockActive ? "Disengage" : "Engage") {
+                        if status.isSpotLockActive {
+                            bluetooth.disengageSpotLock()
+                        } else {
+                            bluetooth.engageSpotLock()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(status.isSpotLockActive ? .red : .blue)
+                }
+
+                if status.isSpotLockActive {
+                    VStack(spacing: 8) {
+                        Text("Jog Position")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        HStack(spacing: 16) {
+                            Spacer()
+                            Button(action: { bluetooth.jogSpotLock(direction: .forward) }) {
+                                Image(systemName: "arrow.up")
+                                    .frame(width: 44, height: 44)
+                            }
+                            .buttonStyle(.bordered)
+                            Spacer()
+                        }
+
+                        HStack(spacing: 16) {
+                            Button(action: { bluetooth.jogSpotLock(direction: .left) }) {
+                                Image(systemName: "arrow.left")
+                                    .frame(width: 44, height: 44)
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button(action: { bluetooth.jogSpotLock(direction: .back) }) {
+                                Image(systemName: "arrow.down")
+                                    .frame(width: 44, height: 44)
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button(action: { bluetooth.jogSpotLock(direction: .right) }) {
+                                Image(systemName: "arrow.right")
+                                    .frame(width: 44, height: 44)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                }
+            }
+        } header: {
+            Text("Spot Lock (Station Keeping)")
+        } footer: {
+            Text("Spot Lock holds position at the current GPS location. Jog moves the lock point ~5 feet.")
+        }
+    }
+
+    // MARK: - Speed Control Section
+
+    private var speedControlSection: some View {
+        Section {
+            if let status = bluetooth.deviceStatus {
+                LabeledContent("Current Level", value: "\(status.speedLevel ?? 0)/10")
+                LabeledContent("Target Level", value: "\(status.targetSpeed ?? 0)/10")
+
+                if let speedKmh = status.speedKmh {
+                    LabeledContent("Est. Speed", value: String(format: "%.1f km/hr", speedKmh))
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Set Target Speed: \(String(format: "%.1f", targetSpeedKmh)) km/hr")
+                    .font(.subheadline)
+
+                Slider(value: $targetSpeedKmh, in: 0...10, step: 0.5)
+
+                Button("Apply Speed") {
+                    bluetooth.setSpeed(targetSpeedKmh)
+                }
+                .buttonStyle(.bordered)
+            }
+        } header: {
+            Text("Speed Control")
+        } footer: {
+            Text("Default cruise speed is 3.6 km/hr (1 m/s)")
+        }
+    }
+
     // MARK: - Motor Control Section
-    
+
     private var motorControlSection: some View {
         Section {
             VStack(spacing: 16) {
-                // Top row: Left (hold), Speed+ (momentary), Right (hold)
                 HStack(spacing: 20) {
                     HoldButton(label: "◀", isActive: activeHoldButton == "LEFT") {
                         startHoldCommand("RF_LEFT_HOLD", label: "LEFT")
                     } onRelease: {
                         stopHoldCommand()
                     }
-                    
+
                     MomentaryButton(label: "+", isActive: activeMomentaryButton == "UP") {
                         sendMomentaryCommand("RF_UP", label: "SPEED+")
                     }
-                    
+
                     HoldButton(label: "▶", isActive: activeHoldButton == "RIGHT") {
                         startHoldCommand("RF_RIGHT_HOLD", label: "RIGHT")
                     } onRelease: {
                         stopHoldCommand()
                     }
                 }
-                
-                // Bottom row: Momentary (M), Speed- (momentary), Motor (momentary)
+
                 HStack(spacing: 20) {
                     MomentaryButton(label: "M", isActive: activeMomentaryButton == "MOMENTARY") {
                         sendMomentaryCommand("RF_MOMENTARY", label: "MOMENTARY")
                     }
-                    
+
                     MomentaryButton(label: "-", isActive: activeMomentaryButton == "DOWN") {
                         sendMomentaryCommand("RF_DOWN", label: "SPEED-")
                     }
-                    
+
                     MomentaryButton(systemImage: "fanblades", isActive: activeMomentaryButton == "MOTOR") {
                         sendMomentaryCommand("RF_MOTOR", label: "MOTOR")
                     }
                 }
-                
+
                 if let feedback = commandFeedback {
                     HStack {
                         ProgressView()
@@ -315,56 +408,54 @@ struct HelmControlView: View {
             Text("Manual Motor Control")
         } footer: {
             Text("Left/Right: Hold to steer • Others: Tap for 1 second pulse")
-                .font(.caption)
-                .foregroundColor(.secondary)
         }
     }
-    
+
     private func startHoldCommand(_ command: String, label: String) {
         activeHoldButton = label
         commandFeedback = "Sending \(label)..."
         bluetooth.sendCommand(command)
     }
-    
+
     private func stopHoldCommand() {
         if activeHoldButton != nil {
             commandFeedback = "Releasing..."
             bluetooth.sendCommand("RF_RELEASE")
-            
+
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 activeHoldButton = nil
                 commandFeedback = nil
             }
         }
     }
-    
+
     private func sendMomentaryCommand(_ command: String, label: String) {
         activeMomentaryButton = label
         commandFeedback = "Sending \(label) (1s)..."
         bluetooth.sendCommand(command)
-        
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
             activeMomentaryButton = nil
             commandFeedback = nil
         }
     }
-    
+
     // MARK: - Waypoint Section
-    
+
     private var waypointSection: some View {
         Section("Waypoint") {
             if let waypoint = selectedWaypoint {
                 LabeledContent("Selected") {
                     Text(waypoint.name)
                 }
-                
+
                 LabeledContent("Coordinates") {
                     Text(String(format: "%.6f, %.6f",
                                 waypoint.coordinate.latitude,
                                 waypoint.coordinate.longitude))
                     .font(.caption)
                 }
-                
+
                 Button {
                     sendWaypoint(waypoint)
                 } label: {
@@ -380,46 +471,42 @@ struct HelmControlView: View {
             } else {
                 Text("No waypoint selected")
                     .foregroundColor(.secondary)
-                Text("Tap on the map or select from waypoint list")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
             }
         }
     }
-    
+
     // MARK: - Actions
-    
+
     private func toggleNavigation(_ enabled: Bool) {
         isLoading = true
         commandFeedback = enabled ? "Enabling navigation..." : "Disabling navigation..."
-        
+
         if enabled {
             bluetooth.enableNavigation()
         } else {
             bluetooth.disableNavigation()
         }
-        
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             commandFeedback = nil
         }
     }
-    
+
     private func sendWaypoint(_ waypoint: Waypoint) {
         isLoading = true
         commandFeedback = "Sending waypoint..."
         bluetooth.sendWaypoint(waypoint)
-        
-        // Auto-enable navigation after sending waypoint
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             navigationEnabled = true
             bluetooth.enableNavigation()
         }
-        
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             commandFeedback = nil
         }
     }
-    
+
     private func formatDistance(_ meters: Double) -> String {
         if meters >= 1000 {
             return String(format: "%.2f km", meters / 1000)
@@ -433,12 +520,12 @@ struct HelmControlView: View {
 struct CompassView: View {
     let heading: Double
     let bearing: Double?
-    
+
     var body: some View {
         ZStack {
             Circle()
                 .stroke(Color.gray.opacity(0.3), lineWidth: 2)
-            
+
             ForEach(cardinalDirections, id: \.0) { direction, angle in
                 Text(direction)
                     .font(.caption.bold())
@@ -447,7 +534,7 @@ struct CompassView: View {
                     .offset(y: -55)
                     .rotationEffect(.degrees(angle))
             }
-            
+
             ForEach(0..<36, id: \.self) { i in
                 Rectangle()
                     .fill(Color.gray.opacity(0.5))
@@ -455,17 +542,17 @@ struct CompassView: View {
                     .offset(y: -65)
                     .rotationEffect(.degrees(Double(i) * 10))
             }
-            
+
             if let bearing = bearing {
                 BearingIndicator()
                     .rotationEffect(.degrees(bearing - heading))
             }
-            
+
             HeadingIndicator()
         }
         .rotationEffect(.degrees(heading))
     }
-    
+
     private var cardinalDirections: [(String, Double)] {
         [("N", 0), ("E", 90), ("S", 180), ("W", 270)]
     }
@@ -495,8 +582,8 @@ struct BearingIndicator: View {
 }
 
 struct Triangle: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
+    nonisolated func path(in rect: CGRect) -> SwiftUI.Path {
+        var path = SwiftUI.Path()
         path.move(to: CGPoint(x: rect.midX, y: rect.minY))
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
         path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
@@ -505,7 +592,7 @@ struct Triangle: Shape {
     }
 }
 
-// MARK: - Hold Button (for Left/Right)
+// MARK: - Hold Button
 
 struct HoldButton: View {
     var label: String?
@@ -513,13 +600,13 @@ struct HoldButton: View {
     var isActive: Bool
     let onPress: () -> Void
     let onRelease: () -> Void
-    
+
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 12)
                 .fill(isActive ? Color.blue.opacity(0.3) : Color.gray.opacity(0.2))
                 .frame(width: 60, height: 60)
-            
+
             if let label = label {
                 Text(label)
                     .font(.title2.bold())
@@ -546,21 +633,21 @@ struct HoldButton: View {
     }
 }
 
-// MARK: - Momentary Button (for Speed+/-, M, Motor)
+// MARK: - Momentary Button
 
 struct MomentaryButton: View {
     var label: String?
     var systemImage: String?
     var isActive: Bool
     let onPress: () -> Void
-    
+
     var body: some View {
         Button(action: onPress) {
             ZStack {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(isActive ? Color.blue.opacity(0.3) : Color.gray.opacity(0.2))
                     .frame(width: 60, height: 60)
-                
+
                 if let label = label {
                     Text(label)
                         .font(.title2.bold())

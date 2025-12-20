@@ -15,13 +15,9 @@ CC1101 cc1101(
 );
 
 Remote remote(cc1101, Pins::cc1101Gdo0);
-
 GpsManager gps(Pins::gpsRx, Pins::gpsTx);
-
 CompassManager compass(Pins::i2cSda, Pins::i2cScl);
-
 NavigationManager navigation;
-
 BleManager ble;
 
 bool cc1101Available = false;
@@ -35,7 +31,6 @@ float currentHeading = 0.0f;
 uint32_t lastStatusPrintTime = 0;
 constexpr uint32_t statusPrintIntervalMs = 5000;
 
-// Hold transmission state
 Button activeHoldButton = Button::Count;
 bool isHoldActive = false;
 uint32_t lastHoldTransmitTime = 0;
@@ -43,7 +38,6 @@ uint32_t holdStartTime = 0;
 constexpr uint32_t holdTransmitIntervalMs = 68;
 constexpr uint32_t holdTransmitTimeoutMs = 30000;
 
-// Test waypoint (Sydney Harbour Bridge)
 constexpr float testWaypointLat = -33.8523f;
 constexpr float testWaypointLon = 151.2108f;
 
@@ -58,13 +52,10 @@ void printGpsStatus() {
     if (data.hasFix) {
         Serial.printf("  Position: %.6f, %.6f\n", data.latitude, data.longitude);
         Serial.printf("  Altitude: %.1f m\n", data.altitude);
-        Serial.printf("  HDOP: %.1f  VDOP: %.1f  PDOP: %.1f\n",
-            data.hdop, data.vdop, data.pdop);
+        Serial.printf("  HDOP: %.1f  VDOP: %.1f  PDOP: %.1f\n", data.hdop, data.vdop, data.pdop);
         Serial.printf("  Data age: %lu ms\n", millis() - data.timestamp);
     } else {
         Serial.println("  Waiting for fix...");
-        Serial.println("  Ensure GPS has clear sky view");
-        Serial.println("  Allow 30-60 seconds for cold start");
     }
     Serial.println();
 }
@@ -74,7 +65,6 @@ void printCompassHeading() {
         Serial.println("[Compass] Not available");
         return;
     }
-
     Serial.printf("[Compass] Heading: %.1f°\n", currentHeading);
 }
 
@@ -92,42 +82,13 @@ void printSensorStatus() {
     Serial.println("[Sensors] Status:");
     Serial.printf("  GPS Available:     %s\n", status.gpsAvailable ? "YES" : "NO");
     Serial.printf("  GPS Fix Valid:     %s\n", status.gpsFixValid ? "YES" : "NO");
-    Serial.printf("  GPS DOP Valid:     %s (< %.1f)\n",
-        status.gpsDopValid ? "YES" : "NO", NavigationConfig::maxDop);
+    Serial.printf("  GPS DOP Valid:     %s (< %.1f)\n", status.gpsDopValid ? "YES" : "NO", NavigationConfig::maxDop);
     Serial.printf("  Compass Available: %s\n", status.compassAvailable ? "YES" : "NO");
     Serial.printf("  BLE Available:     %s\n", bleAvailable ? "YES" : "NO");
     Serial.printf("  BLE Connected:     %s\n", ble.isConnected() ? "YES" : "NO");
+    Serial.printf("  Motor Responding:  %s\n", navigation.isMotorResponding() ? "YES" : "NO");
     Serial.println();
     Serial.printf("  Navigation Ready:  %s\n", status.isNavigationReady() ? "YES" : "NO");
-}
-
-void testNavigationCalculations() {
-    Serial.println();
-    Serial.println("[Nav] Testing navigation calculations...");
-
-    float lat1 = -33.8568f;
-    float lon1 = 151.2153f;
-    float lat2 = -33.8523f;
-    float lon2 = 151.2108f;
-
-    float distance = NavigationUtils::calculateDistance(lat1, lon1, lat2, lon2);
-    float bearing = NavigationUtils::calculateBearing(lat1, lon1, lat2, lon2);
-
-    Serial.println("  From: Sydney Opera House (-33.8568, 151.2153)");
-    Serial.println("  To:   Sydney Harbour Bridge (-33.8523, 151.2108)");
-    Serial.printf("  Distance: %.1f m (expected ~680m)\n", distance);
-    Serial.printf("  Bearing:  %.1f° (expected ~315°)\n", bearing);
-
-    Serial.println();
-    Serial.println("  Relative angle tests:");
-    Serial.printf("    Heading 0°, Bearing 90°:   %+.1f° (expected +90)\n",
-        NavigationUtils::calculateRelativeAngle(0.0f, 90.0f));
-    Serial.printf("    Heading 0°, Bearing 270°:  %+.1f° (expected -90)\n",
-        NavigationUtils::calculateRelativeAngle(0.0f, 270.0f));
-    Serial.printf("    Heading 90°, Bearing 0°:   %+.1f° (expected -90)\n",
-        NavigationUtils::calculateRelativeAngle(90.0f, 0.0f));
-    Serial.printf("    Heading 350°, Bearing 10°: %+.1f° (expected +20)\n",
-        NavigationUtils::calculateRelativeAngle(350.0f, 10.0f));
 }
 
 void printNavigationStatus() {
@@ -136,13 +97,20 @@ void printNavigationStatus() {
 
     const char* stateStr = "UNKNOWN";
     switch (navigation.getState()) {
-        case NavigationState::Idle:       stateStr = "IDLE"; break;
-        case NavigationState::Navigating: stateStr = "NAVIGATING"; break;
-        case NavigationState::Arrived:    stateStr = "ARRIVED"; break;
+        case NavigationState::Idle:          stateStr = "IDLE"; break;
+        case NavigationState::Navigating:    stateStr = "NAVIGATING"; break;
+        case NavigationState::Arrived:       stateStr = "ARRIVED"; break;
+        case NavigationState::PathFollowing: stateStr = "PATH_FOLLOWING"; break;
+        case NavigationState::SpotLock:      stateStr = "SPOT_LOCK"; break;
+        case NavigationState::Manual:        stateStr = "MANUAL"; break;
     }
 
     Serial.printf("  State: %s\n", stateStr);
     Serial.printf("  Enabled: %s\n", navigation.isEnabled() ? "YES" : "NO");
+    Serial.printf("  Spot Lock: %s\n", navigation.isSpotLockActive() ? "ACTIVE" : "OFF");
+
+    SpeedState speedState = navigation.getSpeedState();
+    Serial.printf("  Speed Level: %d/%d\n", speedState.currentLevel, speedState.targetLevel);
 
     if (navigation.hasTarget()) {
         Waypoint target = navigation.getTarget();
@@ -186,6 +154,20 @@ void processHeadingCorrection() {
     }
 }
 
+void processSpeedControl() {
+    if (!remoteAvailable)
+        return;
+
+    int8_t speedAdj = navigation.getSpeedAdjustment();
+    if (speedAdj > 0) {
+        remote.transmitSingle(Button::Up);
+        Serial.println("[Speed] UP");
+    } else if (speedAdj < 0) {
+        remote.transmitSingle(Button::Down);
+        Serial.println("[Speed] DOWN");
+    }
+}
+
 void processBleWaypoint() {
     if (!ble.hasWaypointPending())
         return;
@@ -214,7 +196,7 @@ void processBleRfCommand() {
             holdStartTime = millis();
             lastHoldTransmitTime = millis();
             Serial.println("[BLE] Starting LEFT hold transmission");
-            remote.transmitSingle(Button::Left);  // Transmit immediately
+            remote.transmitSingle(Button::Left);
         } else {
             remote.transmitHold(Button::Left, 1000);
         }
@@ -225,7 +207,7 @@ void processBleRfCommand() {
             holdStartTime = millis();
             lastHoldTransmitTime = millis();
             Serial.println("[BLE] Starting RIGHT hold transmission");
-            remote.transmitSingle(Button::Right);  // Transmit immediately
+            remote.transmitSingle(Button::Right);
         } else {
             remote.transmitHold(Button::Right, 1000);
         }
@@ -249,8 +231,7 @@ void processHoldTransmission() {
         return;
 
     uint32_t now = millis();
-    
-    // Safety timeout
+
     if ((now - holdStartTime) >= holdTransmitTimeoutMs) {
         Serial.println("[Safety] Hold transmission timeout - releasing");
         isHoldActive = false;
@@ -306,8 +287,71 @@ void processBleCommand() {
             ble.sendResponse("{\"ack\":\"CAL_STOPPED\"}");
             break;
 
+        case BleCommand::SpotLockEngage: {
+            GpsData gpsData = gps.getData();
+            if (!gpsData.hasFix) {
+                ble.sendResponse("{\"error\":\"No GPS fix\"}");
+                return;
+            }
+            navigation.engageSpotLock(gpsData.latitude, gpsData.longitude);
+            ble.sendResponse("{\"ack\":\"SPOT_LOCK_ENGAGED\"}");
+            break;
+        }
+
+        case BleCommand::SpotLockDisengage:
+            navigation.disengageSpotLock();
+            ble.sendResponse("{\"ack\":\"SPOT_LOCK_DISENGAGED\"}");
+            break;
+
+        case BleCommand::SpotLockJogForward:
+            navigation.jogSpotLock(currentHeading, 2);
+            ble.sendResponse("{\"ack\":\"JOG_FWD\"}");
+            break;
+
+        case BleCommand::SpotLockJogBack:
+            navigation.jogSpotLock(currentHeading, 0);
+            ble.sendResponse("{\"ack\":\"JOG_BACK\"}");
+            break;
+
+        case BleCommand::SpotLockJogLeft:
+            navigation.jogSpotLock(currentHeading, -1);
+            ble.sendResponse("{\"ack\":\"JOG_LEFT\"}");
+            break;
+
+        case BleCommand::SpotLockJogRight:
+            navigation.jogSpotLock(currentHeading, 1);
+            ble.sendResponse("{\"ack\":\"JOG_RIGHT\"}");
+            break;
+
+        case BleCommand::PathStart:
+            if (navigation.getActivePath()) {
+                navigation.startPath();
+                ble.sendResponse("{\"ack\":\"PATH_STARTED\"}");
+            } else {
+                ble.sendResponse("{\"error\":\"No path set\"}");
+            }
+            break;
+
+        case BleCommand::PathStop:
+            navigation.stopPath();
+            ble.sendResponse("{\"ack\":\"PATH_STOPPED\"}");
+            break;
+
+        case BleCommand::ManualMode:
+            navigation.setEnabled(false);
+            ble.sendResponse("{\"ack\":\"MANUAL_MODE\"}");
+            break;
+
         case BleCommand::None:
             break;
+
+        default:
+            break;
+    }
+
+    if (ble.hasPendingSpeed()) {
+        float speed = ble.consumePendingSpeed();
+        navigation.setTargetSpeedKmh(speed);
     }
 }
 
@@ -318,8 +362,10 @@ void broadcastStatus() {
     GpsData gpsData = gps.getData();
     NavigationData navData = navigation.getNavigationData();
     Waypoint target = navigation.getTarget();
+    NavigationState navState = navigation.getState();
+    SpeedState speedState = navigation.getSpeedState();
 
-    ble.sendStatus(gpsData, currentHeading, navData, target);
+    ble.sendStatus(gpsData, currentHeading, navData, target, navState, speedState);
 }
 
 void checkSafetyConditions() {
@@ -344,7 +390,6 @@ void checkBleConnection() {
     bool bleConnected = ble.isConnected();
 
     if (bleWasConnected && !bleConnected) {
-        // Stop hold transmission immediately on disconnect
         if (isHoldActive) {
             Serial.println("[Safety] BLE disconnected - stopping hold transmission");
             isHoldActive = false;
@@ -352,8 +397,7 @@ void checkBleConnection() {
                 remote.transmitSingle(Button::Release);
             }
         }
-        
-        // Disable navigation
+
         if (navigation.isEnabled()) {
             Serial.println("[Safety] BLE disconnected - disabling navigation");
             navigation.setEnabled(false);
@@ -379,9 +423,7 @@ void printPeriodicStatus() {
     Serial.println();
     Serial.println("[Nav] Periodic Status:");
     Serial.printf("  GPS: %s, Sats: %d, HDOP: %.1f\n",
-        gpsData.hasFix ? "FIX" : "NO FIX",
-        gpsData.satellites,
-        gpsData.hdop);
+        gpsData.hasFix ? "FIX" : "NO FIX", gpsData.satellites, gpsData.hdop);
     Serial.printf("  Position: %.6f, %.6f\n", gpsData.latitude, gpsData.longitude);
     Serial.printf("  Heading: %.1f°, Target Bearing: %.1f°\n", currentHeading, navData.bearingToTarget);
     Serial.printf("  Distance: %.1f m, Relative: %+.1f°\n", navData.distanceToTarget, navData.relativeAngle);
@@ -427,23 +469,21 @@ void setup() {
     Serial.println("  GPS:     g (print status)");
     Serial.println("  Compass: c (print heading)");
     Serial.println("  Sensors: v (validation status)");
-    Serial.println("  Nav:     t (test calculations)");
     Serial.println("  Nav:     n (navigation status)");
     Serial.println("  Nav:     w (set test waypoint)");
     Serial.println("  Nav:     e (enable/disable navigation)");
     Serial.println("  Nav:     x (clear waypoint)");
+    Serial.println("  Spot:    p (engage spot lock)");
+    Serial.println("  Spot:    o (disengage spot lock)");
 }
 
 void loop() {
-    // Update GPS
     if (gpsAvailable)
         gps.update();
 
-    // Update compass
     if (compassAvailable)
         currentHeading = compass.readHeading();
 
-    // Process BLE inputs
     if (bleAvailable) {
         ble.update();
         processBleWaypoint();
@@ -452,31 +492,25 @@ void loop() {
         processHoldTransmission();
     }
 
-    // Safety checks
     checkBleConnection();
     checkSafetyConditions();
 
-    // Update navigation
     if (navigation.isEnabled() && gpsAvailable && compassAvailable) {
         GpsData gpsData = gps.getData();
         navigation.update(gpsData, currentHeading);
         processHeadingCorrection();
+        processSpeedControl();
     }
 
-    // Broadcast status via BLE
     broadcastStatus();
-
-    // Periodic status to serial
     printPeriodicStatus();
 
-    // Process serial commands
     if (!Serial.available())
         return;
 
     char c = Serial.read();
 
     switch (c) {
-        // Hold commands (uppercase)
         case 'R': remote.transmitHold(Button::Right); break;
         case 'L': remote.transmitHold(Button::Left); break;
         case 'U': remote.transmitHold(Button::Up); break;
@@ -484,7 +518,6 @@ void loop() {
         case 'M': remote.transmitHold(Button::Motor); break;
         case 'S': remote.transmitHold(Button::Momentary); break;
 
-        // Single commands (lowercase)
         case 'r': remote.transmitSingle(Button::Right); break;
         case 'l': remote.transmitSingle(Button::Left); break;
         case 'u': remote.transmitSingle(Button::Up); break;
@@ -492,23 +525,27 @@ void loop() {
         case 'm': remote.transmitSingle(Button::Motor); break;
         case 's': remote.transmitSingle(Button::Momentary); break;
 
-        // Release
         case '0': remote.transmitSingle(Button::Release); break;
 
-        // GPS status
         case 'g': printGpsStatus(); break;
-
-        // Compass heading
         case 'c': printCompassHeading(); break;
-
-        // Sensor validation
         case 'v': printSensorStatus(); break;
-
-        // Navigation commands
-        case 't': testNavigationCalculations(); break;
         case 'n': printNavigationStatus(); break;
         case 'w': setTestWaypoint(); break;
         case 'e': toggleNavigation(); break;
         case 'x': navigation.clearTarget(); break;
+
+        case 'p': {
+            GpsData gpsData = gps.getData();
+            if (gpsData.hasFix) {
+                navigation.engageSpotLock(gpsData.latitude, gpsData.longitude);
+            } else {
+                Serial.println("[Nav] Cannot engage spot lock: No GPS fix");
+            }
+            break;
+        }
+        case 'o':
+            navigation.disengageSpotLock();
+            break;
     }
 }

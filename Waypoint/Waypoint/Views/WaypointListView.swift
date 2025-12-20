@@ -15,19 +15,18 @@ struct WaypointListView: View {
     @Binding var waypoints: [Waypoint]
     @Binding var selectedWaypoint: Waypoint?
     @Binding var navigationEnabled: Bool
-    
+
     @State private var searchText = ""
     @State private var sortOrder: WaypointSortOrder = .dateCreatedNewest
-    @State private var showingSortMenu = false
     @State private var editingWaypoint: Waypoint?
     @State private var showingEditSheet = false
     @Environment(\.dismiss) var dismiss
-    
+
     var filteredAndSortedWaypoints: [Waypoint] {
         let filtered = searchText.isEmpty ? waypoints : waypoints.filter { waypoint in
             waypoint.name.localizedCaseInsensitiveContains(searchText)
         }
-        
+
         switch sortOrder {
         case .nameAscending:
             return filtered.sorted { $0.name < $1.name }
@@ -43,7 +42,7 @@ struct WaypointListView: View {
             return filtered.sorted { $0.dateModified < $1.dateModified }
         }
     }
-    
+
     var body: some View {
         NavigationStack {
             List {
@@ -70,13 +69,13 @@ struct WaypointListView: View {
             .searchable(text: $searchText, prompt: "Search waypoints")
             .navigationTitle("Waypoints")
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {
                         dismiss()
                     }
                 }
-                
-                ToolbarItem(placement: .topBarTrailing) {
+
+                ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Section("Sort By") {
                             Button {
@@ -84,31 +83,31 @@ struct WaypointListView: View {
                             } label: {
                                 Label("Created (Newest)", systemImage: sortOrder == .dateCreatedNewest ? "checkmark" : "")
                             }
-                            
+
                             Button {
                                 sortOrder = .dateCreatedOldest
                             } label: {
                                 Label("Created (Oldest)", systemImage: sortOrder == .dateCreatedOldest ? "checkmark" : "")
                             }
-                            
+
                             Button {
                                 sortOrder = .dateModifiedNewest
                             } label: {
                                 Label("Modified (Newest)", systemImage: sortOrder == .dateModifiedNewest ? "checkmark" : "")
                             }
-                            
+
                             Button {
                                 sortOrder = .dateModifiedOldest
                             } label: {
                                 Label("Modified (Oldest)", systemImage: sortOrder == .dateModifiedOldest ? "checkmark" : "")
                             }
-                            
+
                             Button {
                                 sortOrder = .nameAscending
                             } label: {
                                 Label("Name (A-Z)", systemImage: sortOrder == .nameAscending ? "checkmark" : "")
                             }
-                            
+
                             Button {
                                 sortOrder = .nameDescending
                             } label: {
@@ -137,7 +136,7 @@ struct WaypointListView: View {
             }
         }
     }
-    
+
     private func sendWaypoint(_ waypoint: Waypoint) {
         guard bluetooth.connectionState == .connected else { return }
         selectedWaypoint = waypoint
@@ -146,7 +145,7 @@ struct WaypointListView: View {
         bluetooth.enableNavigation()
         dismiss()
     }
-    
+
     private func deleteWaypoint(_ waypoint: Waypoint) {
         waypoints.removeAll { $0.id == waypoint.id }
         if selectedWaypoint?.id == waypoint.id {
@@ -162,48 +161,58 @@ struct WaypointRow: View {
     let onEdit: () -> Void
     let onSendToHelm: () -> Void
     let onDelete: () -> Void
-    
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(waypoint.name)
-                        .font(.headline)
-                        .foregroundColor(isSelected ? .blue : .primary)
-                    
+                    HStack {
+                        Text(waypoint.name)
+                            .font(.headline)
+                            .foregroundColor(isSelected ? .blue : .primary)
+
+                        if waypoint.spotLockEnabled {
+                            Image(systemName: "pin.fill")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
+                    }
+
                     Text(String(format: "%.6f, %.6f", waypoint.coordinate.latitude, waypoint.coordinate.longitude))
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                
+
                 Spacer()
-                
+
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.blue)
                 }
             }
-            
+
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Created: \(waypoint.dateCreated, style: .date) \(waypoint.dateCreated, style: .time)")
                         .font(.caption2)
                         .foregroundColor(.secondary)
-                    
-                    Text("Modified: \(waypoint.dateModified, style: .date) \(waypoint.dateModified, style: .time)")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+
+                    if waypoint.approachSpeed > 0 {
+                        Text("Speed: \(String(format: "%.1f", waypoint.approachSpeed)) km/hr")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
                 }
-                
+
                 Spacer()
-                
+
                 HStack(spacing: 12) {
                     Button(action: onEdit) {
                         Image(systemName: "pencil")
                             .font(.caption)
                     }
                     .buttonStyle(.bordered)
-                    
+
                     Button(action: onSendToHelm) {
                         Image(systemName: "paperplane")
                             .font(.caption)
@@ -228,34 +237,54 @@ struct EditWaypointSheet: View {
     let waypoint: Waypoint
     let onSave: (Waypoint) -> Void
     let onCancel: () -> Void
-    
+
     @State private var name: String
-    
+    @State private var spotLockEnabled: Bool
+    @State private var approachSpeed: Double
+    @State private var arrivalRadius: Double
+
     init(waypoint: Waypoint, onSave: @escaping (Waypoint) -> Void, onCancel: @escaping () -> Void) {
         self.waypoint = waypoint
         self.onSave = onSave
         self.onCancel = onCancel
         _name = State(initialValue: waypoint.name)
+        _spotLockEnabled = State(initialValue: waypoint.spotLockEnabled)
+        _approachSpeed = State(initialValue: waypoint.approachSpeed)
+        _arrivalRadius = State(initialValue: waypoint.arrivalRadius)
     }
-    
+
     var body: some View {
         NavigationStack {
             Form {
                 Section("Name") {
                     TextField("Waypoint name", text: $name)
                 }
-                
+
                 Section("Location") {
                     Text(String(format: "%.6f, %.6f", waypoint.coordinate.latitude, waypoint.coordinate.longitude))
                         .foregroundColor(.secondary)
                 }
-                
+
+                Section("Navigation Options") {
+                    Toggle("Enable Spot Lock on Arrival", isOn: $spotLockEnabled)
+
+                    VStack(alignment: .leading) {
+                        Text("Approach Speed: \(approachSpeed > 0 ? String(format: "%.1f km/hr", approachSpeed) : "Default")")
+                        Slider(value: $approachSpeed, in: 0...10, step: 0.5)
+                    }
+
+                    VStack(alignment: .leading) {
+                        Text("Arrival Radius: \(String(format: "%.1f", arrivalRadius)) m")
+                        Slider(value: $arrivalRadius, in: 2...20, step: 1)
+                    }
+                }
+
                 Section("Details") {
                     LabeledContent("Created") {
                         Text(waypoint.dateCreated, style: .date)
                         Text(waypoint.dateCreated, style: .time)
                     }
-                    
+
                     LabeledContent("Modified") {
                         Text(waypoint.dateModified, style: .date)
                         Text(waypoint.dateModified, style: .time)
@@ -271,6 +300,9 @@ struct EditWaypointSheet: View {
                     Button("Save") {
                         var updated = waypoint
                         updated.updateName(name)
+                        updated.spotLockEnabled = spotLockEnabled
+                        updated.approachSpeed = approachSpeed
+                        updated.arrivalRadius = arrivalRadius
                         onSave(updated)
                     }
                 }

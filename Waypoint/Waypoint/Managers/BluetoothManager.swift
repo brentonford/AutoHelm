@@ -2,7 +2,6 @@ import Foundation
 import CoreBluetooth
 import Combine
 
-// UUIDs defined as nonisolated to avoid MainActor isolation issues
 private nonisolated(unsafe) let helmServiceUuid = CBUUID(string: "FFE0")
 private nonisolated(unsafe) let helmWaypointCharUuid = CBUUID(string: "FFE1")
 private nonisolated(unsafe) let helmStatusCharUuid = CBUUID(string: "FFE2")
@@ -11,105 +10,165 @@ private nonisolated(unsafe) let helmCalibrationCharUuid = CBUUID(string: "FFE4")
 
 @MainActor
 class BluetoothManager: NSObject, ObservableObject {
-    
-    // MARK: - Published Properties
-    
+
     @Published var connectionState: ConnectionState = .disconnected
     @Published var deviceStatus: DeviceStatus?
     @Published var lastResponse: BleResponse?
     @Published var lastError: String?
-    
-    // MARK: - BLE Objects
-    
+
     private var centralManager: CBCentralManager?
     private var peripheral: CBPeripheral?
     private var waypointChar: CBCharacteristic?
     private var statusChar: CBCharacteristic?
     private var commandChar: CBCharacteristic?
     private var calibrationChar: CBCharacteristic?
-    
-    // MARK: - Reconnection
-    
+
     private var reconnectTimer: Timer?
     private var shouldReconnect = true
-    
-    // MARK: - Initialization
-    
+
     override init() {
         super.init()
     }
-    
+
     func initialize() {
         guard centralManager == nil else { return }
-        centralManager = CBCentralManager(delegate: self, queue: nil, options: [CBCentralManagerOptionShowPowerAlertKey: true])
+        centralManager = CBCentralManager(
+            delegate: self,
+            queue: nil,
+            options: [CBCentralManagerOptionShowPowerAlertKey: true]
+        )
     }
-    
-    // MARK: - Public Methods
-    
+
     func startScanning() {
         guard let central = centralManager, central.state == .poweredOn else { return }
-        
+
         connectionState = .scanning
         central.scanForPeripherals(withServices: [helmServiceUuid], options: nil)
     }
-    
+
     func stopScanning() {
         centralManager?.stopScan()
         if connectionState == .scanning {
             connectionState = .disconnected
         }
     }
-    
+
     func disconnect() {
         shouldReconnect = false
         reconnectTimer?.invalidate()
-        
+
         if let peripheral = peripheral, let central = centralManager {
             central.cancelPeripheralConnection(peripheral)
         }
     }
-    
+
     func sendWaypoint(_ waypoint: Waypoint) {
         guard let char = waypointChar, let peripheral = peripheral else {
             lastError = "Not connected"
             return
         }
-        
+
         let data = waypoint.toGpsString().data(using: .utf8)!
         peripheral.writeValue(data, for: char, type: .withResponse)
     }
-    
+
     func sendCommand(_ command: String) {
         guard let char = commandChar, let peripheral = peripheral else {
             lastError = "Not connected"
             return
         }
-        
+
         let data = command.data(using: .utf8)!
         peripheral.writeValue(data, for: char, type: .withResponse)
     }
-    
+
+    func sendRawData(_ data: String) {
+        guard let char = waypointChar, let peripheral = peripheral else {
+            lastError = "Not connected"
+            return
+        }
+
+        let dataBytes = data.data(using: .utf8)!
+        peripheral.writeValue(dataBytes, for: char, type: .withResponse)
+    }
+
+    // MARK: - Navigation Control
+
     func enableNavigation() {
         sendCommand("NAV_ENABLE")
     }
-    
+
     func disableNavigation() {
         sendCommand("NAV_DISABLE")
     }
-    
+
+    func enableManualMode() {
+        sendCommand("MANUAL_MODE")
+    }
+
+    // MARK: - Calibration
+
     func startCalibration() {
         sendCommand("START_CAL")
     }
-    
+
     func stopCalibration() {
         sendCommand("STOP_CAL")
     }
-    
+
+    // MARK: - Spot Lock
+
+    func engageSpotLock() {
+        sendCommand("SPOT_LOCK")
+    }
+
+    func disengageSpotLock() {
+        sendCommand("SPOT_RELEASE")
+    }
+
+    func jogSpotLock(direction: JogDirection) {
+        switch direction {
+        case .forward:
+            sendCommand("JOG_FWD")
+        case .back:
+            sendCommand("JOG_BACK")
+        case .left:
+            sendCommand("JOG_LEFT")
+        case .right:
+            sendCommand("JOG_RIGHT")
+        }
+    }
+
+    // MARK: - Path Control
+
+    func startPath() {
+        sendCommand("PATH_START")
+    }
+
+    func stopPath() {
+        sendCommand("PATH_STOP")
+    }
+
+    func sendPath(_ path: Path) {
+        let pathStr = "$PATH,\(path.name),\(path.defaultSpeed),\(path.loop ? 1 : 0)*"
+        sendRawData(pathStr)
+
+        for wp in path.waypoints {
+            sendWaypoint(wp)
+        }
+    }
+
+    // MARK: - Speed Control
+
+    func setSpeed(_ kmh: Double) {
+        sendCommand("SPEED:\(String(format: "%.1f", kmh))")
+    }
+
     // MARK: - Private Methods
-    
+
     private func scheduleReconnect() {
         guard shouldReconnect else { return }
-        
+
         reconnectTimer?.invalidate()
         reconnectTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
             guard let self else { return }
@@ -118,7 +177,7 @@ class BluetoothManager: NSObject, ObservableObject {
             }
         }
     }
-    
+
     private func clearCharacteristics() {
         waypointChar = nil
         statusChar = nil
@@ -130,7 +189,7 @@ class BluetoothManager: NSObject, ObservableObject {
 // MARK: - CBCentralManagerDelegate
 
 extension BluetoothManager: CBCentralManagerDelegate {
-    
+
     nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
         Task { @MainActor in
             switch central.state {
@@ -146,15 +205,18 @@ extension BluetoothManager: CBCentralManagerDelegate {
             }
         }
     }
-    
-    nonisolated func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
-                        advertisementData: [String: Any], rssi RSSI: NSNumber) {
-        
+
+    nonisolated func centralManager(
+        _ central: CBCentralManager,
+        didDiscover peripheral: CBPeripheral,
+        advertisementData: [String: Any],
+        rssi RSSI: NSNumber
+    ) {
         let name = peripheral.name ?? "Unknown"
         guard name == "Helm" else { return }
-        
+
         central.stopScan()
-        
+
         Task { @MainActor in
             self.peripheral = peripheral
             peripheral.delegate = self
@@ -162,7 +224,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
             central.connect(peripheral, options: nil)
         }
     }
-    
+
     nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         Task { @MainActor in
             connectionState = .connected
@@ -170,8 +232,12 @@ extension BluetoothManager: CBCentralManagerDelegate {
             peripheral.discoverServices([helmServiceUuid])
         }
     }
-    
-    nonisolated func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+
+    nonisolated func centralManager(
+        _ central: CBCentralManager,
+        didFailToConnect peripheral: CBPeripheral,
+        error: Error?
+    ) {
         Task { @MainActor in
             connectionState = .disconnected
             lastError = error?.localizedDescription ?? "Connection failed"
@@ -179,8 +245,12 @@ extension BluetoothManager: CBCentralManagerDelegate {
             scheduleReconnect()
         }
     }
-    
-    nonisolated func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+
+    nonisolated func centralManager(
+        _ central: CBCentralManager,
+        didDisconnectPeripheral peripheral: CBPeripheral,
+        error: Error?
+    ) {
         Task { @MainActor in
             connectionState = .disconnected
             clearCharacteristics()
@@ -192,10 +262,10 @@ extension BluetoothManager: CBCentralManagerDelegate {
 // MARK: - CBPeripheralDelegate
 
 extension BluetoothManager: CBPeripheralDelegate {
-    
+
     nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard let service = peripheral.services?.first(where: { $0.uuid == helmServiceUuid }) else { return }
-        
+
         peripheral.discoverCharacteristics([
             helmWaypointCharUuid,
             helmStatusCharUuid,
@@ -203,10 +273,14 @@ extension BluetoothManager: CBPeripheralDelegate {
             helmCalibrationCharUuid
         ], for: service)
     }
-    
-    nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+
+    nonisolated func peripheral(
+        _ peripheral: CBPeripheral,
+        didDiscoverCharacteristicsFor service: CBService,
+        error: Error?
+    ) {
         guard let characteristics = service.characteristics else { return }
-        
+
         Task { @MainActor in
             for char in characteristics {
                 switch char.uuid {
@@ -226,10 +300,14 @@ extension BluetoothManager: CBPeripheralDelegate {
             }
         }
     }
-    
-    nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+
+    nonisolated func peripheral(
+        _ peripheral: CBPeripheral,
+        didUpdateValueFor characteristic: CBCharacteristic,
+        error: Error?
+    ) {
         guard let data = characteristic.value else { return }
-        
+
         Task { @MainActor in
             switch characteristic.uuid {
             case helmStatusCharUuid:
@@ -241,7 +319,7 @@ extension BluetoothManager: CBPeripheralDelegate {
             }
         }
     }
-    
+
     private func parseStatus(_ data: Data) {
         do {
             let status = try JSONDecoder().decode(DeviceStatus.self, from: data)
@@ -250,7 +328,7 @@ extension BluetoothManager: CBPeripheralDelegate {
             print("Status parse error: \(error)")
         }
     }
-    
+
     private func parseResponse(_ data: Data) {
         do {
             let response = try JSONDecoder().decode(BleResponse.self, from: data)

@@ -1,9 +1,6 @@
 #pragma once
 
 #include <Arduino.h>
-
-// ESP32 native BLE library (not ArduinoBLE)
-// If you get conflicts, remove ~/Documents/Arduino/libraries/ArduinoBLE
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
@@ -26,7 +23,17 @@ enum class BleCommand : uint8_t {
     NavEnable,
     NavDisable,
     StartCalibration,
-    StopCalibration
+    StopCalibration,
+    SpotLockEngage,
+    SpotLockDisengage,
+    SpotLockJogForward,
+    SpotLockJogBack,
+    SpotLockJogLeft,
+    SpotLockJogRight,
+    PathStart,
+    PathStop,
+    SetSpeed,
+    ManualMode
 };
 
 struct BleStatus {
@@ -34,18 +41,28 @@ struct BleStatus {
     bool waypointReceived;
     float waypointLat;
     float waypointLon;
+    char waypointName[32];
+    bool waypointSpotLock;
+    float waypointSpeed;
     BleCommand pendingCommand;
     String pendingRfCommand;
     bool isHoldCommand;
+    float pendingSpeed;
+    bool hasPendingSpeed;
 
     BleStatus()
         : connected(false)
         , waypointReceived(false)
         , waypointLat(0.0f)
         , waypointLon(0.0f)
+        , waypointSpotLock(false)
+        , waypointSpeed(0.0f)
         , pendingCommand(BleCommand::None)
         , pendingRfCommand("")
-        , isHoldCommand(false) {
+        , isHoldCommand(false)
+        , pendingSpeed(0.0f)
+        , hasPendingSpeed(false) {
+        waypointName[0] = '\0';
     }
 };
 
@@ -55,7 +72,8 @@ public:
 
     bool begin();
     void update();
-    void sendStatus(const GpsData& gpsData, float heading, const NavigationData& navData, const Waypoint& target);
+    void sendStatus(const GpsData& gpsData, float heading, const NavigationData& navData,
+                    const Waypoint& target, NavigationState navState, const SpeedState& speedState);
     void sendCalibrationData(const String& data);
     void sendResponse(const String& response);
 
@@ -66,12 +84,11 @@ public:
     bool hasRfCommandPending() const;
     String consumeRfCommand();
     bool isRfHoldCommand() const;
+    bool hasPendingSpeed() const;
+    float consumePendingSpeed();
 
-    // BLEServerCallbacks
     void onConnect(BLEServer* server) override;
     void onDisconnect(BLEServer* server) override;
-
-    // BLECharacteristicCallbacks
     void onWrite(BLECharacteristic* characteristic) override;
 
 private:
@@ -86,5 +103,6 @@ private:
 
     void parseWaypoint(const String& data);
     void parseCommand(const String& data);
-    String buildStatusJson(const GpsData& gpsData, float heading, const NavigationData& navData, const Waypoint& target);
+    String buildStatusJson(const GpsData& gpsData, float heading, const NavigationData& navData,
+                           const Waypoint& target, NavigationState navState, const SpeedState& speedState);
 };

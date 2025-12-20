@@ -9,22 +9,78 @@ struct Waypoint: Identifiable, Codable, Equatable, Hashable {
     var name: String
     var dateCreated: Date
     var dateModified: Date
-    
-    init(id: UUID = UUID(), coordinate: CLLocationCoordinate2D, name: String = "", dateCreated: Date = Date(), dateModified: Date = Date()) {
+    var spotLockEnabled: Bool
+    var approachSpeed: Double
+    var arrivalRadius: Double
+
+    init(
+        id: UUID = UUID(),
+        coordinate: CLLocationCoordinate2D,
+        name: String = "",
+        dateCreated: Date = Date(),
+        dateModified: Date = Date(),
+        spotLockEnabled: Bool = false,
+        approachSpeed: Double = 0,
+        arrivalRadius: Double = 5.0
+    ) {
         self.id = id
         self.coordinate = coordinate
         self.name = name
         self.dateCreated = dateCreated
         self.dateModified = dateModified
+        self.spotLockEnabled = spotLockEnabled
+        self.approachSpeed = approachSpeed
+        self.arrivalRadius = arrivalRadius
     }
-    
+
     mutating func updateName(_ newName: String) {
         name = newName
         dateModified = Date()
     }
-    
+
     func toGpsString() -> String {
-        return String(format: "$GPS,%.6f,%.6f,0*", coordinate.latitude, coordinate.longitude)
+        let safeName = name.replacingOccurrences(of: ",", with: " ")
+        return String(
+            format: "$GPS,%.6f,%.6f,0,%@,%d,%.1f*",
+            coordinate.latitude,
+            coordinate.longitude,
+            safeName,
+            spotLockEnabled ? 1 : 0,
+            approachSpeed
+        )
+    }
+}
+
+// MARK: - Path
+
+struct Path: Identifiable, Codable {
+    let id: UUID
+    var name: String
+    var waypoints: [Waypoint]
+    var defaultSpeed: Double
+    var loop: Bool
+    var dateCreated: Date
+    var dateModified: Date
+
+    init(name: String = "New Path") {
+        self.id = UUID()
+        self.name = name
+        self.waypoints = []
+        self.defaultSpeed = 3.6
+        self.loop = false
+        self.dateCreated = Date()
+        self.dateModified = Date()
+    }
+
+    mutating func addWaypoint(_ waypoint: Waypoint) {
+        waypoints.append(waypoint)
+        dateModified = Date()
+    }
+
+    mutating func removeWaypoint(at index: Int) {
+        guard index >= 0 && index < waypoints.count else { return }
+        waypoints.remove(at: index)
+        dateModified = Date()
     }
 }
 
@@ -44,20 +100,40 @@ struct DeviceStatus: Codable {
     let targetLat: Double?
     let targetLon: Double?
     let hasTarget: Bool?
-    
+    let navState: String?
+    let speedLevel: Int?
+    let targetSpeed: Int?
+    let speedKmh: Double?
+
     var currentLocation: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: currentLat, longitude: currentLon)
     }
-    
+
     var targetLocation: CLLocationCoordinate2D? {
         guard let lat = targetLat, let lon = targetLon else { return nil }
         return CLLocationCoordinate2D(latitude: lat, longitude: lon)
     }
-    
+
     var isNavigationReady: Bool {
         hasFix && satellites >= 4 && hdop < 5.0
     }
-    
+
+    var isSpotLockActive: Bool {
+        navState == "spotlock"
+    }
+
+    var isPathFollowing: Bool {
+        navState == "path"
+    }
+
+    var isNavigating: Bool {
+        navState == "navigating" || navState == "path"
+    }
+
+    var isManualMode: Bool {
+        navState == "manual"
+    }
+
     enum CodingKeys: String, CodingKey {
         case hasFix = "has_fix"
         case satellites
@@ -72,6 +148,10 @@ struct DeviceStatus: Codable {
         case targetLat
         case targetLon
         case hasTarget
+        case navState
+        case speedLevel
+        case targetSpeed
+        case speedKmh
     }
 }
 
@@ -91,6 +171,15 @@ enum ConnectionState: String {
     case connected = "Connected"
 }
 
+// MARK: - Jog Direction
+
+enum JogDirection {
+    case forward
+    case back
+    case left
+    case right
+}
+
 // MARK: - CLLocationCoordinate2D Codable
 
 extension CLLocationCoordinate2D: @retroactive Codable {
@@ -98,14 +187,14 @@ extension CLLocationCoordinate2D: @retroactive Codable {
         case latitude
         case longitude
     }
-    
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let latitude = try container.decode(Double.self, forKey: .latitude)
         let longitude = try container.decode(Double.self, forKey: .longitude)
         self.init(latitude: latitude, longitude: longitude)
     }
-    
+
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(latitude, forKey: .latitude)

@@ -18,28 +18,24 @@ bool BleManager::begin() {
 
     _service = _server->createService(BleConfig::serviceUuid);
 
-    // FFE1: Waypoint (Write)
     _waypointChar = _service->createCharacteristic(
         BleConfig::waypointCharUuid,
         BLECharacteristic::PROPERTY_WRITE
     );
     _waypointChar->setCallbacks(this);
 
-    // FFE2: Status (Notify)
     _statusChar = _service->createCharacteristic(
         BleConfig::statusCharUuid,
         BLECharacteristic::PROPERTY_NOTIFY
     );
     _statusChar->addDescriptor(new BLE2902());
 
-    // FFE3: Command (Write)
     _commandChar = _service->createCharacteristic(
         BleConfig::commandCharUuid,
         BLECharacteristic::PROPERTY_WRITE
     );
     _commandChar->setCallbacks(this);
 
-    // FFE4: Calibration/Response (Notify)
     _calibrationChar = _service->createCharacteristic(
         BleConfig::calibrationCharUuid,
         BLECharacteristic::PROPERTY_NOTIFY
@@ -60,7 +56,6 @@ bool BleManager::begin() {
 }
 
 void BleManager::update() {
-    // Status broadcasting is handled by sendStatus() called from main loop
 }
 
 void BleManager::onConnect(BLEServer* server) {
@@ -91,35 +86,44 @@ void BleManager::onWrite(BLECharacteristic* characteristic) {
 }
 
 void BleManager::parseWaypoint(const String& data) {
-    // Format: $GPS,lat,lon,alt*
     if (!data.startsWith("$GPS,")) {
         sendResponse("{\"error\":\"Invalid waypoint format\"}");
         return;
     }
 
-    int firstComma = data.indexOf(',');
-    int secondComma = data.indexOf(',', firstComma + 1);
-    int thirdComma = data.indexOf(',', secondComma + 1);
+    int fieldStart = 5;
+    String fields[6];
+    int fieldCount = 0;
 
-    if (firstComma < 0 || secondComma < 0) {
-        sendResponse("{\"error\":\"Invalid waypoint format\"}");
+    for (int i = 5; i < (int)data.length() && fieldCount < 6; i++) {
+        char c = data.charAt(i);
+        if (c == ',' || c == '*') {
+            fields[fieldCount++] = data.substring(fieldStart, i);
+            fieldStart = i + 1;
+        }
+    }
+
+    if (fieldCount < 2) {
+        sendResponse("{\"error\":\"Insufficient fields\"}");
         return;
     }
 
-    String latStr = data.substring(firstComma + 1, secondComma);
-    String lonStr;
+    _status.waypointLat = fields[0].toFloat();
+    _status.waypointLon = fields[1].toFloat();
+    _status.waypointName[0] = '\0';
+    _status.waypointSpotLock = false;
+    _status.waypointSpeed = 0.0f;
 
-    if (thirdComma > 0) {
-        lonStr = data.substring(secondComma + 1, thirdComma);
-    } else {
-        int endPos = data.indexOf('*');
-        if (endPos < 0)
-            endPos = data.length();
-        lonStr = data.substring(secondComma + 1, endPos);
+    if (fieldCount >= 4 && fields[3].length() > 0) {
+        strncpy(_status.waypointName, fields[3].c_str(), 31);
+        _status.waypointName[31] = '\0';
     }
-
-    _status.waypointLat = latStr.toFloat();
-    _status.waypointLon = lonStr.toFloat();
+    if (fieldCount >= 5) {
+        _status.waypointSpotLock = (fields[4] == "1");
+    }
+    if (fieldCount >= 6) {
+        _status.waypointSpeed = fields[5].toFloat();
+    }
 
     if (_status.waypointLat == 0.0f && _status.waypointLon == 0.0f) {
         sendResponse("{\"error\":\"Invalid coordinates\"}");
@@ -148,27 +152,62 @@ void BleManager::parseCommand(const String& data) {
     } else if (cmd == "STOP_CAL") {
         _status.pendingCommand = BleCommand::StopCalibration;
         sendResponse("{\"ack\":\"STOP_CAL\"}");
+    } else if (cmd == "SPOT_LOCK") {
+        _status.pendingCommand = BleCommand::SpotLockEngage;
+        sendResponse("{\"ack\":\"SPOT_LOCK\"}");
+    } else if (cmd == "SPOT_RELEASE") {
+        _status.pendingCommand = BleCommand::SpotLockDisengage;
+        sendResponse("{\"ack\":\"SPOT_RELEASE\"}");
+    } else if (cmd == "JOG_FWD") {
+        _status.pendingCommand = BleCommand::SpotLockJogForward;
+        sendResponse("{\"ack\":\"JOG_FWD\"}");
+    } else if (cmd == "JOG_BACK") {
+        _status.pendingCommand = BleCommand::SpotLockJogBack;
+        sendResponse("{\"ack\":\"JOG_BACK\"}");
+    } else if (cmd == "JOG_LEFT") {
+        _status.pendingCommand = BleCommand::SpotLockJogLeft;
+        sendResponse("{\"ack\":\"JOG_LEFT\"}");
+    } else if (cmd == "JOG_RIGHT") {
+        _status.pendingCommand = BleCommand::SpotLockJogRight;
+        sendResponse("{\"ack\":\"JOG_RIGHT\"}");
+    } else if (cmd == "PATH_START") {
+        _status.pendingCommand = BleCommand::PathStart;
+        sendResponse("{\"ack\":\"PATH_START\"}");
+    } else if (cmd == "PATH_STOP") {
+        _status.pendingCommand = BleCommand::PathStop;
+        sendResponse("{\"ack\":\"PATH_STOP\"}");
+    } else if (cmd == "MANUAL_MODE") {
+        _status.pendingCommand = BleCommand::ManualMode;
+        sendResponse("{\"ack\":\"MANUAL_MODE\"}");
+    } else if (cmd.startsWith("SPEED:")) {
+        float speed = cmd.substring(6).toFloat();
+        if (speed >= 0 && speed <= 15.0f) {
+            _status.pendingSpeed = speed;
+            _status.hasPendingSpeed = true;
+            sendResponse("{\"ack\":\"SPEED\",\"value\":" + String(speed) + "}");
+        } else {
+            sendResponse("{\"error\":\"Invalid speed\"}");
+        }
     } else if (cmd.startsWith("RF_")) {
         String rfCmd = cmd.substring(3);
-        
-        // Check if it's a hold command (LEFT_HOLD or RIGHT_HOLD)
+
         if (rfCmd.endsWith("_HOLD")) {
-            rfCmd = rfCmd.substring(0, rfCmd.length() - 5); // Remove "_HOLD"
+            rfCmd = rfCmd.substring(0, rfCmd.length() - 5);
             _status.pendingRfCommand = rfCmd;
             _status.isHoldCommand = true;
         } else {
-            // Momentary command (UP, DOWN, MOTOR, MOMENTARY)
             _status.pendingRfCommand = rfCmd;
             _status.isHoldCommand = false;
         }
-        
+
         sendResponse("{\"ack\":\"" + cmd + "\"}");
     } else {
         sendResponse("{\"error\":\"Unknown command\"}");
     }
 }
 
-String BleManager::buildStatusJson(const GpsData& gpsData, float heading, const NavigationData& navData, const Waypoint& target) {
+String BleManager::buildStatusJson(const GpsData& gpsData, float heading, const NavigationData& navData,
+                                    const Waypoint& target, NavigationState navState, const SpeedState& speedState) {
     String json = "{";
     json += "\"has_fix\":" + String(gpsData.hasFix ? "true" : "false") + ",";
     json += "\"satellites\":" + String(gpsData.satellites) + ",";
@@ -179,21 +218,37 @@ String BleManager::buildStatusJson(const GpsData& gpsData, float heading, const 
     json += "\"heading\":" + String(heading, 1) + ",";
     json += "\"distance\":" + String(navData.distanceToTarget, 1) + ",";
     json += "\"bearing\":" + String(navData.bearingToTarget, 1) + ",";
-    json += "\"relative\":" + String(navData.relativeAngle, 1);
+    json += "\"relative\":" + String(navData.relativeAngle, 1) + ",";
 
     if (target.isSet) {
-        json += ",\"targetLat\":" + String(target.latitude, 6);
-        json += ",\"targetLon\":" + String(target.longitude, 6);
-        json += ",\"hasTarget\":true";
+        json += "\"targetLat\":" + String(target.latitude, 6) + ",";
+        json += "\"targetLon\":" + String(target.longitude, 6) + ",";
+        json += "\"hasTarget\":true,";
     } else {
-        json += ",\"hasTarget\":false";
+        json += "\"hasTarget\":false,";
     }
+
+    const char* stateStr = "idle";
+    switch (navState) {
+        case NavigationState::Idle: stateStr = "idle"; break;
+        case NavigationState::Navigating: stateStr = "navigating"; break;
+        case NavigationState::PathFollowing: stateStr = "path"; break;
+        case NavigationState::SpotLock: stateStr = "spotlock"; break;
+        case NavigationState::Arrived: stateStr = "arrived"; break;
+        case NavigationState::Manual: stateStr = "manual"; break;
+    }
+    json += "\"navState\":\"" + String(stateStr) + "\",";
+
+    json += "\"speedLevel\":" + String(speedState.currentLevel) + ",";
+    json += "\"targetSpeed\":" + String(speedState.targetLevel) + ",";
+    json += "\"speedKmh\":" + String(speedState.currentLevel * 0.36f, 1);
 
     json += "}";
     return json;
 }
 
-void BleManager::sendStatus(const GpsData& gpsData, float heading, const NavigationData& navData, const Waypoint& target) {
+void BleManager::sendStatus(const GpsData& gpsData, float heading, const NavigationData& navData,
+                             const Waypoint& target, NavigationState navState, const SpeedState& speedState) {
     if (!_status.connected)
         return;
 
@@ -203,7 +258,7 @@ void BleManager::sendStatus(const GpsData& gpsData, float heading, const Navigat
 
     _lastStatusTime = now;
 
-    String json = buildStatusJson(gpsData, heading, navData, target);
+    String json = buildStatusJson(gpsData, heading, navData, target, navState, speedState);
     _statusChar->setValue(json.c_str());
     _statusChar->notify();
 }
@@ -236,9 +291,18 @@ Waypoint BleManager::consumeWaypoint() {
     Waypoint wp;
     if (_status.waypointReceived) {
         wp.set(_status.waypointLat, _status.waypointLon);
+        if (_status.waypointName[0] != '\0') {
+            strncpy(wp.name, _status.waypointName, 31);
+            wp.name[31] = '\0';
+        }
+        wp.spotLockEnabled = _status.waypointSpotLock;
+        wp.approachSpeed = _status.waypointSpeed;
         _status.waypointReceived = false;
         _status.waypointLat = 0.0f;
         _status.waypointLon = 0.0f;
+        _status.waypointName[0] = '\0';
+        _status.waypointSpotLock = false;
+        _status.waypointSpeed = 0.0f;
     }
     return wp;
 }
@@ -262,4 +326,15 @@ String BleManager::consumeRfCommand() {
     _status.pendingRfCommand = "";
     _status.isHoldCommand = false;
     return cmd;
+}
+
+bool BleManager::hasPendingSpeed() const {
+    return _status.hasPendingSpeed;
+}
+
+float BleManager::consumePendingSpeed() {
+    float speed = _status.pendingSpeed;
+    _status.pendingSpeed = 0.0f;
+    _status.hasPendingSpeed = false;
+    return speed;
 }
