@@ -4,8 +4,10 @@ import CoreLocation
 
 struct MapView: View {
     @EnvironmentObject var locationManager: LocationManager
+    @EnvironmentObject var bluetooth: BluetoothManager
     @Binding var selectedWaypoint: Waypoint?
     @Binding var waypoints: [Waypoint]
+    @Binding var navigationEnabled: Bool
     
     @State private var cameraPosition: MapCameraPosition = .userLocation(fallback: .automatic)
     @State private var showingWaypointSheet = false
@@ -14,6 +16,12 @@ struct MapView: View {
     @State private var waypointName = ""
     @State private var isGeocodingName = false
     
+    private var navigationBlocked: Bool {
+        guard bluetooth.connectionState == .connected else { return true }
+        guard let status = bluetooth.deviceStatus else { return true }
+        return !status.isNavigationReady
+    }
+    
     var body: some View {
         ZStack {
             mapContent
@@ -21,20 +29,58 @@ struct MapView: View {
             VStack {
                 Spacer()
                 if let waypoint = selectedWaypoint {
-                    SelectedWaypointCard(waypoint: waypoint) {
-                        deleteWaypoint(waypoint)
-                    }
+                    SelectedWaypointCard(
+                        waypoint: waypoint,
+                        isConfiguredInHelm: isWaypointConfiguredInHelm(waypoint),
+                        onSendToHelm: {
+                            sendWaypointToHelm(waypoint)
+                        }
+                    )
                     .padding()
                 }
             }
         }
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                HStack(spacing: 12) {
+                    StatusIndicator(
+                        label: "Connection:",
+                        color: connectionColor
+                    )
+                    
+                    StatusIndicator(
+                        label: "GPS:",
+                        color: gpsColor
+                    )
+                    
+                    StatusIndicator(
+                        label: "Compass:",
+                        color: compassColor
+                    )
+                    
+                    StatusIndicator(
+                        label: "Navigation:",
+                        color: navigationColor
+                    )
+                }
+            }
+            
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     showingWaypointList = true
                 } label: {
                     Label("Waypoints", systemImage: "list.bullet")
                 }
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if waypoints.isEmpty && selectedWaypoint == nil {
+                Text("Long press on map to create a waypoint")
+                    .font(.caption)
+                    .padding(8)
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(8)
+                    .padding(.bottom, 16)
             }
         }
         .sheet(isPresented: $showingWaypointSheet) {
@@ -51,7 +97,7 @@ struct MapView: View {
             .presentationDetents([.height(250)])
         }
         .sheet(isPresented: $showingWaypointList) {
-            WaypointListView(waypoints: $waypoints, selectedWaypoint: $selectedWaypoint)
+            WaypointListView(waypoints: $waypoints, selectedWaypoint: $selectedWaypoint, navigationEnabled: $navigationEnabled)
         }
     }
     
@@ -73,14 +119,75 @@ struct MapView: View {
                 MapCompass()
                 MapScaleView()
             }
-            .onTapGesture { position in
-                if let coordinate = proxy.convert(position, from: .local) {
-                    pendingCoordinate = coordinate
-                    getLocationName(for: coordinate)
-                    showingWaypointSheet = true
-                }
-            }
+            .gesture(
+                LongPressGesture(minimumDuration: 0.5)
+                    .sequenced(before: DragGesture(minimumDistance: 0))
+                    .onEnded { value in
+                        switch value {
+                        case .second(true, let drag):
+                            if let location = drag?.location,
+                               let coordinate = proxy.convert(location, from: .local) {
+                                pendingCoordinate = coordinate
+                                getLocationName(for: coordinate)
+                                showingWaypointSheet = true
+                            }
+                        default:
+                            break
+                        }
+                    }
+            )
         }
+    }
+    
+    // MARK: - Status Colors
+    
+    private var connectionColor: Color {
+        switch bluetooth.connectionState {
+        case .connected: return .green
+        case .connecting, .scanning: return .orange
+        case .disconnected: return .red
+        }
+    }
+    
+    private var gpsColor: Color {
+        guard bluetooth.connectionState == .connected else { return .red }
+        guard let status = bluetooth.deviceStatus else { return .red }
+        
+        if !status.hasFix { return .red }
+        if status.satellites < 4 || status.hdop >= 5.0 { return .orange }
+        return .green
+    }
+    
+    private var compassColor: Color {
+        guard bluetooth.connectionState == .connected else { return .red }
+        guard bluetooth.deviceStatus != nil else { return .red }
+        return .green
+    }
+    
+    private var navigationColor: Color {
+        if !navigationEnabled { return .red }
+        if navigationBlocked { return .orange }
+        return .green
+    }
+    
+    // MARK: - Geocoding
+    
+    private func isWaypointConfiguredInHelm(_ waypoint: Waypoint) -> Bool {
+        guard let status = bluetooth.deviceStatus else { return false }
+        guard let targetLat = status.targetLat, let targetLon = status.targetLon else { return false }
+        
+        // Check if coordinates match (within small tolerance for floating point)
+        let latMatch = abs(waypoint.coordinate.latitude - targetLat) < 0.000001
+        let lonMatch = abs(waypoint.coordinate.longitude - targetLon) < 0.000001
+        
+        return latMatch && lonMatch
+    }
+    
+    private func sendWaypointToHelm(_ waypoint: Waypoint) {
+        guard bluetooth.connectionState == .connected else { return }
+        bluetooth.sendWaypoint(waypoint)
+        navigationEnabled = true
+        bluetooth.enableNavigation()
     }
     
     private func getLocationName(for coordinate: CLLocationCoordinate2D) {
@@ -140,6 +247,23 @@ struct MapView: View {
     }
 }
 
+// MARK: - Status Indicator
+
+struct StatusIndicator: View {
+    let label: String
+    let color: Color
+    
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.caption)
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+        }
+    }
+}
+
 // MARK: - Waypoint Marker
 
 struct WaypointMarker: View {
@@ -162,27 +286,45 @@ struct WaypointMarker: View {
 
 struct SelectedWaypointCard: View {
     let waypoint: Waypoint
-    let onDelete: () -> Void
+    let isConfiguredInHelm: Bool
+    let onSendToHelm: () -> Void
     
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(waypoint.name)
-                    .font(.headline)
-                Text(String(format: "%.6f, %.6f",
-                            waypoint.coordinate.latitude,
-                            waypoint.coordinate.longitude))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(waypoint.name)
+                        .font(.headline)
+                    Text(String(format: "%.6f, %.6f",
+                                waypoint.coordinate.latitude,
+                                waypoint.coordinate.longitude))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                if isConfiguredInHelm {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        Text("Active")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    }
+                }
             }
             
-            Spacer()
-            
-            Button(role: .destructive) {
-                onDelete()
+            Button {
+                onSendToHelm()
             } label: {
-                Image(systemName: "trash")
+                HStack {
+                    Image(systemName: "paperplane.fill")
+                    Text(isConfiguredInHelm ? "Resend to Helm" : "Send to Helm")
+                }
+                .frame(maxWidth: .infinity)
             }
+            .buttonStyle(.borderedProminent)
         }
         .padding()
         .background(.regularMaterial)

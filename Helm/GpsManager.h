@@ -29,6 +29,8 @@ private:
     char _buffer[GpsConfig::bufferSize];
     uint8_t _bufferIndex;
     bool _initialized;
+    uint32_t _lastReceiveTime;
+    bool _firstFixReceived;
 
     void processBuffer();
     void parseGga(const char* sentence);

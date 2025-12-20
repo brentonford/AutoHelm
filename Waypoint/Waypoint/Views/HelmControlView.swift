@@ -4,8 +4,7 @@ import CoreLocation
 struct HelmControlView: View {
     @EnvironmentObject var bluetooth: BluetoothManager
     let selectedWaypoint: Waypoint?
-    
-    @State private var navigationEnabled = false
+    @Binding var navigationEnabled: Bool
     @State private var isLoading = false
     @State private var showingError = false
     @State private var errorMessage = ""

@@ -7,20 +7,17 @@ struct ContentView: View {
     @State private var waypoints: [Waypoint] = []
     @State private var selectedWaypoint: Waypoint?
     @State private var selectedTab = 0
+    @State private var navigationEnabled = false
     
     var body: some View {
         TabView(selection: $selectedTab) {
             NavigationStack {
                 MapView(
                     selectedWaypoint: $selectedWaypoint,
-                    waypoints: $waypoints
+                    waypoints: $waypoints,
+                    navigationEnabled: $navigationEnabled
                 )
                 .navigationTitle("Waypoint")
-                .toolbar {
-                    ToolbarItem(placement: .automatic) {
-                        ConnectionIndicator(state: bluetooth.connectionState)
-                    }
-                }
             }
             .tabItem {
                 Label("Map", systemImage: "map")
@@ -28,43 +25,26 @@ struct ContentView: View {
             .tag(0)
             
             NavigationStack {
-                HelmControlView(selectedWaypoint: selectedWaypoint)
+                HelmControlView(selectedWaypoint: selectedWaypoint, navigationEnabled: $navigationEnabled)
             }
             .tabItem {
                 Label("Helm", systemImage: "helm")
             }
             .tag(1)
+            
+            NavigationStack {
+                SettingsView()
+            }
+            .tabItem {
+                Label("Settings", systemImage: "gearshape")
+            }
+            .tag(2)
         }
         .environmentObject(bluetooth)
         .environmentObject(locationManager)
         .task {
             locationManager.requestAuthorization()
             bluetooth.initialize()
-        }
-    }
-}
-
-// MARK: - Connection Indicator
-
-struct ConnectionIndicator: View {
-    let state: ConnectionState
-    
-    var body: some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(indicatorColor)
-                .frame(width: 8, height: 8)
-            
-            Text(state == .connected ? "Helm" : "")
-                .font(.caption)
-        }
-    }
-    
-    private var indicatorColor: Color {
-        switch state {
-        case .connected: return .green
-        case .connecting, .scanning: return .orange
-        case .disconnected: return .red
         }
     }
 }

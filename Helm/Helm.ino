@@ -60,7 +60,13 @@ void printGpsStatus() {
         Serial.printf("  Altitude: %.1f m\n", data.altitude);
         Serial.printf("  HDOP: %.1f  VDOP: %.1f  PDOP: %.1f\n",
             data.hdop, data.vdop, data.pdop);
+        Serial.printf("  Data age: %lu ms\n", millis() - data.timestamp);
+    } else {
+        Serial.println("  Waiting for fix...");
+        Serial.println("  Ensure GPS has clear sky view");
+        Serial.println("  Allow 30-60 seconds for cold start");
     }
+    Serial.println();
 }
 
 void printCompassHeading() {
