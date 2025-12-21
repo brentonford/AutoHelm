@@ -89,9 +89,23 @@ void NavigationManager::setEnabled(bool enabled) {
     if (_enabled) {
         _state = NavigationState::Navigating;
         _lastCorrectionTime = 0;
+        
+        // Reset motor response detection
+        _noResponseCount = 0;
+        _motorResponding = true;
+        _lastMotorCommand = HeadingCorrection::None;
+        _lastCommandTime = 0;
+        _sampleIndex = 0;
+        
         Serial.println("[Nav] Navigation ENABLED");
     } else {
         _state = NavigationState::Idle;
+        
+        // Reset motor response detection on disable
+        _noResponseCount = 0;
+        _motorResponding = true;
+        _lastMotorCommand = HeadingCorrection::None;
+        
         Serial.println("[Nav] Navigation DISABLED");
     }
 }

@@ -13,7 +13,6 @@ struct SettingsView: View {
             deviceSection
             aboutSection
         }
-        .navigationTitle("Settings")
     }
     
     // MARK: - Navigation Settings
@@ -60,7 +59,7 @@ struct SettingsView: View {
                 Button("Disconnect") {
                     bluetooth.disconnect()
                 }
-                .foregroundColor(.red)
+                .foregroundColor(Color.red)
             }
         } header: {
             Text("Helm Device")
@@ -161,7 +160,7 @@ struct FeatureRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
-                .foregroundColor(.blue)
+                .foregroundColor(Color.blue)
                 .frame(width: 20)
             Text(text)
                 .font(.subheadline)

@@ -17,7 +17,6 @@ struct ContentView: View {
                     waypoints: $waypoints,
                     navigationEnabled: $navigationEnabled
                 )
-                .navigationTitle("Waypoint")
             }
             .tabItem {
                 Label("Map", systemImage: "map")

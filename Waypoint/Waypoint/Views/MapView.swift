@@ -12,9 +12,18 @@ struct MapView: View {
     @State private var cameraPosition: MapCameraPosition = .userLocation(fallback: .automatic)
     @State private var showingWaypointSheet = false
     @State private var showingWaypointList = false
+    @State private var showingPreview = false
     @State private var pendingCoordinate: CLLocationCoordinate2D?
     @State private var waypointName = ""
     @State private var isGeocodingName = false
+    @State private var previewWaypoint: Waypoint?
+    @State private var trackPoints: [TrackPoint] = []
+    @State private var showDistanceRings = true
+    @State private var showTrail = true
+    @State private var lastTrackUpdate = Date()
+
+    private let distanceRingRadii = [100.0, 500.0, 1000.0]
+    private let trackUpdateInterval: TimeInterval = 5.0
 
     private var navigationBlocked: Bool {
         guard bluetooth.connectionState == .connected else { return true }
@@ -27,13 +36,60 @@ struct MapView: View {
             mapContent
 
             VStack {
+                HStack {
+                    Spacer()
+                    VStack(spacing: 12) {
+                        Button {
+                            showDistanceRings.toggle()
+                        } label: {
+                            Image(systemName: showDistanceRings ? "circle.circle.fill" : "circle.circle")
+                                .font(.title2)
+                                .foregroundColor(Color.blue)
+                        }
+                        .padding(8)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Circle())
+
+                        Button {
+                            showTrail.toggle()
+                        } label: {
+                            Image(systemName: showTrail ? "point.topleft.down.curvedto.point.bottomright.up.fill" : "point.topleft.down.curvedto.point.bottomright.up")
+                                .font(.title2)
+                                .foregroundColor(Color.blue)
+                        }
+                        .padding(8)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Circle())
+
+                        if !trackPoints.isEmpty {
+                            Button {
+                                clearTrail()
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.title3)
+                                    .foregroundColor(Color.red)
+                            }
+                            .padding(8)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Circle())
+                        }
+                    }
+                    .padding()  
+                }
+                .padding(.top, 80)
+
                 Spacer()
+
                 if let waypoint = selectedWaypoint {
                     SelectedWaypointCard(
                         waypoint: waypoint,
                         isConfiguredInHelm: isWaypointConfiguredInHelm(waypoint),
-                        onSendToHelm: {
-                            sendWaypointToHelm(waypoint)
+                        navigationEnabled: navigationEnabled,
+                        onPreview: {
+                            showPreviewForWaypoint(waypoint)
+                        },
+                        onStopNavigation: {
+                            stopNavigation()
                         }
                     )
                     .padding()
@@ -42,11 +98,32 @@ struct MapView: View {
         }
         .toolbar {
             ToolbarItem(placement: .automatic) {
-                HStack(spacing: 12) {
-                    StatusIndicator(label: "Connection:", color: connectionColor)
-                    StatusIndicator(label: "GPS:", color: gpsColor)
-                    StatusIndicator(label: "Compass:", color: compassColor)
-                    StatusIndicator(label: "Navigation:", color: navigationColor)
+                HStack(spacing: 16) {
+                    SignalStrengthIndicator(
+                        label: "BLE:",
+                        signalStrength: bluetooth.signalStrength
+                    )
+
+                    if let status = bluetooth.deviceStatus {
+                        GPSQualityIndicator(
+                            label: "GPS:",
+                            quality: status.gpsQuality
+                        )
+                    } else {
+                        GPSQualityIndicator(
+                            label: "GPS:",
+                            quality: .noFix
+                        )
+                    }
+
+                    StatusIndicator(
+                        label: "Compass:", 
+                        color: compassColor
+                        )
+                    StatusIndicator(
+                        label: "Navigation:", 
+                        color: navigationColor
+                        )
                 }
             }
 
@@ -84,6 +161,25 @@ struct MapView: View {
         .sheet(isPresented: $showingWaypointList) {
             WaypointListView(waypoints: $waypoints, selectedWaypoint: $selectedWaypoint, navigationEnabled: $navigationEnabled)
         }
+        .sheet(isPresented: $showingPreview) {
+            if let waypoint = previewWaypoint,
+               let currentLocation = bluetooth.deviceStatus?.currentLocation {
+                WaypointPreviewSheet(
+                    preview: createPreview(for: waypoint, from: currentLocation),
+                    onNavigate: {
+                        showingPreview = false
+                        navigateToWaypoint(waypoint)
+                    },
+                    onCancel: {
+                        showingPreview = false
+                        previewWaypoint = nil
+                    }
+                )
+            }
+        }
+        .onChange(of: bluetooth.deviceStatus?.currentLocation) { _, newLocation in
+            updateTrack(newLocation)
+        }
     }
 
     private var mapContent: some View {
@@ -96,6 +192,19 @@ struct MapView: View {
                         WaypointMarker(isSelected: selectedWaypoint?.id == waypoint.id)
                     }
                     .tag(waypoint)
+                }
+
+                if showDistanceRings, let currentLocation = bluetooth.deviceStatus?.currentLocation {
+                    ForEach(distanceRingRadii, id: \.self) { radius in
+                        MapCircle(center: currentLocation, radius: radius)
+                            .foregroundStyle(Color.blue.opacity(0.1))
+                            .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                    }
+                }
+
+                if showTrail && trackPoints.count > 1 {
+                    MapPolyline(coordinates: trackPoints.map { $0.coordinate })
+                        .stroke(Color.blue, lineWidth: 3)
                 }
             }
             .mapStyle(.standard)
@@ -126,23 +235,6 @@ struct MapView: View {
 
     // MARK: - Status Colors
 
-    private var connectionColor: Color {
-        switch bluetooth.connectionState {
-        case .connected: return .green
-        case .connecting, .scanning: return .orange
-        case .disconnected: return .red
-        }
-    }
-
-    private var gpsColor: Color {
-        guard bluetooth.connectionState == .connected else { return .red }
-        guard let status = bluetooth.deviceStatus else { return .red }
-
-        if !status.hasFix { return .red }
-        if status.satellites < 4 || status.hdop >= 5.0 { return .orange }
-        return .green
-    }
-
     private var compassColor: Color {
         guard bluetooth.connectionState == .connected else { return .red }
         guard bluetooth.deviceStatus != nil else { return .red }
@@ -155,7 +247,26 @@ struct MapView: View {
         return .green
     }
 
-    // MARK: - Geocoding
+    // MARK: - Track Management
+
+    private func updateTrack(_ location: CLLocationCoordinate2D?) {
+        guard let location = location else { return }
+        guard Date().timeIntervalSince(lastTrackUpdate) >= trackUpdateInterval else { return }
+
+        let point = TrackPoint(coordinate: location)
+        trackPoints.append(point)
+
+        let thirtyMinutesAgo = Date().addingTimeInterval(-30 * 60)
+        trackPoints.removeAll { $0.timestamp < thirtyMinutesAgo }
+
+        lastTrackUpdate = Date()
+    }
+
+    private func clearTrail() {
+        trackPoints.removeAll()
+    }
+
+    // MARK: - Navigation Actions
 
     private func isWaypointConfiguredInHelm(_ waypoint: Waypoint) -> Bool {
         guard let status = bluetooth.deviceStatus else { return false }
@@ -167,12 +278,39 @@ struct MapView: View {
         return latMatch && lonMatch
     }
 
-    private func sendWaypointToHelm(_ waypoint: Waypoint) {
+    private func showPreviewForWaypoint(_ waypoint: Waypoint) {
+        previewWaypoint = waypoint
+        showingPreview = true
+    }
+
+    private func navigateToWaypoint(_ waypoint: Waypoint) {
         guard bluetooth.connectionState == .connected else { return }
+        selectedWaypoint = waypoint
         bluetooth.sendWaypoint(waypoint)
         navigationEnabled = true
         bluetooth.enableNavigation()
     }
+
+    private func stopNavigation() {
+        navigationEnabled = false
+        bluetooth.disableNavigation()
+    }
+
+    private func createPreview(for waypoint: Waypoint, from currentLocation: CLLocationCoordinate2D) -> WaypointPreview {
+        let distance = currentLocation.distance(to: waypoint.coordinate)
+        let bearing = currentLocation.bearing(to: waypoint.coordinate)
+        let averageSpeed = 1.0
+        let estimatedTime = distance / averageSpeed
+
+        return WaypointPreview(
+            waypoint: waypoint,
+            distance: distance,
+            bearing: bearing,
+            estimatedTime: estimatedTime
+        )
+    }
+
+    // MARK: - Geocoding
 
     private func getLocationName(for coordinate: CLLocationCoordinate2D) {
         isGeocodingName = true
@@ -224,7 +362,43 @@ struct MapView: View {
     }
 }
 
-// MARK: - Status Indicator
+// MARK: - Signal Strength Indicator
+
+struct SignalStrengthIndicator: View {
+    let label: String
+    let signalStrength: BLESignalStrength
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.caption)
+            HStack(spacing: 2) {
+                ForEach(1...4, id: \.self) { bar in
+                    Rectangle()
+                        .fill(bar <= signalStrength.bars ? Color(signalStrength.color) : Color.gray.opacity(0.3))
+                        .frame(width: 3, height: CGFloat(bar) * 3)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - GPS Quality Indicator
+
+struct GPSQualityIndicator: View {
+    let label: String
+    let quality: GPSQuality
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.caption)
+            Image(systemName: quality.icon)
+                .font(.caption)
+                .foregroundColor(Color(quality.color))
+        }
+    }
+}
 
 struct StatusIndicator: View {
     let label: String
@@ -253,7 +427,7 @@ struct WaypointMarker: View {
                 .frame(width: 30, height: 30)
 
             Image(systemName: "mappin")
-                .foregroundColor(.white)
+                .foregroundColor(Color.white)
                 .font(.system(size: 16, weight: .bold))
         }
     }
@@ -264,10 +438,12 @@ struct WaypointMarker: View {
 struct SelectedWaypointCard: View {
     let waypoint: Waypoint
     let isConfiguredInHelm: Bool
-    let onSendToHelm: () -> Void
+    let navigationEnabled: Bool
+    let onPreview: () -> Void
+    let onStopNavigation: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(waypoint.name)
@@ -284,28 +460,130 @@ struct SelectedWaypointCard: View {
                 if isConfiguredInHelm {
                     HStack(spacing: 4) {
                         Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
+                            .foregroundColor(Color.green)
                         Text("Active")
                             .font(.caption)
-                            .foregroundColor(.green)
+                            .foregroundColor(Color.green)
                     }
                 }
             }
 
-            Button {
-                onSendToHelm()
-            } label: {
-                HStack {
-                    Image(systemName: "paperplane.fill")
-                    Text(isConfiguredInHelm ? "Resend to Helm" : "Send to Helm")
+            HStack(spacing: 12) {
+                if navigationEnabled && isConfiguredInHelm {
+                    Button {
+                        onStopNavigation()
+                    } label: {
+                        HStack {
+                            Image(systemName: "stop.fill")
+                            Text("Stop Navigation")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(Color.red)
+                } else {
+                    Button {
+                        onPreview()
+                    } label: {
+                        Image(systemName: "info.circle")
+                        Text("Preview")
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
         }
         .padding()
         .background(.regularMaterial)
         .cornerRadius(12)
+    }
+}
+
+// MARK: - Waypoint Preview Sheet
+
+struct WaypointPreviewSheet: View {
+    let preview: WaypointPreview
+    let onNavigate: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 24) {
+                VStack(spacing: 8) {
+                    Text(preview.waypoint.name)
+                        .font(.title2.bold())
+                    Text(String(format: "%.6f, %.6f",
+                                preview.waypoint.coordinate.latitude,
+                                preview.waypoint.coordinate.longitude))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                HStack(spacing: 40) {
+                    VStack(spacing: 8) {
+                        Image(systemName: "location.fill")
+                            .font(.title)
+                            .foregroundColor(Color.blue)
+                        Text(preview.distanceString)
+                            .font(.title3.bold())
+                        Text("Distance")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    VStack(spacing: 8) {
+                        Image(systemName: "safari.fill")
+                            .font(.title)
+                            .foregroundColor(Color.green)
+                        Text("\(preview.bearingString) \(preview.cardinalDirection)")
+                            .font(.title3.bold())
+                        Text("Bearing")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    VStack(spacing: 8) {
+                        Image(systemName: "clock.fill")
+                            .font(.title)
+                            .foregroundColor(.orange)
+                        Text(preview.estimatedTimeString)
+                            .font(.title3.bold())
+                        Text("Est. Time")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding()
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(12)
+
+                Text("Based on 3.6 km/hr (1 m/s) cruise speed")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                Button {
+                    onNavigate()
+                } label: {
+                    HStack {
+                        Image(systemName: "location.fill")
+                        Text("Navigate to Waypoint")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                }
+                .buttonStyle(.borderedProminent)
+                .font(.headline)
+            }
+            .padding()
+            .navigationTitle("Waypoint Preview")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+            }
+        }
     }
 }
 

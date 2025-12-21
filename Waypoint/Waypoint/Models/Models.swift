@@ -1,5 +1,6 @@
 import Foundation
 import CoreLocation
+import SwiftUI
 
 // MARK: - Waypoint
 
@@ -118,6 +119,15 @@ struct DeviceStatus: Codable {
         hasFix && satellites >= 4 && hdop < 5.0
     }
 
+    var gpsQuality: GPSQuality {
+        if !hasFix { return .noFix }
+        if satellites < 4 { return .poor }
+        if hdop >= 5.0 { return .poor }
+        if hdop >= 2.0 { return .fair }
+        if hdop >= 1.0 { return .good }
+        return .excellent
+    }
+
     var isSpotLockActive: Bool {
         navState == "spotlock"
     }
@@ -152,6 +162,154 @@ struct DeviceStatus: Codable {
         case speedLevel
         case targetSpeed
         case speedKmh
+    }
+}
+
+// MARK: - GPS Quality
+
+enum GPSQuality {
+    case noFix
+    case poor
+    case fair
+    case good
+    case excellent
+    
+    var color: Color {  
+        switch self {
+        case .noFix: return .red
+        case .poor: return .orange
+        case .fair: return .yellow
+        case .good: return .green
+        case .excellent: return .green
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .noFix: return "antenna.radiowaves.left.and.right.slash"
+        case .poor: return "antenna.radiowaves.left.and.right"
+        case .fair: return "antenna.radiowaves.left.and.right"
+        case .good: return "antenna.radiowaves.left.and.right"
+        case .excellent: return "antenna.radiowaves.left.and.right"
+        }
+    }
+    
+    var label: String {
+        switch self {
+        case .noFix: return "No Fix"
+        case .poor: return "Poor"
+        case .fair: return "Fair"
+        case .good: return "Good"
+        case .excellent: return "Excellent"
+        }
+    }
+}
+
+// MARK: - BLE Signal Strength
+
+enum BLESignalStrength {
+    case disconnected
+    case weak
+    case fair
+    case good
+    case excellent
+    
+    static func from(rssi: Int) -> BLESignalStrength {
+        if rssi >= -50 { return .excellent }
+        if rssi >= -60 { return .good }
+        if rssi >= -70 { return .fair }
+        if rssi >= -80 { return .weak }
+        return .disconnected
+    }
+    
+    var color: Color {
+        switch self {
+        case .disconnected: return .red
+        case .weak: return .orange
+        case .fair: return .yellow
+        case .good: return .green
+        case .excellent: return .green
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .disconnected: return "wifi.slash"
+        case .weak: return "wifi"
+        case .fair: return "wifi"
+        case .good: return "wifi"
+        case .excellent: return "wifi"
+        }
+    }
+    
+    var label: String {
+        switch self {
+        case .disconnected: return "Disconnected"
+        case .weak: return "Weak"
+        case .fair: return "Fair"
+        case .good: return "Good"
+        case .excellent: return "Excellent"
+        }
+    }
+    
+    var bars: Int {
+        switch self {
+        case .disconnected: return 0
+        case .weak: return 1
+        case .fair: return 2
+        case .good: return 3
+        case .excellent: return 4
+        }
+    }
+}
+
+// MARK: - Waypoint Preview
+
+struct WaypointPreview {
+    let waypoint: Waypoint
+    let distance: Double
+    let bearing: Double
+    let estimatedTime: TimeInterval
+    
+    var distanceString: String {
+        if distance >= 1000 {
+            return String(format: "%.2f km", distance / 1000)
+        }
+        return String(format: "%.0f m", distance)
+    }
+    
+    var bearingString: String {
+        String(format: "%.0f°", bearing)
+    }
+    
+    var estimatedTimeString: String {
+        let minutes = Int(estimatedTime / 60)
+        if minutes < 60 {
+            return "\(minutes) min"
+        }
+        let hours = minutes / 60
+        let remainingMinutes = minutes % 60
+        return "\(hours)h \(remainingMinutes)m"
+    }
+    
+    var cardinalDirection: String {
+        let directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+        let index = Int((bearing + 22.5) / 45.0) % 8
+        return directions[index]
+    }
+}
+
+// MARK: - Track Point
+
+struct TrackPoint: Identifiable, Codable {
+    let id: UUID
+    let coordinate: CLLocationCoordinate2D
+    let timestamp: Date
+    
+    init(coordinate: CLLocationCoordinate2D, timestamp: Date = Date()) {
+        self.id = UUID()
+        self.coordinate = coordinate
+        self.timestamp = timestamp
     }
 }
 
@@ -212,5 +370,38 @@ extension CLLocationCoordinate2D: @retroactive Hashable {
     public func hash(into hasher: inout Hasher) {
         hasher.combine(latitude)
         hasher.combine(longitude)
+    }
+}
+
+// MARK: - Navigation Helpers
+
+extension CLLocationCoordinate2D {
+    func distance(to: CLLocationCoordinate2D) -> Double {
+        let earthRadius = 6371000.0
+        let lat1Rad = latitude * .pi / 180
+        let lat2Rad = to.latitude * .pi / 180
+        let deltaLat = (to.latitude - latitude) * .pi / 180
+        let deltaLon = (to.longitude - longitude) * .pi / 180
+        
+        let a = sin(deltaLat / 2) * sin(deltaLat / 2) +
+                cos(lat1Rad) * cos(lat2Rad) *
+                sin(deltaLon / 2) * sin(deltaLon / 2)
+        let c = 2 * atan2(sqrt(a), sqrt(1 - a))
+        
+        return earthRadius * c
+    }
+    
+    func bearing(to: CLLocationCoordinate2D) -> Double {
+        let lat1Rad = latitude * .pi / 180
+        let lat2Rad = to.latitude * .pi / 180
+        let deltaLon = (to.longitude - longitude) * .pi / 180
+        
+        let x = sin(deltaLon) * cos(lat2Rad)
+        let y = cos(lat1Rad) * sin(lat2Rad) - sin(lat1Rad) * cos(lat2Rad) * cos(deltaLon)
+        
+        var bearing = atan2(x, y) * 180 / .pi
+        bearing = (bearing + 360).truncatingRemainder(dividingBy: 360)
+        
+        return bearing
     }
 }

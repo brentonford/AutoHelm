@@ -15,6 +15,8 @@ class BluetoothManager: NSObject, ObservableObject {
     @Published var deviceStatus: DeviceStatus?
     @Published var lastResponse: BleResponse?
     @Published var lastError: String?
+    @Published var rssi: Int = -100
+    @Published var signalStrength: BLESignalStrength = .disconnected
 
     private var centralManager: CBCentralManager?
     private var peripheral: CBPeripheral?
@@ -24,6 +26,7 @@ class BluetoothManager: NSObject, ObservableObject {
     private var calibrationChar: CBCharacteristic?
 
     private var reconnectTimer: Timer?
+    private var rssiTimer: Timer?
     private var shouldReconnect = true
 
     override init() {
@@ -56,6 +59,7 @@ class BluetoothManager: NSObject, ObservableObject {
     func disconnect() {
         shouldReconnect = false
         reconnectTimer?.invalidate()
+        rssiTimer?.invalidate()
 
         if let peripheral = peripheral, let central = centralManager {
             central.cancelPeripheralConnection(peripheral)
@@ -164,6 +168,21 @@ class BluetoothManager: NSObject, ObservableObject {
         sendCommand("SPEED:\(String(format: "%.1f", kmh))")
     }
 
+    // MARK: - RSSI Monitoring
+
+    private func startRSSIMonitoring() {
+        rssiTimer?.invalidate()
+        rssiTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            self?.peripheral?.readRSSI()
+        }
+    }
+
+    private func stopRSSIMonitoring() {
+        rssiTimer?.invalidate()
+        rssi = -100
+        signalStrength = .disconnected
+    }
+
     // MARK: - Private Methods
 
     private func scheduleReconnect() {
@@ -230,6 +249,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
             connectionState = .connected
             shouldReconnect = true
             peripheral.discoverServices([helmServiceUuid])
+            startRSSIMonitoring()
         }
     }
 
@@ -242,6 +262,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
             connectionState = .disconnected
             lastError = error?.localizedDescription ?? "Connection failed"
             clearCharacteristics()
+            stopRSSIMonitoring()
             scheduleReconnect()
         }
     }
@@ -254,6 +275,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
         Task { @MainActor in
             connectionState = .disconnected
             clearCharacteristics()
+            stopRSSIMonitoring()
             scheduleReconnect()
         }
     }
@@ -338,6 +360,14 @@ extension BluetoothManager: CBPeripheralDelegate {
             }
         } catch {
             print("Response parse error: \(error)")
+        }
+    }
+
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
+        guard error == nil else { return }
+        Task { @MainActor in
+            rssi = RSSI.intValue
+            signalStrength = BLESignalStrength.from(rssi: RSSI.intValue)
         }
     }
 }

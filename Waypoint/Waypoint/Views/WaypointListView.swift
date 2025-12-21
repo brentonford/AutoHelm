@@ -57,12 +57,13 @@ struct WaypointListView: View {
                             editingWaypoint = waypoint
                             showingEditSheet = true
                         },
-                        onSendToHelm: {
-                            sendWaypoint(waypoint)
+                        onNavigate: {
+                            navigateToWaypoint(waypoint)
                         },
                         onDelete: {
                             deleteWaypoint(waypoint)
-                        }
+                        },
+                        navigationEnabled: $navigationEnabled
                     )
                 }
             }
@@ -137,7 +138,7 @@ struct WaypointListView: View {
         }
     }
 
-    private func sendWaypoint(_ waypoint: Waypoint) {
+    private func navigateToWaypoint(_ waypoint: Waypoint) {
         guard bluetooth.connectionState == .connected else { return }
         selectedWaypoint = waypoint
         bluetooth.sendWaypoint(waypoint)
@@ -159,8 +160,21 @@ struct WaypointRow: View {
     let isSelected: Bool
     let onSelect: () -> Void
     let onEdit: () -> Void
-    let onSendToHelm: () -> Void
+    let onNavigate: () -> Void
     let onDelete: () -> Void
+    
+    @EnvironmentObject var bluetooth: BluetoothManager
+    @Binding var navigationEnabled: Bool
+
+    var isActiveNavigation: Bool {
+        guard let status = bluetooth.deviceStatus else { return false }
+        guard let targetLat = status.targetLat, let targetLon = status.targetLon else { return false }
+        
+        let latMatch = abs(waypoint.coordinate.latitude - targetLat) < 0.000001
+        let lonMatch = abs(waypoint.coordinate.longitude - targetLon) < 0.000001
+        
+        return latMatch && lonMatch && navigationEnabled
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -169,7 +183,7 @@ struct WaypointRow: View {
                     HStack {
                         Text(waypoint.name)
                             .font(.headline)
-                            .foregroundColor(isSelected ? .blue : .primary)
+                            .foregroundColor(isSelected ? Color.blue : .primary)
 
                         if waypoint.spotLockEnabled {
                             Image(systemName: "pin.fill")
@@ -187,7 +201,7 @@ struct WaypointRow: View {
 
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.blue)
+                        .foregroundColor(Color.blue)
                 }
             }
 
@@ -213,11 +227,23 @@ struct WaypointRow: View {
                     }
                     .buttonStyle(.bordered)
 
-                    Button(action: onSendToHelm) {
-                        Image(systemName: "paperplane")
-                            .font(.caption)
+                    if isActiveNavigation {
+                        Button(action: {
+                            navigationEnabled = false
+                            bluetooth.disableNavigation()
+                        }) {
+                            Label("Stop", systemImage: "stop.fill")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(Color.red)
+                    } else {
+                        Button(action: onNavigate) {
+                            Label("Navigate", systemImage: "location.fill")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderedProminent)
                     }
-                    .buttonStyle(.borderedProminent)
                 }
             }
         }
