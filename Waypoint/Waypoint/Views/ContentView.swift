@@ -26,7 +26,8 @@ struct ContentView: View {
             
             NavigationStack {
                 HelmControlView(
-                    selectedWaypoint: selectedWaypoint,
+                    waypoints: $waypoints,
+                    selectedWaypoint: $selectedWaypoint,
                     navigationEnabled: $navigationEnabled
                 )
             }

@@ -4,7 +4,8 @@ import CoreLocation
 struct HelmControlView: View {
     @EnvironmentObject private var bluetooth: BluetoothManager
     
-    let selectedWaypoint: Waypoint?
+    @Binding var waypoints: [Waypoint]
+    @Binding var selectedWaypoint: Waypoint?
     @Binding var navigationEnabled: Bool
     
     @State private var isLoading = false
@@ -17,8 +18,7 @@ struct HelmControlView: View {
     @FocusState private var speedFieldFocused: Bool
     @State private var showingArrivalAlert = false
     @State private var totalDistance: Double = 0
-    
-    // MARK: - Constants
+    @State private var showingWaypointList = false
     
     private enum Constants {
         static let feedbackDelaySeconds: Double = 0.3
@@ -31,7 +31,7 @@ struct HelmControlView: View {
     }
 
     // MARK: - Computed Properties
-    
+
     private var navigationBlocked: Bool {
         guard bluetooth.connectionState == .connected else { return true }
         guard let status = bluetooth.deviceStatus else { return true }
@@ -40,6 +40,12 @@ struct HelmControlView: View {
 
     private var navigationFunctioning: Bool {
         navigationEnabled && !navigationBlocked
+    }
+    
+    private var canNavigate: Bool {
+        guard bluetooth.connectionState == .connected else { return false }
+        guard let status = bluetooth.deviceStatus else { return false }
+        return status.hasFix && status.isNavigationReady
     }
     
     private var isActiveNavigation: Bool {
@@ -58,19 +64,28 @@ struct HelmControlView: View {
     }
 
     // MARK: - Body
-    
+
     var body: some View {
         List {
-            connectionSection
-            spotLockSection
             motorControlSection
-            navigationControlSection
+            spotLockSection
+            autonomousNavigationSection
             autonomousCommandSection
-            waypointSection
-            navigationProgressSection
-            speedControlSection
+            connectionSection
             gpsStatusSection
             compassSection
+        }
+        .toolbar {
+            StatusToolbar {
+                showingWaypointList = true
+            }
+        }
+        .sheet(isPresented: $showingWaypointList) {
+            WaypointListView(
+                waypoints: $waypoints,
+                selectedWaypoint: $selectedWaypoint,
+                navigationEnabled: $navigationEnabled
+            )
         }
         .alert("Arrived!", isPresented: $showingArrivalAlert) {
             Button("OK") {
@@ -101,9 +116,22 @@ struct HelmControlView: View {
         .onChange(of: selectedWaypoint?.id) { _, _ in
             handleWaypointChange()
         }
+        .onChange(of: bluetooth.connectionState) { _, newState in
+            if newState != .connected && navigationEnabled {
+                navigationEnabled = false
+            }
+            if newState != .connected {
+                totalDistance = 0
+            }
+        }
+        .onChange(of: bluetooth.deviceStatus?.hasTarget) { _, hasTarget in
+            if hasTarget == true, navigationEnabled, let status = bluetooth.deviceStatus {
+                if totalDistance == 0 {
+                    totalDistance = status.distance
+                }
+            }
+        }
     }
-
-    // MARK: - Connection Section
 
     private var connectionSection: some View {
         Section("Helm Device") {
@@ -159,8 +187,16 @@ struct HelmControlView: View {
     }
     
     private func handleWaypointChange() {
-        guard navigationEnabled, let status = bluetooth.deviceStatus, status.hasTarget == true else { return }
-        totalDistance = status.distance
+        guard let status = bluetooth.deviceStatus else { return }
+        
+        if navigationEnabled && status.hasTarget == true {
+            totalDistance = status.distance
+        } else if selectedWaypoint != nil {
+            let helmLocation = status.currentLocation
+            if let waypoint = selectedWaypoint {
+                totalDistance = helmLocation.distance(to: waypoint.coordinate)
+            }
+        }
     }
     
     private func checkArrival(oldDistance: Double?, newDistance: Double?) {
@@ -181,22 +217,14 @@ struct HelmControlView: View {
     }
 
     // MARK: - Spot Lock Section
-
+    
     private var spotLockSection: some View {
         Section {
             if let status = bluetooth.deviceStatus {
                 HStack {
-                    Text("Spot Lock")
-                    Spacer()
                     Text(status.isSpotLockActive ? "ACTIVE" : "OFF")
                         .foregroundColor(status.isSpotLockActive ? Color.green : .secondary)
-                }
-
-                if status.isSpotLockActive {
-                    LabeledContent("Distance from Lock", value: formatDistance(status.distance))
-                }
-
-                HStack(spacing: 16) {
+                    Spacer()
                     Button(status.isSpotLockActive ? "Disengage" : "Engage") {
                         toggleSpotLock(isActive: status.isSpotLockActive)
                     }
@@ -205,13 +233,17 @@ struct HelmControlView: View {
                 }
 
                 if status.isSpotLockActive {
+                    LabeledContent("Distance from Lock", value: formatDistance(status.distance))
+                }
+
+                if status.isSpotLockActive {
                     spotLockJogControls
                 }
             }
         } header: {
-            Text("Spot Lock (Station Keeping)")
+            Text("Spot Lock")
         } footer: {
-            Text("Spot Lock holds position at the current GPS location. Jog moves the lock point ~5 feet.\nEngaging spot lock disables autonomous navigation")
+            Text("Spot Lock holds position at the current GPS location.\nJog moves the lock point ~1.5m.\nEngaging spot lock disables autonomous navigation")
         }
     }
     
@@ -362,65 +394,90 @@ struct HelmControlView: View {
         }
     }
 
-    // MARK: - Navigation Control Section
+    // MARK: - Autonomous Navigation Section
 
-    private var navigationControlSection: some View {
+    private var autonomousNavigationSection: some View {
         Section {
-            if let status = bluetooth.deviceStatus {
-                LabeledContent("State", value: status.navState?.capitalized ?? "Unknown")
+            if let waypoint = selectedWaypoint, let status = bluetooth.deviceStatus, status.hasTarget == true {
+                LabeledContent("Waypoint") {
+                    Text(waypoint.name)
+                }
 
-                if status.hasTarget == true {
-                    LabeledContent("Distance", value: formatDistance(status.distance))
-                    LabeledContent("Bearing", value: String(format: "%.1f deg", status.bearing))
+                LabeledContent("Coordinates") {
+                    Text(String(format: "%.6f, %.6f",
+                                waypoint.coordinate.latitude,
+                                waypoint.coordinate.longitude))
+                    .font(.caption)
+                }
+                HStack {
+                    Text(String(status.navState?.capitalized ?? "Unknown"))
+                        .foregroundColor(.secondary)
 
-                    if let relative = status.relative {
-                        LabeledContent("Correction") {
+                    Spacer()
+
+                    if navigationEnabled {
+                        Button {
+                            navigationEnabled = false
+                            bluetooth.disableNavigation()
+                        } label: {
                             HStack {
-                                Text(correctionDirection(relative))
-                                Text(String(format: "%+.1f deg", relative))
-                                    .foregroundColor(.secondary)
+                                Image(systemName: "stop.fill")
+                                Text("Stop Navigation")
                             }
                         }
+                        .buttonStyle(.bordered)
+                        .tint(Color.red)
+                        .disabled(bluetooth.connectionState != .connected)
+                    } else {
+                        Button {
+                            sendWaypointAndEnableNavigation(waypoint)
+                        } label: {
+                            HStack {
+                                if isLoading {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                }
+                                Image(systemName: "location.fill")
+                                Text("Navigate to Waypoint")
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!canNavigate || isLoading)
                     }
                 }
-            }
-
-            VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("Navigation")
-                        .font(.headline)
-                    Spacer()
-                    Toggle("", isOn: $navigationEnabled)
-                        .labelsHidden()
-                        .onChange(of: navigationEnabled) { _, enabled in
-                            toggleNavigation(enabled)
-                        }
-                    Text(navigationEnabled ? "ON" : "OFF")
-                        .font(.subheadline.bold())
-                        .foregroundColor(navigationEnabled ? Color.green : .secondary)
-                }
-
-                if navigationBlocked && navigationEnabled {
-                    HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.orange)
-                            .font(.caption)
-                        Text(blockReason)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Bearing")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                        Text(String(format: "%.1f deg", status.bearing))
+                            .font(.headline)
+                    }
+                    
+                    Spacer()
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Distance")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(formatDistance(status.distance))
+                            .font(.headline)
+                    }
+                    
+                    Spacer()
+                    
+                    VStack(alignment: .center, spacing: 4) {
+                        Text("Est. Time")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        let eta = status.distance / Constants.defaultAverageSpeedMs
+                        Text(formatEstimatedTime(eta))
+                            .font(.headline)
                     }
                 }
-
-                if navigationFunctioning {
-                    HStack(spacing: 8) {
-                        Image(systemName: "location.fill")
-                            .foregroundColor(Color.green)
-                            .font(.caption)
-                        Text("Navigation Active")
-                            .font(.caption)
-                            .foregroundColor(Color.green)
-                    }
-                }
+            } else {
+                Text("No waypoint selected")
+                    .foregroundColor(.secondary)
             }
         } header: {
             Text("Autonomous Navigation")
@@ -469,15 +526,29 @@ struct HelmControlView: View {
                     
                     speedCommandRow(status: status)
                     
-                    LabeledContent("Current Level", value: "\(status.speedLevel ?? 0)/10")
-                    LabeledContent("Target Level", value: "\(status.targetSpeed ?? 0)/10")
+                    LabeledContent("Power Level", value: "\(status.speedLevel ?? 0)/10")
+                    if let speedKmh = status.speedKmh {
+                        LabeledContent("Est. Speed", value: String(format: "%.1f km/hr", speedKmh))
+                    }
+
+                    HStack {
+                        TextField("Speed (km/hr)", text: $targetSpeedText)
+                            .keyboardType(.decimalPad)
+                            .textFieldStyle(.roundedBorder)
+                            .focused($speedFieldFocused)
+                        
+                        Button("Set") {
+                            setTargetSpeed()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
                 }
                 
                 HStack(spacing: 4) {
                     Image(systemName: "info.circle")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    Text("Steering: Every 2s when correction needed • Speed: Adjusted to match target")
+                    Text("Steering: Every 2s when correction needed.\nSpeed: Default cruise speed is 3.6 km/hr (1 m/s). Enter a value between 0.0-10.0 km/hr")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -564,142 +635,6 @@ struct HelmControlView: View {
         let targetLevel = status.targetSpeed ?? 0
         
         return currentLevel == targetLevel ? .green : .blue
-    }
-
-    // MARK: - Waypoint Section
-
-    private var waypointSection: some View {
-        Section("Waypoint") {
-            if let waypoint = selectedWaypoint {
-                LabeledContent("Selected") {
-                    Text(waypoint.name)
-                }
-
-                LabeledContent("Coordinates") {
-                    Text(String(format: "%.6f, %.6f",
-                                waypoint.coordinate.latitude,
-                                waypoint.coordinate.longitude))
-                    .font(.caption)
-                }
-
-                if navigationEnabled {
-                    Button {
-                        navigationEnabled = false
-                        bluetooth.disableNavigation()
-                    } label: {
-                        HStack {
-                            Image(systemName: "stop.fill")
-                            Text("Stop Navigation")
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(Color.red)
-                    .disabled(bluetooth.connectionState != .connected)
-                } else {
-                    Button {
-                        sendWaypointAndEnableNavigation(waypoint)
-                    } label: {
-                        HStack {
-                            if isLoading {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                            }
-                            Image(systemName: "location.fill")
-                            Text("Navigate to Waypoint")
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(bluetooth.connectionState != .connected || isLoading)
-                }
-            } else {
-                Text("No waypoint selected")
-                    .foregroundColor(.secondary)
-            }
-        }
-    }
-
-    // MARK: - Navigation Progress Section
-    
-    @ViewBuilder
-    private var navigationProgressSection: some View {
-        if let status = bluetooth.deviceStatus, status.hasTarget == true, navigationEnabled {
-            Section("Navigation Progress") {
-                VStack(spacing: 12) {
-                    HStack {
-                        Text("Progress")
-                            .font(.subheadline)
-                        Spacer()
-                        Text("\(Int(navigationProgress * 100))%")
-                            .font(.subheadline.bold())
-                    }
-                    
-                    ProgressView(value: navigationProgress, total: 1.0)
-                        .tint(Color.blue)
-                    
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Distance")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text(formatDistance(status.distance))
-                                .font(.headline)
-                        }
-                        
-                        Spacer()
-                        
-                        VStack(alignment: .center, spacing: 4) {
-                            Text("Est. Time")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            let eta = status.distance / Constants.defaultAverageSpeedMs
-                            Text(formatEstimatedTime(eta))
-                                .font(.headline)
-                        }
-                        
-                        Spacer()
-                        
-                        VStack(alignment: .trailing, spacing: 4) {
-                            Text("Total")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text(formatDistance(totalDistance))
-                                .font(.headline)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - Speed Control Section
-
-    private var speedControlSection: some View {
-        Section {
-            if let status = bluetooth.deviceStatus {
-                LabeledContent("Current Level", value: "\(status.speedLevel ?? 0)/10")
-                LabeledContent("Target Level", value: "\(status.targetSpeed ?? 0)/10")
-
-                if let speedKmh = status.speedKmh {
-                    LabeledContent("Est. Speed", value: String(format: "%.1f km/hr", speedKmh))
-                }
-            }
-
-            HStack {
-                TextField("Speed (km/hr)", text: $targetSpeedText)
-                    .keyboardType(.decimalPad)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($speedFieldFocused)
-                
-                Button("Set") {
-                    setTargetSpeed()
-                }
-                .buttonStyle(.borderedProminent)
-            }
-        } header: {
-            Text("Speed Control")
-        } footer: {
-            Text("Default cruise speed is 3.6 km/hr (1 m/s). Enter a value between 0-10 km/hr")
-        }
     }
     
     private func setTargetSpeed() {
@@ -799,8 +734,12 @@ struct HelmControlView: View {
     }
 
     private func sendWaypointAndEnableNavigation(_ waypoint: Waypoint) {
+        guard let status = bluetooth.deviceStatus else { return }
+        
+        let helmLocation = status.currentLocation
         isLoading = true
         commandFeedback = "Sending waypoint..."
+        totalDistance = helmLocation.distance(to: waypoint.coordinate)
         bluetooth.sendWaypoint(waypoint)
 
         Task {

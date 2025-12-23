@@ -2,18 +2,16 @@ import Foundation
 import CoreBluetooth
 import Combine
 
-// MARK: - Constants (outside MainActor class)
-
 private enum BleUuids {
-    static let service = CBUUID(string: "FFE0")
-    static let waypoint = CBUUID(string: "FFE1")
-    static let status = CBUUID(string: "FFE2")
-    static let command = CBUUID(string: "FFE3")
-    static let calibration = CBUUID(string: "FFE4")
+    nonisolated(unsafe) static let service = CBUUID(string: "FFE0")
+    nonisolated(unsafe) static let waypoint = CBUUID(string: "FFE1")
+    nonisolated(unsafe) static let status = CBUUID(string: "FFE2")
+    nonisolated(unsafe) static let command = CBUUID(string: "FFE3")
+    nonisolated(unsafe) static let calibration = CBUUID(string: "FFE4")
 }
 
 private enum BleConstants {
-    static let deviceName = "Helm"
+    nonisolated(unsafe) static let deviceName = "Helm"
     static let reconnectDelaySeconds: TimeInterval = 3.0
     static let rssiUpdateIntervalSeconds: TimeInterval = 2.0
 }
@@ -21,8 +19,6 @@ private enum BleConstants {
 @MainActor
 class BluetoothManager: NSObject, ObservableObject {
 
-    // MARK: - Published Properties
-    
     @Published private(set) var connectionState: ConnectionState = .disconnected
     @Published private(set) var deviceStatus: DeviceStatus?
     @Published private(set) var lastResponse: BleResponse?
@@ -30,8 +26,6 @@ class BluetoothManager: NSObject, ObservableObject {
     @Published private(set) var rssi: Int = -100
     @Published private(set) var signalStrength: BLESignalStrength = .disconnected
 
-    // MARK: - Private Properties
-    
     private var centralManager: CBCentralManager?
     private var peripheral: CBPeripheral?
     private var waypointChar: CBCharacteristic?
@@ -43,14 +37,10 @@ class BluetoothManager: NSObject, ObservableObject {
     private var rssiTimer: Timer?
     private var shouldReconnect = true
 
-    // MARK: - Initialization
-    
     override init() {
         super.init()
     }
 
-    // MARK: - Public Methods
-    
     func initialize() {
         guard centralManager == nil else { return }
         centralManager = CBCentralManager(
@@ -99,8 +89,6 @@ class BluetoothManager: NSObject, ObservableObject {
         writeToCharacteristic(waypointChar, data: dataBytes)
     }
 
-    // MARK: - Navigation Control
-
     func enableNavigation() {
         sendCommand("NAV_ENABLE")
     }
@@ -113,8 +101,6 @@ class BluetoothManager: NSObject, ObservableObject {
         sendCommand("MANUAL_MODE")
     }
 
-    // MARK: - Calibration
-
     func startCalibration() {
         sendCommand("START_CAL")
     }
@@ -122,8 +108,6 @@ class BluetoothManager: NSObject, ObservableObject {
     func stopCalibration() {
         sendCommand("STOP_CAL")
     }
-
-    // MARK: - Spot Lock
 
     func engageSpotLock() {
         sendCommand("SPOT_LOCK")
@@ -148,8 +132,6 @@ class BluetoothManager: NSObject, ObservableObject {
         sendCommand(command)
     }
 
-    // MARK: - Path Control
-
     func startPath() {
         sendCommand("PATH_START")
     }
@@ -167,13 +149,9 @@ class BluetoothManager: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Speed Control
-
     func setSpeed(_ kmh: Double) {
         sendCommand("SPEED:\(String(format: "%.1f", kmh))")
     }
-
-    // MARK: - Private Methods
 
     private func writeToCharacteristic(_ characteristic: CBCharacteristic?, data: Data) {
         guard let char = characteristic, let peripheral = peripheral else {
@@ -216,6 +194,11 @@ class BluetoothManager: NSObject, ObservableObject {
         calibrationChar = nil
     }
     
+    private func clearDeviceData() {
+        deviceStatus = nil
+        lastResponse = nil
+    }
+    
     private func parseStatus(_ data: Data) {
         do {
             let status = try JSONDecoder().decode(DeviceStatus.self, from: data)
@@ -238,8 +221,6 @@ class BluetoothManager: NSObject, ObservableObject {
     }
 }
 
-// MARK: - CBCentralManagerDelegate
-
 extension BluetoothManager: CBCentralManagerDelegate {
 
     nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
@@ -249,6 +230,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
                 startScanning()
             case .poweredOff:
                 connectionState = .disconnected
+                clearDeviceData()
                 lastError = "Bluetooth is off"
             case .unauthorized:
                 lastError = "Bluetooth permission denied"
@@ -297,6 +279,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
             connectionState = .disconnected
             lastError = error?.localizedDescription ?? "Connection failed"
             clearCharacteristics()
+            clearDeviceData()
             stopRSSIMonitoring()
             scheduleReconnect()
         }
@@ -310,13 +293,12 @@ extension BluetoothManager: CBCentralManagerDelegate {
         Task { @MainActor in
             connectionState = .disconnected
             clearCharacteristics()
+            clearDeviceData()
             stopRSSIMonitoring()
             scheduleReconnect()
         }
     }
 }
-
-// MARK: - CBPeripheralDelegate
 
 extension BluetoothManager: CBPeripheralDelegate {
 
