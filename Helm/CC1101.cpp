@@ -5,7 +5,7 @@ CC1101::CC1101(uint8_t csPin, uint8_t sckPin, uint8_t misoPin, uint8_t mosiPin)
     , _sckPin(sckPin)
     , _misoPin(misoPin)
     , _mosiPin(mosiPin)
-    , _spiSettings(4000000, MSBFIRST, SPI_MODE0) {
+    , _spiSettings(CC1101Config::spiFrequency, MSBFIRST, SPI_MODE0) {
 }
 
 void CC1101::select() {
@@ -18,7 +18,7 @@ void CC1101::deselect() {
     delayMicroseconds(1);
 }
 
-void CC1101::waitMiso() {
+void CC1101::waitMiso() const {
     while (digitalRead(_misoPin))
         delayMicroseconds(1);
 }
@@ -53,7 +53,7 @@ bool CC1101::begin() {
     uint8_t version = readStatusReg(CC1101Reg::version);
     Serial.printf("[CC1101] Version: 0x%02X\n", version);
 
-    if (version != 0x14 && version != 0x04)
+    if (version != CC1101Config::versionPrimary && version != CC1101Config::versionAlternate)
         return false;
 
     configure();
@@ -62,64 +62,64 @@ bool CC1101::begin() {
 
 void CC1101::configure() {
     // Frequency: 433.017 MHz
-    writeReg(CC1101Reg::freq2, 0x10);
-    writeReg(CC1101Reg::freq1, 0xA7);
-    writeReg(CC1101Reg::freq0, 0x6C);
+    writeReg(CC1101Reg::freq2, CC1101Config::freq2Val);
+    writeReg(CC1101Reg::freq1, CC1101Config::freq1Val);
+    writeReg(CC1101Reg::freq0, CC1101Config::freq0Val);
 
     // Modem config: 2-FSK, async serial mode
-    writeReg(CC1101Reg::mdmcfg4, 0xC9);
-    writeReg(CC1101Reg::mdmcfg3, 0x30);
-    writeReg(CC1101Reg::mdmcfg2, 0x00);
-    writeReg(CC1101Reg::mdmcfg1, 0x00);
-    writeReg(CC1101Reg::mdmcfg0, 0x00);
+    writeReg(CC1101Reg::mdmcfg4, CC1101Config::mdmcfg4Val);
+    writeReg(CC1101Reg::mdmcfg3, CC1101Config::mdmcfg3Val);
+    writeReg(CC1101Reg::mdmcfg2, CC1101Config::mdmcfg2Val);
+    writeReg(CC1101Reg::mdmcfg1, CC1101Config::mdmcfg1Val);
+    writeReg(CC1101Reg::mdmcfg0, CC1101Config::mdmcfg0Val);
 
     // Deviation: ~25 kHz
-    writeReg(CC1101Reg::deviatn, 0x40);
+    writeReg(CC1101Reg::deviatn, CC1101Config::deviatnVal);
 
     // Front-end config
-    writeReg(CC1101Reg::frend0, 0x10);
-    writeReg(CC1101Reg::frend1, 0x56);
+    writeReg(CC1101Reg::frend0, CC1101Config::frend0Val);
+    writeReg(CC1101Reg::frend1, CC1101Config::frend1Val);
 
     // Main radio control
-    writeReg(CC1101Reg::mcsm0, 0x18);
+    writeReg(CC1101Reg::mcsm0, CC1101Config::mcsm0Val);
 
     // Frequency offset compensation
-    writeReg(CC1101Reg::foccfg, 0x16);
+    writeReg(CC1101Reg::foccfg, CC1101Config::foccfgVal);
 
     // AGC control
-    writeReg(CC1101Reg::agcctrl2, 0x43);
-    writeReg(CC1101Reg::agcctrl1, 0x40);
-    writeReg(CC1101Reg::agcctrl0, 0x91);
+    writeReg(CC1101Reg::agcctrl2, CC1101Config::agcctrl2Val);
+    writeReg(CC1101Reg::agcctrl1, CC1101Config::agcctrl1Val);
+    writeReg(CC1101Reg::agcctrl0, CC1101Config::agcctrl0Val);
 
     // Frequency synthesizer calibration
-    writeReg(CC1101Reg::fscal3, 0xE9);
-    writeReg(CC1101Reg::fscal2, 0x2A);
-    writeReg(CC1101Reg::fscal1, 0x00);
-    writeReg(CC1101Reg::fscal0, 0x1F);
+    writeReg(CC1101Reg::fscal3, CC1101Config::fscal3Val);
+    writeReg(CC1101Reg::fscal2, CC1101Config::fscal2Val);
+    writeReg(CC1101Reg::fscal1, CC1101Config::fscal1Val);
+    writeReg(CC1101Reg::fscal0, CC1101Config::fscal0Val);
 
     // Test registers
-    writeReg(CC1101Reg::test2, 0x81);
-    writeReg(CC1101Reg::test1, 0x35);
-    writeReg(CC1101Reg::test0, 0x09);
+    writeReg(CC1101Reg::test2, CC1101Config::test2Val);
+    writeReg(CC1101Reg::test1, CC1101Config::test1Val);
+    writeReg(CC1101Reg::test0, CC1101Config::test0Val);
 
     // GDO0: High-Z for async TX input
-    writeReg(CC1101Reg::iocfg0, 0x2E);
+    writeReg(CC1101Reg::iocfg0, CC1101Config::iocfg0Val);
 
     // Packet control: Async serial mode
-    writeReg(CC1101Reg::pktctrl0, 0x32);
+    writeReg(CC1101Reg::pktctrl0, CC1101Config::pktctrl0Val);
 
     // Frequency synthesizer control
-    writeReg(CC1101Reg::fsctrl1, 0x06);
+    writeReg(CC1101Reg::fsctrl1, CC1101Config::fsctrl1Val);
 
     // FIFO threshold
-    writeReg(CC1101Reg::fifothr, 0x47);
+    writeReg(CC1101Reg::fifothr, CC1101Config::fifothrVal);
 
     // PATABLE: Max TX power
     SPI.beginTransaction(_spiSettings);
     select();
     waitMiso();
-    SPI.transfer(CC1101Reg::patable | 0x40);
-    SPI.transfer(0xC0);
+    SPI.transfer(CC1101Reg::patable | CC1101Config::burstBit);
+    SPI.transfer(CC1101Config::patableVal);
     deselect();
     SPI.endTransaction();
 
@@ -153,13 +153,13 @@ void CC1101::writeReg(uint8_t addr, uint8_t value) {
     SPI.endTransaction();
 }
 
-uint8_t CC1101::readStatusReg(uint8_t addr) {
+uint8_t CC1101::readStatusReg(uint8_t addr) const {
     SPI.beginTransaction(_spiSettings);
-    select();
+    const_cast<CC1101*>(this)->select();
     waitMiso();
-    SPI.transfer(addr | 0xC0);
+    SPI.transfer(addr | CC1101Config::statusBit);
     uint8_t value = SPI.transfer(0x00);
-    deselect();
+    const_cast<CC1101*>(this)->deselect();
     SPI.endTransaction();
     return value;
 }

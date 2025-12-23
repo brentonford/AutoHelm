@@ -2,22 +2,36 @@ import Foundation
 import CoreBluetooth
 import Combine
 
-private nonisolated(unsafe) let helmServiceUuid = CBUUID(string: "FFE0")
-private nonisolated(unsafe) let helmWaypointCharUuid = CBUUID(string: "FFE1")
-private nonisolated(unsafe) let helmStatusCharUuid = CBUUID(string: "FFE2")
-private nonisolated(unsafe) let helmCommandCharUuid = CBUUID(string: "FFE3")
-private nonisolated(unsafe) let helmCalibrationCharUuid = CBUUID(string: "FFE4")
+// MARK: - Constants (outside MainActor class)
+
+private enum BleUuids {
+    static let service = CBUUID(string: "FFE0")
+    static let waypoint = CBUUID(string: "FFE1")
+    static let status = CBUUID(string: "FFE2")
+    static let command = CBUUID(string: "FFE3")
+    static let calibration = CBUUID(string: "FFE4")
+}
+
+private enum BleConstants {
+    static let deviceName = "Helm"
+    static let reconnectDelaySeconds: TimeInterval = 3.0
+    static let rssiUpdateIntervalSeconds: TimeInterval = 2.0
+}
 
 @MainActor
 class BluetoothManager: NSObject, ObservableObject {
 
-    @Published var connectionState: ConnectionState = .disconnected
-    @Published var deviceStatus: DeviceStatus?
-    @Published var lastResponse: BleResponse?
-    @Published var lastError: String?
-    @Published var rssi: Int = -100
-    @Published var signalStrength: BLESignalStrength = .disconnected
+    // MARK: - Published Properties
+    
+    @Published private(set) var connectionState: ConnectionState = .disconnected
+    @Published private(set) var deviceStatus: DeviceStatus?
+    @Published private(set) var lastResponse: BleResponse?
+    @Published private(set) var lastError: String?
+    @Published private(set) var rssi: Int = -100
+    @Published private(set) var signalStrength: BLESignalStrength = .disconnected
 
+    // MARK: - Private Properties
+    
     private var centralManager: CBCentralManager?
     private var peripheral: CBPeripheral?
     private var waypointChar: CBCharacteristic?
@@ -29,10 +43,14 @@ class BluetoothManager: NSObject, ObservableObject {
     private var rssiTimer: Timer?
     private var shouldReconnect = true
 
+    // MARK: - Initialization
+    
     override init() {
         super.init()
     }
 
+    // MARK: - Public Methods
+    
     func initialize() {
         guard centralManager == nil else { return }
         centralManager = CBCentralManager(
@@ -46,7 +64,7 @@ class BluetoothManager: NSObject, ObservableObject {
         guard let central = centralManager, central.state == .poweredOn else { return }
 
         connectionState = .scanning
-        central.scanForPeripherals(withServices: [helmServiceUuid], options: nil)
+        central.scanForPeripherals(withServices: [BleUuids.service], options: nil)
     }
 
     func stopScanning() {
@@ -67,33 +85,18 @@ class BluetoothManager: NSObject, ObservableObject {
     }
 
     func sendWaypoint(_ waypoint: Waypoint) {
-        guard let char = waypointChar, let peripheral = peripheral else {
-            lastError = "Not connected"
-            return
-        }
-
-        let data = waypoint.toGpsString().data(using: .utf8)!
-        peripheral.writeValue(data, for: char, type: .withResponse)
+        guard let data = waypoint.toGpsString().data(using: .utf8) else { return }
+        writeToCharacteristic(waypointChar, data: data)
     }
 
     func sendCommand(_ command: String) {
-        guard let char = commandChar, let peripheral = peripheral else {
-            lastError = "Not connected"
-            return
-        }
-
-        let data = command.data(using: .utf8)!
-        peripheral.writeValue(data, for: char, type: .withResponse)
+        guard let data = command.data(using: .utf8) else { return }
+        writeToCharacteristic(commandChar, data: data)
     }
 
     func sendRawData(_ data: String) {
-        guard let char = waypointChar, let peripheral = peripheral else {
-            lastError = "Not connected"
-            return
-        }
-
-        let dataBytes = data.data(using: .utf8)!
-        peripheral.writeValue(dataBytes, for: char, type: .withResponse)
+        guard let dataBytes = data.data(using: .utf8) else { return }
+        writeToCharacteristic(waypointChar, data: dataBytes)
     }
 
     // MARK: - Navigation Control
@@ -131,16 +134,18 @@ class BluetoothManager: NSObject, ObservableObject {
     }
 
     func jogSpotLock(direction: JogDirection) {
+        let command: String
         switch direction {
         case .forward:
-            sendCommand("JOG_FWD")
+            command = "JOG_FWD"
         case .back:
-            sendCommand("JOG_BACK")
+            command = "JOG_BACK"
         case .left:
-            sendCommand("JOG_LEFT")
+            command = "JOG_LEFT"
         case .right:
-            sendCommand("JOG_RIGHT")
+            command = "JOG_RIGHT"
         }
+        sendCommand(command)
     }
 
     // MARK: - Path Control
@@ -168,12 +173,22 @@ class BluetoothManager: NSObject, ObservableObject {
         sendCommand("SPEED:\(String(format: "%.1f", kmh))")
     }
 
-    // MARK: - RSSI Monitoring
+    // MARK: - Private Methods
+
+    private func writeToCharacteristic(_ characteristic: CBCharacteristic?, data: Data) {
+        guard let char = characteristic, let peripheral = peripheral else {
+            lastError = "Not connected"
+            return
+        }
+        peripheral.writeValue(data, for: char, type: .withResponse)
+    }
 
     private func startRSSIMonitoring() {
         rssiTimer?.invalidate()
-        rssiTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            self?.peripheral?.readRSSI()
+        rssiTimer = Timer.scheduledTimer(withTimeInterval: BleConstants.rssiUpdateIntervalSeconds, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.peripheral?.readRSSI()
+            }
         }
     }
 
@@ -183,16 +198,13 @@ class BluetoothManager: NSObject, ObservableObject {
         signalStrength = .disconnected
     }
 
-    // MARK: - Private Methods
-
     private func scheduleReconnect() {
         guard shouldReconnect else { return }
 
         reconnectTimer?.invalidate()
-        reconnectTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in
-                self.startScanning()
+        reconnectTimer = Timer.scheduledTimer(withTimeInterval: BleConstants.reconnectDelaySeconds, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.startScanning()
             }
         }
     }
@@ -202,6 +214,27 @@ class BluetoothManager: NSObject, ObservableObject {
         statusChar = nil
         commandChar = nil
         calibrationChar = nil
+    }
+    
+    private func parseStatus(_ data: Data) {
+        do {
+            let status = try JSONDecoder().decode(DeviceStatus.self, from: data)
+            self.deviceStatus = status
+        } catch {
+            print("Status parse error: \(error)")
+        }
+    }
+
+    private func parseResponse(_ data: Data) {
+        do {
+            let response = try JSONDecoder().decode(BleResponse.self, from: data)
+            self.lastResponse = response
+            if let error = response.error {
+                self.lastError = error
+            }
+        } catch {
+            print("Response parse error: \(error)")
+        }
     }
 }
 
@@ -219,7 +252,9 @@ extension BluetoothManager: CBCentralManagerDelegate {
                 lastError = "Bluetooth is off"
             case .unauthorized:
                 lastError = "Bluetooth permission denied"
-            default:
+            case .unsupported, .resetting, .unknown:
+                break
+            @unknown default:
                 break
             }
         }
@@ -232,7 +267,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
         rssi RSSI: NSNumber
     ) {
         let name = peripheral.name ?? "Unknown"
-        guard name == "Helm" else { return }
+        guard name == BleConstants.deviceName else { return }
 
         central.stopScan()
 
@@ -248,7 +283,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
         Task { @MainActor in
             connectionState = .connected
             shouldReconnect = true
-            peripheral.discoverServices([helmServiceUuid])
+            peripheral.discoverServices([BleUuids.service])
             startRSSIMonitoring()
         }
     }
@@ -286,13 +321,13 @@ extension BluetoothManager: CBCentralManagerDelegate {
 extension BluetoothManager: CBPeripheralDelegate {
 
     nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard let service = peripheral.services?.first(where: { $0.uuid == helmServiceUuid }) else { return }
+        guard let service = peripheral.services?.first(where: { $0.uuid == BleUuids.service }) else { return }
 
         peripheral.discoverCharacteristics([
-            helmWaypointCharUuid,
-            helmStatusCharUuid,
-            helmCommandCharUuid,
-            helmCalibrationCharUuid
+            BleUuids.waypoint,
+            BleUuids.status,
+            BleUuids.command,
+            BleUuids.calibration
         ], for: service)
     }
 
@@ -306,14 +341,14 @@ extension BluetoothManager: CBPeripheralDelegate {
         Task { @MainActor in
             for char in characteristics {
                 switch char.uuid {
-                case helmWaypointCharUuid:
+                case BleUuids.waypoint:
                     waypointChar = char
-                case helmStatusCharUuid:
+                case BleUuids.status:
                     statusChar = char
                     peripheral.setNotifyValue(true, for: char)
-                case helmCommandCharUuid:
+                case BleUuids.command:
                     commandChar = char
-                case helmCalibrationCharUuid:
+                case BleUuids.calibration:
                     calibrationChar = char
                     peripheral.setNotifyValue(true, for: char)
                 default:
@@ -332,34 +367,13 @@ extension BluetoothManager: CBPeripheralDelegate {
 
         Task { @MainActor in
             switch characteristic.uuid {
-            case helmStatusCharUuid:
+            case BleUuids.status:
                 parseStatus(data)
-            case helmCalibrationCharUuid:
+            case BleUuids.calibration:
                 parseResponse(data)
             default:
                 break
             }
-        }
-    }
-
-    private func parseStatus(_ data: Data) {
-        do {
-            let status = try JSONDecoder().decode(DeviceStatus.self, from: data)
-            self.deviceStatus = status
-        } catch {
-            print("Status parse error: \(error)")
-        }
-    }
-
-    private func parseResponse(_ data: Data) {
-        do {
-            let response = try JSONDecoder().decode(BleResponse.self, from: data)
-            self.lastResponse = response
-            if let error = response.error {
-                self.lastError = error
-            }
-        } catch {
-            print("Response parse error: \(error)")
         }
     }
 

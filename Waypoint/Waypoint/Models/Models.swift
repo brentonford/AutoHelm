@@ -143,6 +143,10 @@ struct DeviceStatus: Codable {
     var isManualMode: Bool {
         navState == "manual"
     }
+    
+    var isActiveNavigation: Bool {
+        hasTarget == true && (navState == "navigating" || navState == "path" || navState == "spotlock")
+    }
 
     enum CodingKeys: String, CodingKey {
         case hasFix = "has_fix"
@@ -174,23 +178,21 @@ enum GPSQuality {
     case good
     case excellent
     
-    var color: Color {  
+    var color: Color {
         switch self {
         case .noFix: return .red
         case .poor: return .orange
         case .fair: return .yellow
-        case .good: return .green
-        case .excellent: return .green
+        case .good, .excellent: return .green
         }
     }
     
     var icon: String {
         switch self {
-        case .noFix: return "antenna.radiowaves.left.and.right.slash"
-        case .poor: return "antenna.radiowaves.left.and.right"
-        case .fair: return "antenna.radiowaves.left.and.right"
-        case .good: return "antenna.radiowaves.left.and.right"
-        case .excellent: return "antenna.radiowaves.left.and.right"
+        case .noFix:
+            return "antenna.radiowaves.left.and.right.slash"
+        case .poor, .fair, .good, .excellent:
+            return "antenna.radiowaves.left.and.right"
         }
     }
     
@@ -227,18 +229,16 @@ enum BLESignalStrength {
         case .disconnected: return .red
         case .weak: return .orange
         case .fair: return .yellow
-        case .good: return .green
-        case .excellent: return .green
+        case .good, .excellent: return .green
         }
     }
     
     var icon: String {
         switch self {
-        case .disconnected: return "wifi.slash"
-        case .weak: return "wifi"
-        case .fair: return "wifi"
-        case .good: return "wifi"
-        case .excellent: return "wifi"
+        case .disconnected:
+            return "wifi.slash"
+        case .weak, .fair, .good, .excellent:
+            return "wifi"
         }
     }
     
@@ -279,7 +279,7 @@ struct WaypointPreview {
     }
     
     var bearingString: String {
-        String(format: "%.0f°", bearing)
+        String(format: "%.0f deg", bearing)
     }
     
     var estimatedTimeString: String {
@@ -376,25 +376,27 @@ extension CLLocationCoordinate2D: @retroactive Hashable {
 // MARK: - Navigation Helpers
 
 extension CLLocationCoordinate2D {
-    func distance(to: CLLocationCoordinate2D) -> Double {
-        let earthRadius = 6371000.0
+    
+    private static let earthRadiusMeters: Double = 6371000.0
+    
+    func distance(to destination: CLLocationCoordinate2D) -> Double {
         let lat1Rad = latitude * .pi / 180
-        let lat2Rad = to.latitude * .pi / 180
-        let deltaLat = (to.latitude - latitude) * .pi / 180
-        let deltaLon = (to.longitude - longitude) * .pi / 180
+        let lat2Rad = destination.latitude * .pi / 180
+        let deltaLat = (destination.latitude - latitude) * .pi / 180
+        let deltaLon = (destination.longitude - longitude) * .pi / 180
         
         let a = sin(deltaLat / 2) * sin(deltaLat / 2) +
                 cos(lat1Rad) * cos(lat2Rad) *
                 sin(deltaLon / 2) * sin(deltaLon / 2)
         let c = 2 * atan2(sqrt(a), sqrt(1 - a))
         
-        return earthRadius * c
+        return Self.earthRadiusMeters * c
     }
     
-    func bearing(to: CLLocationCoordinate2D) -> Double {
+    func bearing(to destination: CLLocationCoordinate2D) -> Double {
         let lat1Rad = latitude * .pi / 180
-        let lat2Rad = to.latitude * .pi / 180
-        let deltaLon = (to.longitude - longitude) * .pi / 180
+        let lat2Rad = destination.latitude * .pi / 180
+        let deltaLon = (destination.longitude - longitude) * .pi / 180
         
         let x = sin(deltaLon) * cos(lat2Rad)
         let y = cos(lat1Rad) * sin(lat2Rad) - sin(lat1Rad) * cos(lat2Rad) * cos(deltaLon)

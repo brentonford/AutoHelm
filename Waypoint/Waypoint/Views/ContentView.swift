@@ -21,14 +21,19 @@ struct ContentView: View {
             .tabItem {
                 Label("Map", systemImage: "map")
             }
+            .accessibilityLabel("Map Tab")
             .tag(0)
             
             NavigationStack {
-                HelmControlView(selectedWaypoint: selectedWaypoint, navigationEnabled: $navigationEnabled)
+                HelmControlView(
+                    selectedWaypoint: selectedWaypoint,
+                    navigationEnabled: $navigationEnabled
+                )
             }
             .tabItem {
                 Label("Helm", systemImage: "helm")
             }
+            .accessibilityLabel("Helm Control Tab")
             .tag(1)
             
             NavigationStack {
@@ -37,6 +42,7 @@ struct ContentView: View {
             .tabItem {
                 Label("Settings", systemImage: "gearshape")
             }
+            .accessibilityLabel("Settings Tab")
             .tag(2)
         }
         .environmentObject(bluetooth)

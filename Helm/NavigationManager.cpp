@@ -89,25 +89,21 @@ void NavigationManager::setEnabled(bool enabled) {
     if (_enabled) {
         _state = NavigationState::Navigating;
         _lastCorrectionTime = 0;
-        
-        // Reset motor response detection
-        _noResponseCount = 0;
-        _motorResponding = true;
-        _lastMotorCommand = HeadingCorrection::None;
-        _lastCommandTime = 0;
-        _sampleIndex = 0;
-        
+        resetMotorDetection();
         Serial.println("[Nav] Navigation ENABLED");
     } else {
         _state = NavigationState::Idle;
-        
-        // Reset motor response detection on disable
-        _noResponseCount = 0;
-        _motorResponding = true;
-        _lastMotorCommand = HeadingCorrection::None;
-        
+        resetMotorDetection();
         Serial.println("[Nav] Navigation DISABLED");
     }
+}
+
+void NavigationManager::resetMotorDetection() {
+    _noResponseCount = 0;
+    _motorResponding = true;
+    _lastMotorCommand = HeadingCorrection::None;
+    _lastCommandTime = 0;
+    _sampleIndex = 0;
 }
 
 void NavigationManager::update(const GpsData& gpsData, float heading) {
@@ -142,9 +138,8 @@ void NavigationManager::update(const GpsData& gpsData, float heading) {
             break;
 
         case NavigationState::Manual:
-            break;
-
-        default:
+        case NavigationState::Idle:
+        case NavigationState::Arrived:
             break;
     }
 }
@@ -165,7 +160,7 @@ void NavigationManager::calculateNavigation(const GpsData& gpsData, float headin
     );
 }
 
-bool NavigationManager::checkArrival() {
+bool NavigationManager::checkArrival() const {
     return _navData.distanceToTarget <= NavigationConfig::arrivalThresholdM;
 }
 
@@ -176,10 +171,12 @@ bool NavigationManager::isCorrectionIntervalElapsed() const {
 }
 
 bool NavigationManager::needsCorrection() const {
-    if (!_enabled || _state == NavigationState::Idle || _state == NavigationState::Manual)
+    if (!_enabled)
+        return false;
+    if (_state == NavigationState::Idle || _state == NavigationState::Manual)
         return false;
 
-    float absAngle = fabs(_navData.relativeAngle);
+    float absAngle = fabsf(_navData.relativeAngle);
     return absAngle > NavigationConfig::headingToleranceDeg;
 }
 
@@ -196,7 +193,7 @@ HeadingCorrection NavigationManager::getRequiredCorrection() {
     if (!isCorrectionIntervalElapsed())
         return HeadingCorrection::None;
 
-    float absAngle = fabs(_navData.relativeAngle);
+    float absAngle = fabsf(_navData.relativeAngle);
     if (absAngle <= NavigationConfig::headingToleranceDeg)
         return HeadingCorrection::None;
 
@@ -205,10 +202,10 @@ HeadingCorrection NavigationManager::getRequiredCorrection() {
     HeadingCorrection correction;
     if (_navData.relativeAngle > 0) {
         correction = HeadingCorrection::Right;
-        Serial.printf("[Nav] Correction: RIGHT (%+.1f°)\n", _navData.relativeAngle);
+        Serial.printf("[Nav] Correction: RIGHT (%+.1f deg)\n", _navData.relativeAngle);
     } else {
         correction = HeadingCorrection::Left;
-        Serial.printf("[Nav] Correction: LEFT (%+.1f°)\n", _navData.relativeAngle);
+        Serial.printf("[Nav] Correction: LEFT (%+.1f deg)\n", _navData.relativeAngle);
     }
 
     recordMotorCommand(correction);
@@ -299,14 +296,15 @@ void NavigationManager::advanceToNextWaypoint() {
     }
 
     Waypoint* wp = _activePath->getCurrentWaypoint(_currentWaypointIndex);
-    if (wp) {
-        _target = *wp;
-        Serial.printf("[Nav] Advancing to waypoint %d: %s\n",
-            _currentWaypointIndex, wp->name);
+    if (!wp)
+        return;
 
-        if (wp->spotLockEnabled) {
-            engageSpotLock(wp->latitude, wp->longitude);
-        }
+    _target = *wp;
+    Serial.printf("[Nav] Advancing to waypoint %d: %s\n",
+        _currentWaypointIndex, wp->name);
+
+    if (wp->spotLockEnabled) {
+        engageSpotLock(wp->latitude, wp->longitude);
     }
 }
 
@@ -368,18 +366,27 @@ void NavigationManager::jogSpotLock(float currentHeading, int8_t direction) {
 
     float jogHeading = currentHeading;
     switch (direction) {
-        case 2:  break;
-        case 0:  jogHeading += 180.0f; break;
-        case -1: jogHeading -= 90.0f; break;
-        case 1:  jogHeading += 90.0f; break;
+        case 2:  // Forward
+            break;
+        case 0:  // Back
+            jogHeading += 180.0f;
+            break;
+        case -1: // Left
+            jogHeading -= 90.0f;
+            break;
+        case 1:  // Right
+            jogHeading += 90.0f;
+            break;
     }
 
     jogHeading = NavigationUtils::normalizeHeading(jogHeading);
 
     float jogHeadingRad = jogHeading * DEG_TO_RAD;
-    _spotLockTarget.latitude += (jogDistanceM / 111320.0f) * cos(jogHeadingRad);
-    _spotLockTarget.longitude += (jogDistanceM / (111320.0f *
-        cos(_spotLockTarget.latitude * DEG_TO_RAD))) * sin(jogHeadingRad);
+    constexpr float metersPerDegLat = 111320.0f;
+    
+    _spotLockTarget.latitude += (jogDistanceM / metersPerDegLat) * cosf(jogHeadingRad);
+    _spotLockTarget.longitude += (jogDistanceM / (metersPerDegLat *
+        cosf(_spotLockTarget.latitude * DEG_TO_RAD))) * sinf(jogHeadingRad);
 
     Serial.printf("[Nav] Spot Lock jogged to: %.6f, %.6f\n",
         _spotLockTarget.latitude, _spotLockTarget.longitude);
@@ -407,14 +414,13 @@ void NavigationManager::updateSpotLock(const GpsData& gpsData, float heading) {
         heading, _navData.bearingToTarget
     );
 
-    if (_navData.distanceToTarget < spotLockHoldRadius) {
+    if (_navData.distanceToTarget < spotLockHoldRadius)
         return;
-    }
 
     uint32_t now = millis();
-    if (now - _lastSpotLockCorrection < NavigationConfig::correctionIntervalMs) {
+    if (now - _lastSpotLockCorrection < NavigationConfig::correctionIntervalMs)
         return;
-    }
+
     _lastSpotLockCorrection = now;
 }
 
@@ -422,10 +428,10 @@ void NavigationManager::updateSpotLock(const GpsData& gpsData, float heading) {
 
 void NavigationManager::setTargetSpeed(float speedMs) {
     uint8_t bestLevel = 0;
-    float bestDiff = fabs(speedTable[0] - speedMs);
+    float bestDiff = fabsf(speedTable[0] - speedMs);
 
     for (uint8_t i = 1; i <= 10; i++) {
-        float diff = fabs(speedTable[i] - speedMs);
+        float diff = fabsf(speedTable[i] - speedMs);
         if (diff < bestDiff) {
             bestDiff = diff;
             bestLevel = i;
@@ -437,21 +443,25 @@ void NavigationManager::setTargetSpeed(float speedMs) {
 }
 
 void NavigationManager::setTargetSpeedKmh(float speedKmh) {
-    setTargetSpeed(speedKmh / 3.6f);
+    constexpr float kmhToMs = 3.6f;
+    setTargetSpeed(speedKmh / kmhToMs);
 }
 
 void NavigationManager::setSpeedLevel(uint8_t level) {
-    _speedState.targetLevel = min(level, (uint8_t)10);
+    constexpr uint8_t maxLevel = 10;
+    _speedState.targetLevel = min(level, maxLevel);
 }
 
 int8_t NavigationManager::getSpeedAdjustment() {
-    int8_t diff = (int8_t)_speedState.targetLevel - (int8_t)_speedState.currentLevel;
+    int8_t diff = static_cast<int8_t>(_speedState.targetLevel) - 
+                  static_cast<int8_t>(_speedState.currentLevel);
 
     if (diff == 0)
         return 0;
 
+    constexpr uint32_t speedChangeIntervalMs = 500;
     uint32_t now = millis();
-    if (now - _lastSpeedChangeTime < 500)
+    if (now - _lastSpeedChangeTime < speedChangeIntervalMs)
         return 0;
 
     _lastSpeedChangeTime = now;
@@ -482,10 +492,10 @@ void NavigationManager::updateMotorDetection(const GpsData& gpsData, float headi
     };
     _sampleIndex = (_sampleIndex + 1) % sampleHistorySize;
 
+    constexpr uint32_t minResponseTimeMs = 500;
     uint32_t timeSinceCommand = millis() - _lastCommandTime;
-    if (timeSinceCommand < 500 || _lastMotorCommand == HeadingCorrection::None) {
+    if (timeSinceCommand < minResponseTimeMs || _lastMotorCommand == HeadingCorrection::None)
         return;
-    }
 
     uint8_t oldestIdx = _sampleIndex;
     uint8_t newestIdx = (_sampleIndex - 1 + sampleHistorySize) % sampleHistorySize;
@@ -497,32 +507,35 @@ void NavigationManager::updateMotorDetection(const GpsData& gpsData, float headi
         return;
 
     float headingChange = newest.heading - oldest.heading;
-    while (headingChange > 180)
-        headingChange -= 360;
-    while (headingChange < -180)
-        headingChange += 360;
+    while (headingChange > 180.0f)
+        headingChange -= 360.0f;
+    while (headingChange < -180.0f)
+        headingChange += 360.0f;
 
+    constexpr float responseThreshold = 2.0f;
     bool responding = false;
-    float threshold = 2.0f;
 
     switch (_lastMotorCommand) {
         case HeadingCorrection::Left:
-            responding = (headingChange < -threshold);
+            responding = (headingChange < -responseThreshold);
             break;
         case HeadingCorrection::Right:
-            responding = (headingChange > threshold);
+            responding = (headingChange > responseThreshold);
             break;
-        default:
+        case HeadingCorrection::None:
             responding = true;
             break;
     }
 
+    constexpr uint32_t noResponseTimeoutMs = 2000;
+    constexpr uint8_t maxNoResponseCount = 3;
+
     if (responding) {
         _noResponseCount = 0;
         _motorResponding = true;
-    } else if (timeSinceCommand > 2000) {
+    } else if (timeSinceCommand > noResponseTimeoutMs) {
         _noResponseCount++;
-        if (_noResponseCount > 3) {
+        if (_noResponseCount > maxNoResponseCount) {
             _motorResponding = false;
             Serial.println("[Nav] WARNING: Motor not responding!");
         }

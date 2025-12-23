@@ -3,8 +3,9 @@ import MapKit
 import CoreLocation
 
 struct MapView: View {
-    @EnvironmentObject var locationManager: LocationManager
-    @EnvironmentObject var bluetooth: BluetoothManager
+    @EnvironmentObject private var locationManager: LocationManager
+    @EnvironmentObject private var bluetooth: BluetoothManager
+    
     @Binding var selectedWaypoint: Waypoint?
     @Binding var waypoints: [Waypoint]
     @Binding var navigationEnabled: Bool
@@ -12,128 +13,74 @@ struct MapView: View {
     @State private var cameraPosition: MapCameraPosition = .userLocation(fallback: .automatic)
     @State private var showingWaypointSheet = false
     @State private var showingWaypointList = false
-    @State private var showingPreview = false
     @State private var pendingCoordinate: CLLocationCoordinate2D?
     @State private var waypointName = ""
     @State private var isGeocodingName = false
-    @State private var previewWaypoint: Waypoint?
     @State private var trackPoints: [TrackPoint] = []
     @State private var showDistanceRings = true
     @State private var showTrail = true
     @State private var lastTrackUpdate = Date()
+    @State private var showingArrivalAlert = false
+    @State private var totalDistance: Double = 0
+    @State private var lastSteeringCommand: String = "None"
+    @State private var lastSpeedCommand: String = "None"
+    @State private var lastCommandTime: Date?
+    
+    // MARK: - Constants
+    
+    private enum Constants {
+        static let distanceRingRadii: [Double] = [100.0, 500.0, 1000.0]
+        static let trackUpdateIntervalSeconds: TimeInterval = 5.0
+        static let headingToleranceDegrees: Double = 15.0
+        static let trackRetentionMinutes: TimeInterval = 30 * 60
+        static let longPressMinimumDuration: Double = 0.5
+        static let trailClearLongPressDuration: Double = 3.0
+    }
 
-    private let distanceRingRadii = [100.0, 500.0, 1000.0]
-    private let trackUpdateInterval: TimeInterval = 5.0
-
+    // MARK: - Computed Properties
+    
     private var navigationBlocked: Bool {
         guard bluetooth.connectionState == .connected else { return true }
         guard let status = bluetooth.deviceStatus else { return true }
         return !status.isNavigationReady
     }
+    
+    private var isActiveNavigation: Bool {
+        guard let status = bluetooth.deviceStatus else { return false }
+        return navigationEnabled && status.hasTarget == true
+    }
+    
+    private var navigationProgress: Double {
+        guard let status = bluetooth.deviceStatus,
+              status.hasTarget == true,
+              totalDistance > 0 else { return 0 }
+        
+        let remaining = status.distance
+        let traveled = totalDistance - remaining
+        return min(max(traveled / totalDistance, 0), 1.0)
+    }
+    
+    private var compassColor: Color {
+        guard bluetooth.connectionState == .connected else { return .red }
+        guard bluetooth.deviceStatus != nil else { return .red }
+        return .green
+    }
 
+    private var navigationColor: Color {
+        if !navigationEnabled { return .red }
+        if navigationBlocked { return .orange }
+        return .green
+    }
+
+    // MARK: - Body
+    
     var body: some View {
         ZStack {
             mapContent
-
-            VStack {
-                HStack {
-                    Spacer()
-                    VStack(spacing: 12) {
-                        Button {
-                            showDistanceRings.toggle()
-                        } label: {
-                            Image(systemName: showDistanceRings ? "circle.circle.fill" : "circle.circle")
-                                .font(.title2)
-                                .foregroundColor(Color.blue)
-                        }
-                        .padding(8)
-                        .background(.ultraThinMaterial)
-                        .clipShape(Circle())
-
-                        Button {
-                            showTrail.toggle()
-                        } label: {
-                            Image(systemName: showTrail ? "point.topleft.down.curvedto.point.bottomright.up.fill" : "point.topleft.down.curvedto.point.bottomright.up")
-                                .font(.title2)
-                                .foregroundColor(Color.blue)
-                        }
-                        .padding(8)
-                        .background(.ultraThinMaterial)
-                        .clipShape(Circle())
-
-                        if !trackPoints.isEmpty {
-                            Button {
-                                clearTrail()
-                            } label: {
-                                Image(systemName: "trash")
-                                    .font(.title3)
-                                    .foregroundColor(Color.red)
-                            }
-                            .padding(8)
-                            .background(.ultraThinMaterial)
-                            .clipShape(Circle())
-                        }
-                    }
-                    .padding()  
-                }
-                .padding(.top, 80)
-
-                Spacer()
-
-                if let waypoint = selectedWaypoint {
-                    SelectedWaypointCard(
-                        waypoint: waypoint,
-                        isConfiguredInHelm: isWaypointConfiguredInHelm(waypoint),
-                        navigationEnabled: navigationEnabled,
-                        onPreview: {
-                            showPreviewForWaypoint(waypoint)
-                        },
-                        onStopNavigation: {
-                            stopNavigation()
-                        }
-                    )
-                    .padding()
-                }
-            }
+            overlayControls
         }
         .toolbar {
-            ToolbarItem(placement: .automatic) {
-                HStack(spacing: 16) {
-                    SignalStrengthIndicator(
-                        label: "BLE:",
-                        signalStrength: bluetooth.signalStrength
-                    )
-
-                    if let status = bluetooth.deviceStatus {
-                        GPSQualityIndicator(
-                            label: "GPS:",
-                            quality: status.gpsQuality
-                        )
-                    } else {
-                        GPSQualityIndicator(
-                            label: "GPS:",
-                            quality: .noFix
-                        )
-                    }
-
-                    StatusIndicator(
-                        label: "Compass:", 
-                        color: compassColor
-                        )
-                    StatusIndicator(
-                        label: "Navigation:", 
-                        color: navigationColor
-                        )
-                }
-            }
-
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showingWaypointList = true
-                } label: {
-                    Label("Waypoints", systemImage: "list.bullet")
-                }
-            }
+            toolbarContent
         }
         .overlay(alignment: .bottom) {
             if waypoints.isEmpty && selectedWaypoint == nil {
@@ -156,32 +103,46 @@ struct MapView: View {
                     waypointName = ""
                 }
             )
-            .presentationDetents([.height(250)])
+            .presentationDetents([.height(400)])
         }
         .sheet(isPresented: $showingWaypointList) {
-            WaypointListView(waypoints: $waypoints, selectedWaypoint: $selectedWaypoint, navigationEnabled: $navigationEnabled)
+            WaypointListView(
+                waypoints: $waypoints,
+                selectedWaypoint: $selectedWaypoint,
+                navigationEnabled: $navigationEnabled
+            )
         }
-        .sheet(isPresented: $showingPreview) {
-            if let waypoint = previewWaypoint,
-               let currentLocation = bluetooth.deviceStatus?.currentLocation {
-                WaypointPreviewSheet(
-                    preview: createPreview(for: waypoint, from: currentLocation),
-                    onNavigate: {
-                        showingPreview = false
-                        navigateToWaypoint(waypoint)
-                    },
-                    onCancel: {
-                        showingPreview = false
-                        previewWaypoint = nil
-                    }
-                )
+        .alert("Arrived!", isPresented: $showingArrivalAlert) {
+            Button("OK") {
+                showingArrivalAlert = false
+            }
+        } message: {
+            if let waypoint = selectedWaypoint {
+                Text("You have arrived at \(waypoint.name)")
             }
         }
         .onChange(of: bluetooth.deviceStatus?.currentLocation) { _, newLocation in
             updateTrack(newLocation)
         }
+        .onChange(of: bluetooth.deviceStatus?.distance) { oldValue, newValue in
+            checkArrival(oldDistance: oldValue, newDistance: newValue)
+        }
+        .onChange(of: navigationEnabled) { _, enabled in
+            handleNavigationToggle(enabled)
+        }
+        .onChange(of: selectedWaypoint?.id) { _, _ in
+            handleWaypointChange()
+        }
+        .onChange(of: bluetooth.deviceStatus?.relative) { _, newValue in
+            updateSteeringCommand(relative: newValue)
+        }
+        .onChange(of: bluetooth.deviceStatus?.speedLevel) { oldValue, newValue in
+            updateSpeedCommand(oldLevel: oldValue, newLevel: newValue)
+        }
     }
 
+    // MARK: - Map Content
+    
     private var mapContent: some View {
         MapReader { proxy in
             Map(position: $cameraPosition, selection: $selectedWaypoint) {
@@ -195,7 +156,7 @@ struct MapView: View {
                 }
 
                 if showDistanceRings, let currentLocation = bluetooth.deviceStatus?.currentLocation {
-                    ForEach(distanceRingRadii, id: \.self) { radius in
+                    ForEach(Constants.distanceRingRadii, id: \.self) { radius in
                         MapCircle(center: currentLocation, radius: radius)
                             .foregroundStyle(Color.blue.opacity(0.1))
                             .stroke(Color.blue.opacity(0.3), lineWidth: 1)
@@ -214,50 +175,152 @@ struct MapView: View {
                 MapScaleView()
             }
             .gesture(
-                LongPressGesture(minimumDuration: 0.5)
+                LongPressGesture(minimumDuration: Constants.longPressMinimumDuration)
                     .sequenced(before: DragGesture(minimumDistance: 0))
                     .onEnded { value in
-                        switch value {
-                        case .second(true, let drag):
-                            if let location = drag?.location,
-                               let coordinate = proxy.convert(location, from: .local) {
-                                pendingCoordinate = coordinate
-                                getLocationName(for: coordinate)
-                                showingWaypointSheet = true
-                            }
-                        default:
-                            break
-                        }
+                        handleMapLongPress(value: value, proxy: proxy)
                     }
             )
         }
     }
+    
+    // MARK: - Overlay Controls
+    
+    private var overlayControls: some View {
+        VStack {
+            HStack {
+                Spacer()
+                VStack(spacing: 12) {
+                    Button {
+                        showDistanceRings.toggle()
+                    } label: {
+                        Image(systemName: showDistanceRings ? "circle.circle.fill" : "circle.circle")
+                            .font(.title2)
+                            .foregroundColor(Color.blue)
+                    }
+                    .padding(8)
+                    .background(.ultraThinMaterial)
+                    .clipShape(Circle())
+                    .accessibilityLabel("Toggle distance rings")
 
-    // MARK: - Status Colors
+                    Button {
+                        showTrail.toggle()
+                    } label: {
+                        Image(systemName: showTrail ? "point.topleft.down.curvedto.point.bottomright.up.fill" : "point.topleft.down.curvedto.point.bottomright.up")
+                            .font(.title2)
+                            .foregroundColor(Color.blue)
+                    }
+                    .padding(8)
+                    .background(.ultraThinMaterial)
+                    .clipShape(Circle())
+                    .accessibilityLabel("Toggle trail")
+                    .simultaneousGesture(
+                        LongPressGesture(minimumDuration: Constants.trailClearLongPressDuration)
+                            .onEnded { _ in
+                                clearTrail()
+                            }
+                    )
+                }
+                .padding()
+            }
+            .padding(.top, 80)
 
-    private var compassColor: Color {
-        guard bluetooth.connectionState == .connected else { return .red }
-        guard bluetooth.deviceStatus != nil else { return .red }
-        return .green
+            Spacer()
+
+            if let waypoint = selectedWaypoint {
+                SelectedWaypointCard(
+                    waypoint: waypoint,
+                    isActiveNavigation: isActiveNavigation,
+                    navigationProgress: navigationProgress,
+                    totalDistance: totalDistance,
+                    currentLocation: bluetooth.deviceStatus?.currentLocation,
+                    deviceStatus: bluetooth.deviceStatus,
+                    lastSteeringCommand: lastSteeringCommand,
+                    lastSpeedCommand: lastSpeedCommand,
+                    lastCommandTime: lastCommandTime,
+                    onNavigate: {
+                        navigateToWaypoint(waypoint)
+                    },
+                    onStopNavigation: {
+                        stopNavigation()
+                    }
+                )
+                .padding()
+            }
+        }
+    }
+    
+    // MARK: - Toolbar
+    
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .automatic) {
+            HStack(spacing: 16) {
+                SignalStrengthIndicator(
+                    label: "BLE:",
+                    signalStrength: bluetooth.signalStrength
+                )
+
+                if let status = bluetooth.deviceStatus {
+                    GPSQualityIndicator(
+                        label: "GPS:",
+                        quality: status.gpsQuality
+                    )
+                } else {
+                    GPSQualityIndicator(
+                        label: "GPS:",
+                        quality: .noFix
+                    )
+                }
+
+                StatusIndicator(label: "Compass:", color: compassColor)
+                StatusIndicator(label: "Navigation:", color: navigationColor)
+            }
+        }
+
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                showingWaypointList = true
+            } label: {
+                Label("Waypoints", systemImage: "list.bullet")
+            }
+        }
     }
 
-    private var navigationColor: Color {
-        if !navigationEnabled { return .red }
-        if navigationBlocked { return .orange }
-        return .green
+    // MARK: - Event Handlers
+    
+    private func handleMapLongPress(value: SequenceGesture<LongPressGesture, DragGesture>.Value, proxy: MapProxy) {
+        switch value {
+        case .second(true, let drag):
+            guard let location = drag?.location,
+                  let coordinate = proxy.convert(location, from: .local) else { return }
+            pendingCoordinate = coordinate
+            getLocationName(for: coordinate)
+            showingWaypointSheet = true
+        default:
+            break
+        }
     }
-
-    // MARK: - Track Management
+    
+    private func handleNavigationToggle(_ enabled: Bool) {
+        guard enabled, let status = bluetooth.deviceStatus, status.hasTarget == true else { return }
+        totalDistance = status.distance
+    }
+    
+    private func handleWaypointChange() {
+        guard navigationEnabled, let status = bluetooth.deviceStatus, status.hasTarget == true else { return }
+        totalDistance = status.distance
+    }
 
     private func updateTrack(_ location: CLLocationCoordinate2D?) {
-        guard let location = location else { return }
-        guard Date().timeIntervalSince(lastTrackUpdate) >= trackUpdateInterval else { return }
+        guard let location else { return }
+        guard Date().timeIntervalSince(lastTrackUpdate) >= Constants.trackUpdateIntervalSeconds else { return }
 
         let point = TrackPoint(coordinate: location)
         trackPoints.append(point)
 
-        let thirtyMinutesAgo = Date().addingTimeInterval(-30 * 60)
-        trackPoints.removeAll { $0.timestamp < thirtyMinutesAgo }
+        let cutoffTime = Date().addingTimeInterval(-Constants.trackRetentionMinutes)
+        trackPoints.removeAll { $0.timestamp < cutoffTime }
 
         lastTrackUpdate = Date()
     }
@@ -265,22 +328,20 @@ struct MapView: View {
     private func clearTrail() {
         trackPoints.removeAll()
     }
-
-    // MARK: - Navigation Actions
-
-    private func isWaypointConfiguredInHelm(_ waypoint: Waypoint) -> Bool {
-        guard let status = bluetooth.deviceStatus else { return false }
-        guard let targetLat = status.targetLat, let targetLon = status.targetLon else { return false }
-
-        let latMatch = abs(waypoint.coordinate.latitude - targetLat) < 0.000001
-        let lonMatch = abs(waypoint.coordinate.longitude - targetLon) < 0.000001
-
-        return latMatch && lonMatch
-    }
-
-    private func showPreviewForWaypoint(_ waypoint: Waypoint) {
-        previewWaypoint = waypoint
-        showingPreview = true
+    
+    private func checkArrival(oldDistance: Double?, newDistance: Double?) {
+        guard let newDistance,
+              let waypoint = selectedWaypoint,
+              navigationEnabled else { return }
+        
+        guard newDistance <= waypoint.arrivalRadius else { return }
+        
+        showingArrivalAlert = true
+        navigationEnabled = false
+        bluetooth.disableNavigation()
+        
+        let generator = UINotificationFeedbackGenerator()
+        generator.notificationOccurred(.success)
     }
 
     private func navigateToWaypoint(_ waypoint: Waypoint) {
@@ -296,22 +357,6 @@ struct MapView: View {
         bluetooth.disableNavigation()
     }
 
-    private func createPreview(for waypoint: Waypoint, from currentLocation: CLLocationCoordinate2D) -> WaypointPreview {
-        let distance = currentLocation.distance(to: waypoint.coordinate)
-        let bearing = currentLocation.bearing(to: waypoint.coordinate)
-        let averageSpeed = 1.0
-        let estimatedTime = distance / averageSpeed
-
-        return WaypointPreview(
-            waypoint: waypoint,
-            distance: distance,
-            bearing: bearing,
-            estimatedTime: estimatedTime
-        )
-    }
-
-    // MARK: - Geocoding
-
     private func getLocationName(for coordinate: CLLocationCoordinate2D) {
         isGeocodingName = true
         waypointName = ""
@@ -319,34 +364,33 @@ struct MapView: View {
         let location = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
         let geocoder = CLGeocoder()
 
-        geocoder.reverseGeocodeLocation(location) { placemarks, error in
+        geocoder.reverseGeocodeLocation(location) { placemarks, _ in
             isGeocodingName = false
 
-            if let placemark = placemarks?.first {
-                var components: [String] = []
-
-                if let name = placemark.name {
-                    components.append(name)
-                } else if let thoroughfare = placemark.thoroughfare {
-                    components.append(thoroughfare)
-                }
-
-                if let locality = placemark.locality {
-                    components.append(locality)
-                } else if let subLocality = placemark.subLocality {
-                    components.append(subLocality)
-                }
-
-                if components.isEmpty {
-                    if let administrativeArea = placemark.administrativeArea {
-                        components.append(administrativeArea)
-                    }
-                }
-
-                waypointName = components.isEmpty ? "Waypoint \(waypoints.count + 1)" : components.joined(separator: ", ")
-            } else {
+            guard let placemark = placemarks?.first else {
                 waypointName = "Waypoint \(waypoints.count + 1)"
+                return
             }
+            
+            var components: [String] = []
+
+            if let name = placemark.name {
+                components.append(name)
+            } else if let thoroughfare = placemark.thoroughfare {
+                components.append(thoroughfare)
+            }
+
+            if let locality = placemark.locality {
+                components.append(locality)
+            } else if let subLocality = placemark.subLocality {
+                components.append(subLocality)
+            }
+
+            if components.isEmpty, let administrativeArea = placemark.administrativeArea {
+                components.append(administrativeArea)
+            }
+
+            waypointName = components.isEmpty ? "Waypoint \(waypoints.count + 1)" : components.joined(separator: ", ")
         }
     }
 
@@ -359,6 +403,42 @@ struct MapView: View {
         selectedWaypoint = waypoint
         showingWaypointSheet = false
         waypointName = ""
+    }
+    
+    private func updateSteeringCommand(relative: Double?) {
+        guard navigationEnabled, let relative else {
+            lastSteeringCommand = "None"
+            lastCommandTime = nil
+            return
+        }
+        
+        let absAngle = abs(relative)
+        
+        if absAngle <= Constants.headingToleranceDegrees {
+            lastSteeringCommand = "On Course"
+        } else if relative > 0 {
+            lastSteeringCommand = "RIGHT"
+        } else {
+            lastSteeringCommand = "LEFT"
+        }
+        lastCommandTime = Date()
+    }
+    
+    private func updateSpeedCommand(oldLevel: Int?, newLevel: Int?) {
+        guard navigationEnabled else {
+            lastSpeedCommand = "None"
+            return
+        }
+        
+        guard let oldLevel, let newLevel else { return }
+        
+        if newLevel > oldLevel {
+            lastSpeedCommand = "SPEED +"
+            lastCommandTime = Date()
+        } else if newLevel < oldLevel {
+            lastSpeedCommand = "SPEED -"
+            lastCommandTime = Date()
+        }
     }
 }
 
@@ -400,6 +480,8 @@ struct GPSQualityIndicator: View {
     }
 }
 
+// MARK: - Status Indicator
+
 struct StatusIndicator: View {
     let label: String
     let color: Color
@@ -430,6 +512,7 @@ struct WaypointMarker: View {
                 .foregroundColor(Color.white)
                 .font(.system(size: 16, weight: .bold))
         }
+        .accessibilityLabel(isSelected ? "Selected waypoint" : "Waypoint")
     }
 }
 
@@ -437,153 +520,214 @@ struct WaypointMarker: View {
 
 struct SelectedWaypointCard: View {
     let waypoint: Waypoint
-    let isConfiguredInHelm: Bool
-    let navigationEnabled: Bool
-    let onPreview: () -> Void
+    let isActiveNavigation: Bool
+    let navigationProgress: Double
+    let totalDistance: Double
+    let currentLocation: CLLocationCoordinate2D?
+    let deviceStatus: DeviceStatus?
+    let lastSteeringCommand: String
+    let lastSpeedCommand: String
+    let lastCommandTime: Date?
+    let onNavigate: () -> Void
     let onStopNavigation: () -> Void
+    
+    // MARK: - Computed Properties
+    
+    private var distance: Double? {
+        guard let currentLocation else { return nil }
+        return currentLocation.distance(to: waypoint.coordinate)
+    }
+    
+    private var bearing: Double? {
+        guard let currentLocation else { return nil }
+        return currentLocation.bearing(to: waypoint.coordinate)
+    }
+    
+    private var estimatedTime: TimeInterval? {
+        guard let distance else { return nil }
+        let averageSpeed = 1.0
+        return distance / averageSpeed
+    }
 
+    // MARK: - Body
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(waypoint.name)
-                        .font(.headline)
-                    Text(String(format: "%.6f, %.6f",
-                                waypoint.coordinate.latitude,
-                                waypoint.coordinate.longitude))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                if isConfiguredInHelm {
-                    HStack(spacing: 4) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(Color.green)
-                        Text("Active")
-                            .font(.caption)
-                            .foregroundColor(Color.green)
-                    }
-                }
-            }
-
-            HStack(spacing: 12) {
-                if navigationEnabled && isConfiguredInHelm {
-                    Button {
-                        onStopNavigation()
-                    } label: {
-                        HStack {
-                            Image(systemName: "stop.fill")
-                            Text("Stop Navigation")
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(Color.red)
-                } else {
-                    Button {
-                        onPreview()
-                    } label: {
-                        Image(systemName: "info.circle")
-                        Text("Preview")
-                    }
-                    .buttonStyle(.bordered)
-                }
+            headerRow
+            
+            if isActiveNavigation {
+                activeNavigationContent
+            } else {
+                inactiveNavigationContent
             }
         }
         .padding()
         .background(.regularMaterial)
         .cornerRadius(12)
     }
-}
-
-// MARK: - Waypoint Preview Sheet
-
-struct WaypointPreviewSheet: View {
-    let preview: WaypointPreview
-    let onNavigate: () -> Void
-    let onCancel: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 24) {
-                VStack(spacing: 8) {
-                    Text(preview.waypoint.name)
-                        .font(.title2.bold())
-                    Text(String(format: "%.6f, %.6f",
-                                preview.waypoint.coordinate.latitude,
-                                preview.waypoint.coordinate.longitude))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                HStack(spacing: 40) {
-                    VStack(spacing: 8) {
-                        Image(systemName: "location.fill")
-                            .font(.title)
-                            .foregroundColor(Color.blue)
-                        Text(preview.distanceString)
-                            .font(.title3.bold())
-                        Text("Distance")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-
-                    VStack(spacing: 8) {
-                        Image(systemName: "safari.fill")
-                            .font(.title)
-                            .foregroundColor(Color.green)
-                        Text("\(preview.bearingString) \(preview.cardinalDirection)")
-                            .font(.title3.bold())
-                        Text("Bearing")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-
-                    VStack(spacing: 8) {
-                        Image(systemName: "clock.fill")
-                            .font(.title)
-                            .foregroundColor(.orange)
-                        Text(preview.estimatedTimeString)
-                            .font(.title3.bold())
-                        Text("Est. Time")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .padding()
-                .background(Color.gray.opacity(0.1))
-                .cornerRadius(12)
-
-                Text("Based on 3.6 km/hr (1 m/s) cruise speed")
+    
+    // MARK: - Header
+    
+    private var headerRow: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(waypoint.name)
+                    .font(.headline)
+                Text(String(format: "%.6f, %.6f",
+                            waypoint.coordinate.latitude,
+                            waypoint.coordinate.longitude))
                     .font(.caption)
                     .foregroundColor(.secondary)
-
-                Spacer()
-
-                Button {
-                    onNavigate()
-                } label: {
-                    HStack {
-                        Image(systemName: "location.fill")
-                        Text("Navigate to Waypoint")
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                }
-                .buttonStyle(.borderedProminent)
-                .font(.headline)
             }
-            .padding()
-            .navigationTitle("Waypoint Preview")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
+
+            Spacer()
+
+            if isActiveNavigation {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(Color.green)
+                    Text("Active")
+                        .font(.caption)
+                        .foregroundColor(Color.green)
                 }
             }
         }
+    }
+    
+    // MARK: - Active Navigation Content
+    
+    private var activeNavigationContent: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text("Progress")
+                    .font(.subheadline)
+                Spacer()
+                Text("\(Int(navigationProgress * 100))%")
+                    .font(.subheadline.bold())
+            }
+            
+            ProgressView(value: navigationProgress, total: 1.0)
+                .tint(Color.blue)
+            
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Distance")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    if let status = deviceStatus {
+                        Text(formatDistance(status.distance))
+                            .font(.headline)
+                    }
+                }
+                
+                Spacer()
+                
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("Total")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(formatDistance(totalDistance))
+                        .font(.headline)
+                }
+            }
+            
+            Button {
+                onStopNavigation()
+            } label: {
+                HStack {
+                    Image(systemName: "stop.fill")
+                    Text("Stop Navigation")
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .tint(Color.red)
+        }
+    }
+    
+    // MARK: - Inactive Navigation Content
+    
+    private var inactiveNavigationContent: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 40) {
+                if let distance {
+                    VStack(spacing: 4) {
+                        Image(systemName: "location.fill")
+                            .font(.title3)
+                            .foregroundColor(Color.blue)
+                        Text(formatDistance(distance))
+                            .font(.subheadline.bold())
+                        Text("Distance")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                if let bearing {
+                    VStack(spacing: 4) {
+                        Image(systemName: "safari.fill")
+                            .font(.title3)
+                            .foregroundColor(Color.green)
+                        Text("\(Int(bearing)) deg \(cardinalDirection(for: bearing))")
+                            .font(.subheadline.bold())
+                        Text("Bearing")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                if let estimatedTime {
+                    VStack(spacing: 4) {
+                        Image(systemName: "clock.fill")
+                            .font(.title3)
+                            .foregroundColor(.orange)
+                        Text(formatEstimatedTime(estimatedTime))
+                            .font(.subheadline.bold())
+                        Text("Est. Time")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            
+            Button {
+                onNavigate()
+            } label: {
+                HStack {
+                    Image(systemName: "location.fill")
+                    Text("Navigate to Waypoint")
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+    
+    // MARK: - Helpers
+    
+    private func formatDistance(_ meters: Double) -> String {
+        if meters >= 1000 {
+            return String(format: "%.2f km", meters / 1000)
+        }
+        return String(format: "%.0f m", meters)
+    }
+    
+    private func formatEstimatedTime(_ seconds: TimeInterval) -> String {
+        let minutes = Int(seconds / 60)
+        if minutes < 60 {
+            return "\(minutes) min"
+        }
+        let hours = minutes / 60
+        let remainingMinutes = minutes % 60
+        return "\(hours)h \(remainingMinutes)m"
+    }
+    
+    private func cardinalDirection(for bearing: Double) -> String {
+        let directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+        let index = Int((bearing + 22.5) / 45.0) % 8
+        return directions[index]
     }
 }
 

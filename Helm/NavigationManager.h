@@ -8,9 +8,11 @@ class NavigationManager {
 public:
     NavigationManager();
 
-    // Existing methods
+    // Target management
     void setTarget(float latitude, float longitude);
     void clearTarget();
+    
+    // Navigation control
     void update(const GpsData& gpsData, float heading);
     void setEnabled(bool enabled);
     bool isEnabled() const;
@@ -19,8 +21,12 @@ public:
     NavigationState getState() const;
     NavigationData getNavigationData() const;
     Waypoint getTarget() const;
+    
+    // Correction
     HeadingCorrection getRequiredCorrection();
     bool needsCorrection() const;
+    
+    // Safety
     bool canEnableNavigation(const GpsData& gpsData) const;
     void checkSafetyConditions(const GpsData& gpsData);
     const char* getDisableReason() const;
@@ -61,9 +67,10 @@ private:
     const char* _disableReason;
 
     void calculateNavigation(const GpsData& gpsData, float heading);
-    bool checkArrival();
+    bool checkArrival() const;
     bool isCorrectionIntervalElapsed() const;
     void disableWithReason(const char* reason);
+    void resetMotorDetection();
 
     // Path navigation
     Path* _activePath;

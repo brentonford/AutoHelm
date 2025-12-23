@@ -52,18 +52,15 @@ struct WaypointListView: View {
                         isSelected: selectedWaypoint?.id == waypoint.id,
                         onSelect: {
                             selectedWaypoint = waypoint
+                            dismiss()
                         },
                         onEdit: {
                             editingWaypoint = waypoint
                             showingEditSheet = true
                         },
-                        onNavigate: {
-                            navigateToWaypoint(waypoint)
-                        },
                         onDelete: {
                             deleteWaypoint(waypoint)
-                        },
-                        navigationEnabled: $navigationEnabled
+                        }
                     )
                 }
             }
@@ -138,15 +135,6 @@ struct WaypointListView: View {
         }
     }
 
-    private func navigateToWaypoint(_ waypoint: Waypoint) {
-        guard bluetooth.connectionState == .connected else { return }
-        selectedWaypoint = waypoint
-        bluetooth.sendWaypoint(waypoint)
-        navigationEnabled = true
-        bluetooth.enableNavigation()
-        dismiss()
-    }
-
     private func deleteWaypoint(_ waypoint: Waypoint) {
         waypoints.removeAll { $0.id == waypoint.id }
         if selectedWaypoint?.id == waypoint.id {
@@ -160,21 +148,7 @@ struct WaypointRow: View {
     let isSelected: Bool
     let onSelect: () -> Void
     let onEdit: () -> Void
-    let onNavigate: () -> Void
     let onDelete: () -> Void
-    
-    @EnvironmentObject var bluetooth: BluetoothManager
-    @Binding var navigationEnabled: Bool
-
-    var isActiveNavigation: Bool {
-        guard let status = bluetooth.deviceStatus else { return false }
-        guard let targetLat = status.targetLat, let targetLon = status.targetLon else { return false }
-        
-        let latMatch = abs(waypoint.coordinate.latitude - targetLat) < 0.000001
-        let lonMatch = abs(waypoint.coordinate.longitude - targetLon) < 0.000001
-        
-        return latMatch && lonMatch && navigationEnabled
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -220,31 +194,11 @@ struct WaypointRow: View {
 
                 Spacer()
 
-                HStack(spacing: 12) {
-                    Button(action: onEdit) {
-                        Image(systemName: "pencil")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.bordered)
-
-                    if isActiveNavigation {
-                        Button(action: {
-                            navigationEnabled = false
-                            bluetooth.disableNavigation()
-                        }) {
-                            Label("Stop", systemImage: "stop.fill")
-                                .font(.caption)
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(Color.red)
-                    } else {
-                        Button(action: onNavigate) {
-                            Label("Navigate", systemImage: "location.fill")
-                                .font(.caption)
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
+                Button(action: onEdit) {
+                    Image(systemName: "pencil")
+                        .font(.caption)
                 }
+                .buttonStyle(.bordered)
             }
         }
         .contentShape(Rectangle())

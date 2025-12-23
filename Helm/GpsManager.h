@@ -6,7 +6,9 @@
 
 namespace GpsConfig {
     constexpr uint16_t bufferSize = 128;
+    constexpr uint16_t fieldBufferSize = 20;
     constexpr uint32_t staleThresholdMs = 2000;
+    constexpr uint32_t debugPrintIntervalMs = 5000;
 }
 
 class GpsManager {
@@ -31,14 +33,17 @@ private:
     bool _initialized;
     uint32_t _lastReceiveTime;
     bool _firstFixReceived;
+    uint32_t _lastDebugTime;
+    uint16_t _charCount;
 
     void processBuffer();
     void parseGga(const char* sentence);
     void parseGsa(const char* sentence);
     void parseRmc(const char* sentence);
-    bool validateChecksum(const char* sentence);
-    float parseCoordinate(const char* coord, const char* direction);
-    const char* getField(const char* sentence, uint8_t fieldIndex);
-    float parseFloat(const char* str);
-    int parseInt(const char* str);
+    bool validateChecksum(const char* sentence) const;
+    float parseCoordinate(const char* coord, char direction) const;
+    bool extractField(const char* sentence, uint8_t fieldIndex, char* outBuffer, size_t bufferSize) const;
+    float parseFloat(const char* str) const;
+    int parseInt(const char* str) const;
+    void printDebugStatus();
 };
