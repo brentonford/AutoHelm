@@ -584,11 +584,18 @@ struct SelectedWaypointCard: View {
 
             if isActiveNavigation {
                 HStack(spacing: 4) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(Color.green)
-                    Text("Active")
-                        .font(.caption)
-                        .foregroundColor(Color.green)
+                    if let estimatedTime {
+                        VStack(spacing: 4) {
+                            Image(systemName: "clock.fill")
+                                .font(.title3)
+                                .foregroundColor(Color.green)
+                            Text(formatEstimatedTime(estimatedTime))
+                                .font(.subheadline.bold())
+                            Text("Est. Time")
+                                .font(.caption)
+                                .foregroundColor(Color.green)
+                        }
+                    }
                 }
             }
         }
