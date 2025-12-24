@@ -1,17 +1,17 @@
 import Foundation
 import CoreBluetooth
+import CoreLocation
 import Combine
 
 private enum BleUuids {
     nonisolated(unsafe) static let service = CBUUID(string: "FFE0")
-    nonisolated(unsafe) static let waypoint = CBUUID(string: "FFE1")
-    nonisolated(unsafe) static let status = CBUUID(string: "FFE2")
+    nonisolated(unsafe) static let sensorStatus = CBUUID(string: "FFE2")
     nonisolated(unsafe) static let command = CBUUID(string: "FFE3")
     nonisolated(unsafe) static let calibration = CBUUID(string: "FFE4")
 }
 
 private enum BleConstants {
-    nonisolated(unsafe) static let deviceName = "Helm"
+    static let deviceName = "Helm"
     static let reconnectDelaySeconds: TimeInterval = 3.0
     static let rssiUpdateIntervalSeconds: TimeInterval = 2.0
 }
@@ -20,16 +20,17 @@ private enum BleConstants {
 class BluetoothManager: NSObject, ObservableObject {
 
     @Published private(set) var connectionState: ConnectionState = .disconnected
-    @Published private(set) var deviceStatus: DeviceStatus?
+    @Published private(set) var sensorData: SensorData?
     @Published private(set) var lastResponse: BleResponse?
     @Published private(set) var lastError: String?
     @Published private(set) var rssi: Int = -100
     @Published private(set) var signalStrength: BLESignalStrength = .disconnected
+    @Published private(set) var calibrationData: CalibrationData?
+    @Published private(set) var isCalibrating: Bool = false
 
     private var centralManager: CBCentralManager?
     private var peripheral: CBPeripheral?
-    private var waypointChar: CBCharacteristic?
-    private var statusChar: CBCharacteristic?
+    private var sensorStatusChar: CBCharacteristic?
     private var commandChar: CBCharacteristic?
     private var calibrationChar: CBCharacteristic?
 
@@ -74,31 +75,13 @@ class BluetoothManager: NSObject, ObservableObject {
         }
     }
 
-    func sendWaypoint(_ waypoint: Waypoint) {
-        guard let data = waypoint.toGpsString().data(using: .utf8) else { return }
-        writeToCharacteristic(waypointChar, data: data)
-    }
-
     func sendCommand(_ command: String) {
         guard let data = command.data(using: .utf8) else { return }
         writeToCharacteristic(commandChar, data: data)
     }
 
-    func sendRawData(_ data: String) {
-        guard let dataBytes = data.data(using: .utf8) else { return }
-        writeToCharacteristic(waypointChar, data: dataBytes)
-    }
-
-    func enableNavigation() {
-        sendCommand("NAV_ENABLE")
-    }
-
-    func disableNavigation() {
-        sendCommand("NAV_DISABLE")
-    }
-
-    func enableManualMode() {
-        sendCommand("MANUAL_MODE")
+    func sendMotorCommand(_ command: String) {
+        sendCommand(command)
     }
 
     func startCalibration() {
@@ -109,48 +92,9 @@ class BluetoothManager: NSObject, ObservableObject {
         sendCommand("STOP_CAL")
     }
 
-    func engageSpotLock() {
-        sendCommand("SPOT_LOCK")
-    }
-
-    func disengageSpotLock() {
-        sendCommand("SPOT_RELEASE")
-    }
-
-    func jogSpotLock(direction: JogDirection) {
-        let command: String
-        switch direction {
-        case .forward:
-            command = "JOG_FWD"
-        case .back:
-            command = "JOG_BACK"
-        case .left:
-            command = "JOG_LEFT"
-        case .right:
-            command = "JOG_RIGHT"
-        }
+    func sendCalibrationValues(_ calibration: CompassCalibration) {
+        let command = calibration.toCommandString()
         sendCommand(command)
-    }
-
-    func startPath() {
-        sendCommand("PATH_START")
-    }
-
-    func stopPath() {
-        sendCommand("PATH_STOP")
-    }
-
-    func sendPath(_ path: Path) {
-        let pathStr = "$PATH,\(path.name),\(path.defaultSpeed),\(path.loop ? 1 : 0)*"
-        sendRawData(pathStr)
-
-        for wp in path.waypoints {
-            sendWaypoint(wp)
-        }
-    }
-
-    func setSpeed(_ kmh: Double) {
-        sendCommand("SPEED:\(String(format: "%.1f", kmh))")
     }
 
     private func writeToCharacteristic(_ characteristic: CBCharacteristic?, data: Data) {
@@ -188,23 +132,22 @@ class BluetoothManager: NSObject, ObservableObject {
     }
 
     private func clearCharacteristics() {
-        waypointChar = nil
-        statusChar = nil
+        sensorStatusChar = nil
         commandChar = nil
         calibrationChar = nil
     }
     
     private func clearDeviceData() {
-        deviceStatus = nil
+        sensorData = nil
         lastResponse = nil
     }
     
-    private func parseStatus(_ data: Data) {
+    private func parseSensorStatus(_ data: Data) {
         do {
-            let status = try JSONDecoder().decode(DeviceStatus.self, from: data)
-            self.deviceStatus = status
+            let status = try JSONDecoder().decode(SensorData.self, from: data)
+            self.sensorData = status
         } catch {
-            print("Status parse error: \(error)")
+            print("Sensor status parse error: \(error)")
         }
     }
 
@@ -306,8 +249,7 @@ extension BluetoothManager: CBPeripheralDelegate {
         guard let service = peripheral.services?.first(where: { $0.uuid == BleUuids.service }) else { return }
 
         peripheral.discoverCharacteristics([
-            BleUuids.waypoint,
-            BleUuids.status,
+            BleUuids.sensorStatus,
             BleUuids.command,
             BleUuids.calibration
         ], for: service)
@@ -323,10 +265,8 @@ extension BluetoothManager: CBPeripheralDelegate {
         Task { @MainActor in
             for char in characteristics {
                 switch char.uuid {
-                case BleUuids.waypoint:
-                    waypointChar = char
-                case BleUuids.status:
-                    statusChar = char
+                case BleUuids.sensorStatus:
+                    sensorStatusChar = char
                     peripheral.setNotifyValue(true, for: char)
                 case BleUuids.command:
                     commandChar = char
@@ -349,8 +289,8 @@ extension BluetoothManager: CBPeripheralDelegate {
 
         Task { @MainActor in
             switch characteristic.uuid {
-            case BleUuids.status:
-                parseStatus(data)
+            case BleUuids.sensorStatus:
+                parseSensorStatus(data)
             case BleUuids.calibration:
                 parseResponse(data)
             default:
@@ -365,5 +305,42 @@ extension BluetoothManager: CBPeripheralDelegate {
             rssi = RSSI.intValue
             signalStrength = BLESignalStrength.from(rssi: RSSI.intValue)
         }
+    }
+}
+
+struct SensorData: Codable, Equatable {
+    let hasFix: Bool
+    let satellites: Int
+    let currentLat: Double
+    let currentLon: Double
+    let altitude: Double
+    let hdop: Double
+    let heading: Double
+
+    var currentLocation: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: currentLat, longitude: currentLon)
+    }
+
+    var isNavigationReady: Bool {
+        hasFix && satellites >= 4 && hdop < 5.0
+    }
+
+    var gpsQuality: GPSQuality {
+        if !hasFix { return .noFix }
+        if satellites < 4 { return .poor }
+        if hdop >= 5.0 { return .poor }
+        if hdop >= 2.0 { return .fair }
+        if hdop >= 1.0 { return .good }
+        return .excellent
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case hasFix = "has_fix"
+        case satellites
+        case currentLat
+        case currentLon
+        case altitude
+        case hdop
+        case heading
     }
 }

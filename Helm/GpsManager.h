@@ -22,6 +22,9 @@ public:
     bool hasValidFix() const;
     bool hasSufficientSatellites() const;
     bool hasAcceptableDop() const;
+    
+    void setDebugEnabled(bool enabled);
+    bool isDebugEnabled() const;
 
 private:
     uint8_t _rxPin;
@@ -35,6 +38,7 @@ private:
     bool _firstFixReceived;
     uint32_t _lastDebugTime;
     uint16_t _charCount;
+    bool _debugEnabled;
 
     void processBuffer();
     void parseGga(const char* sentence);

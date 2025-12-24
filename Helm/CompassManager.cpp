@@ -3,7 +3,13 @@
 CompassManager::CompassManager(uint8_t sdaPin, uint8_t sclPin)
     : _sdaPin(sdaPin)
     , _sclPin(sclPin)
-    , _initialized(false) {
+    , _initialized(false)
+    , _calibrating(false)
+    , _lastCalibrationStreamTime(0)
+    , _calMinX(9999.0f), _calMaxX(-9999.0f)
+    , _calMinY(9999.0f), _calMaxY(-9999.0f)
+    , _calMinZ(9999.0f), _calMaxZ(-9999.0f)
+    , _calSampleCount(0) {
 }
 
 bool CompassManager::begin() {
@@ -36,6 +42,22 @@ float CompassManager::normalizeHeading(float heading) {
     return heading;
 }
 
+RawMagData CompassManager::readRaw() {
+    RawMagData data = {0.0f, 0.0f, 0.0f};
+    
+    if (!_initialized)
+        return data;
+
+    sensors_event_t event;
+    _mmc.getEvent(&event);
+
+    data.x = event.magnetic.x;
+    data.y = event.magnetic.y;
+    data.z = event.magnetic.z;
+
+    return data;
+}
+
 float CompassManager::readHeading() {
     if (!_initialized)
         return 0.0f;
@@ -59,6 +81,10 @@ float CompassManager::readHeading() {
     float y = sumY / CompassConfig::sampleCount;
     float z = sumZ / CompassConfig::sampleCount;
 
+    if (_calibrating) {
+        updateCalibrationMinMax(x, y, z);
+    }
+
     applyCalibration(x, y, z);
 
     float heading = atan2(y, x) * 180.0f / PI;
@@ -67,8 +93,107 @@ float CompassManager::readHeading() {
 
 void CompassManager::setCalibration(const CompassCalibration& cal) {
     _calibration = cal;
+    Serial.printf("[Compass] Calibration set - Offsets: %.2f, %.2f, %.2f  Scales: %.3f, %.3f, %.3f\n",
+        cal.offsetX, cal.offsetY, cal.offsetZ,
+        cal.scaleX, cal.scaleY, cal.scaleZ);
 }
 
 CompassCalibration CompassManager::getCalibration() const {
     return _calibration;
+}
+
+void CompassManager::startCalibration() {
+    _calibrating = true;
+    _calMinX = 9999.0f;
+    _calMaxX = -9999.0f;
+    _calMinY = 9999.0f;
+    _calMaxY = -9999.0f;
+    _calMinZ = 9999.0f;
+    _calMaxZ = -9999.0f;
+    _calSampleCount = 0;
+    _lastCalibrationStreamTime = 0;
+    Serial.println("[Compass] Calibration started - rotate device slowly");
+}
+
+void CompassManager::stopCalibration() {
+    _calibrating = false;
+    
+    if (_calSampleCount < 10) {
+        Serial.println("[Compass] Calibration stopped - insufficient samples");
+        return;
+    }
+    
+    float offsetX = (_calMaxX + _calMinX) / 2.0f;
+    float offsetY = (_calMaxY + _calMinY) / 2.0f;
+    float offsetZ = (_calMaxZ + _calMinZ) / 2.0f;
+    
+    float avgDeltaX = (_calMaxX - _calMinX) / 2.0f;
+    float avgDeltaY = (_calMaxY - _calMinY) / 2.0f;
+    float avgDeltaZ = (_calMaxZ - _calMinZ) / 2.0f;
+    
+    float avgDelta = (avgDeltaX + avgDeltaY + avgDeltaZ) / 3.0f;
+    
+    float scaleX = (avgDeltaX != 0.0f) ? avgDelta / avgDeltaX : 1.0f;
+    float scaleY = (avgDeltaY != 0.0f) ? avgDelta / avgDeltaY : 1.0f;
+    float scaleZ = (avgDeltaZ != 0.0f) ? avgDelta / avgDeltaZ : 1.0f;
+    
+    _calibration.offsetX = offsetX;
+    _calibration.offsetY = offsetY;
+    _calibration.offsetZ = offsetZ;
+    _calibration.scaleX = scaleX;
+    _calibration.scaleY = scaleY;
+    _calibration.scaleZ = scaleZ;
+    
+    Serial.printf("[Compass] Calibration complete - %d samples\n", _calSampleCount);
+    Serial.printf("[Compass] Min: %.2f, %.2f, %.2f  Max: %.2f, %.2f, %.2f\n",
+        _calMinX, _calMinY, _calMinZ, _calMaxX, _calMaxY, _calMaxZ);
+    Serial.printf("[Compass] Offsets: %.2f, %.2f, %.2f  Scales: %.3f, %.3f, %.3f\n",
+        offsetX, offsetY, offsetZ, scaleX, scaleY, scaleZ);
+}
+
+bool CompassManager::isCalibrating() const {
+    return _calibrating;
+}
+
+bool CompassManager::shouldStreamCalibrationData() const {
+    if (!_calibrating)
+        return false;
+    return (millis() - _lastCalibrationStreamTime) >= CompassConfig::calibrationStreamIntervalMs;
+}
+
+void CompassManager::markCalibrationDataSent() {
+    _lastCalibrationStreamTime = millis();
+}
+
+void CompassManager::updateCalibrationMinMax(float x, float y, float z) {
+    if (x < _calMinX) _calMinX = x;
+    if (x > _calMaxX) _calMaxX = x;
+    if (y < _calMinY) _calMinY = y;
+    if (y > _calMaxY) _calMaxY = y;
+    if (z < _calMinZ) _calMinZ = z;
+    if (z > _calMaxZ) _calMaxZ = z;
+    _calSampleCount++;
+}
+
+String CompassManager::getCalibrationJson() const {
+    String json = "{\"cal\":true,";
+    json += "\"samples\":" + String(_calSampleCount) + ",";
+    json += "\"minX\":" + String(_calMinX, 2) + ",";
+    json += "\"maxX\":" + String(_calMaxX, 2) + ",";
+    json += "\"minY\":" + String(_calMinY, 2) + ",";
+    json += "\"maxY\":" + String(_calMaxY, 2) + ",";
+    json += "\"minZ\":" + String(_calMinZ, 2) + ",";
+    json += "\"maxZ\":" + String(_calMaxZ, 2);
+    
+    RawMagData raw;
+    raw.x = (_calSampleCount > 0) ? (_calMaxX + _calMinX) / 2.0f : 0.0f;
+    raw.y = (_calSampleCount > 0) ? (_calMaxY + _calMinY) / 2.0f : 0.0f;
+    raw.z = (_calSampleCount > 0) ? (_calMaxZ + _calMinZ) / 2.0f : 0.0f;
+    
+    json += ",\"rawX\":" + String(raw.x, 2);
+    json += ",\"rawY\":" + String(raw.y, 2);
+    json += ",\"rawZ\":" + String(raw.z, 2);
+    json += "}";
+    
+    return json;
 }

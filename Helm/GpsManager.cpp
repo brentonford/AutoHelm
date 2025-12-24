@@ -9,7 +9,8 @@ GpsManager::GpsManager(uint8_t rxPin, uint8_t txPin)
     , _lastReceiveTime(0)
     , _firstFixReceived(false)
     , _lastDebugTime(0)
-    , _charCount(0) {
+    , _charCount(0)
+    , _debugEnabled(false) {
 }
 
 bool GpsManager::begin() {
@@ -17,8 +18,16 @@ bool GpsManager::begin() {
     _initialized = true;
     _lastReceiveTime = millis();
     Serial.println("[GPS] Initialized on UART2");
-    Serial.println("[GPS] Waiting for GPS data...");
     return true;
+}
+
+void GpsManager::setDebugEnabled(bool enabled) {
+    _debugEnabled = enabled;
+    Serial.printf("[GPS] Debug output %s\n", enabled ? "ENABLED" : "DISABLED");
+}
+
+bool GpsManager::isDebugEnabled() const {
+    return _debugEnabled;
 }
 
 void GpsManager::update() {
@@ -47,7 +56,9 @@ void GpsManager::update() {
         }
     }
 
-    printDebugStatus();
+    if (_debugEnabled) {
+        printDebugStatus();
+    }
 }
 
 void GpsManager::printDebugStatus() {
@@ -243,12 +254,14 @@ void GpsManager::parseGsa(const char* sentence) {
 }
 
 void GpsManager::parseRmc(const char* sentence) {
-    static uint32_t lastPrintTime = 0;
-    uint32_t now = millis();
+    if (_debugEnabled) {
+        static uint32_t lastPrintTime = 0;
+        uint32_t now = millis();
 
-    if ((now - lastPrintTime) > GpsConfig::debugPrintIntervalMs) {
-        Serial.printf("[GPS] RMC: %s\n", sentence);
-        lastPrintTime = now;
+        if ((now - lastPrintTime) > GpsConfig::debugPrintIntervalMs) {
+            Serial.printf("[GPS] RMC: %s\n", sentence);
+            lastPrintTime = now;
+        }
     }
 
     char status[4];
@@ -267,12 +280,16 @@ void GpsManager::parseRmc(const char* sentence) {
     extractField(sentence, 5, lonStr, sizeof(lonStr));
     extractField(sentence, 6, lonDir, sizeof(lonDir));
 
-    Serial.printf("[GPS] Fields - Lat: '%s' '%s', Lon: '%s' '%s'\n", latStr, latDir, lonStr, lonDir);
+    if (_debugEnabled) {
+        Serial.printf("[GPS] Fields - Lat: '%s' '%s', Lon: '%s' '%s'\n", latStr, latDir, lonStr, lonDir);
+    }
 
     float lat = parseCoordinate(latStr, latDir[0]);
     float lon = parseCoordinate(lonStr, lonDir[0]);
 
-    Serial.printf("[GPS] Parsed - Lat: %.6f, Lon: %.6f\n", lat, lon);
+    if (_debugEnabled) {
+        Serial.printf("[GPS] Parsed - Lat: %.6f, Lon: %.6f\n", lat, lon);
+    }
 
     if (lat == 0.0f || lon == 0.0f)
         return;

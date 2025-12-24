@@ -26,7 +26,11 @@ NavigationManager::NavigationManager()
     , _speedNoResponseCount(0)
     , _lastSteeringCmd(MotorCommand::None)
     , _lastSpeedCmd(MotorCommand::None)
-    , _lastCmdTimestamp(0) {
+    , _lastCmdTimestamp(0)
+    , _lastSpeedCalcTime(0)
+    , _lastSpeedCalcLat(0.0)
+    , _lastSpeedCalcLon(0.0)
+    , _currentSpeedMs(0.0f) {
 }
 
 void NavigationManager::setTarget(float latitude, float longitude) {
@@ -40,9 +44,13 @@ void NavigationManager::clearTarget() {
     _enabled = false;
     _lastCorrectionTime = 0;
     _disableReason = nullptr;
+    _speedState.targetLevel = 0;
     _isAccelerating = false;
-    _isDecelerating = false;
-    Serial.println("[Nav] Target cleared");
+    _isDecelerating = true;
+    _lastSpeedChangeTime = 0;
+    _lastSpeedCmd = MotorCommand::SpeedDown;
+    _lastCmdTimestamp = millis();
+    Serial.println("[Nav] Target cleared - Decelerating to stop");
 }
 
 bool NavigationManager::canEnableNavigation(const GpsData& gpsData) const {
@@ -61,9 +69,13 @@ void NavigationManager::disableWithReason(const char* reason) {
     _enabled = false;
     _state = NavigationState::Idle;
     _disableReason = reason;
+    _speedState.targetLevel = 0;
     _isAccelerating = false;
-    _isDecelerating = false;
-    Serial.printf("[Nav] DISABLED: %s\n", reason);
+    _isDecelerating = true;
+    _lastSpeedChangeTime = 0;
+    _lastSpeedCmd = MotorCommand::SpeedDown;
+    _lastCmdTimestamp = millis();
+    Serial.printf("[Nav] DISABLED: %s - Decelerating to stop\n", reason);
 }
 
 void NavigationManager::emergencyStop() {
@@ -74,7 +86,7 @@ void NavigationManager::emergencyStop() {
     _speedState.targetLevel = 0;
     _isAccelerating = false;
     _isDecelerating = true;
-    _lastSpeedChangeTime = 0;  // Force immediate speed change
+    _lastSpeedChangeTime = 0;
 }
 
 void NavigationManager::checkSafetyConditions(const GpsData& gpsData) {
@@ -117,15 +129,18 @@ void NavigationManager::setEnabled(bool enabled) {
         _accelerationStartTime = millis();
         _isAccelerating = true;
         _isDecelerating = false;
-        _lastSpeedChangeTime = millis();  // Start acceleration timer
+        _lastSpeedChangeTime = millis();
         resetMotorDetection();
         Serial.println("[Nav] Navigation ENABLED - Beginning gradual acceleration");
     } else {
         _state = NavigationState::Idle;
+        _speedState.targetLevel = 0;
         _isAccelerating = false;
-        _isDecelerating = false;
-        resetMotorDetection();
-        Serial.println("[Nav] Navigation DISABLED");
+        _isDecelerating = true;
+        _lastSpeedChangeTime = 0;
+        _lastSpeedCmd = MotorCommand::SpeedDown;
+        _lastCmdTimestamp = millis();
+        Serial.println("[Nav] Navigation DISABLED - Decelerating to stop");
     }
 }
 
@@ -145,6 +160,7 @@ void NavigationManager::update(const GpsData& gpsData, float heading) {
         return;
 
     updateMotorDetection(gpsData, heading);
+    updateGpsSpeed(gpsData);
 
     switch (_state) {
         case NavigationState::PathFollowing:
@@ -178,6 +194,48 @@ void NavigationManager::update(const GpsData& gpsData, float heading) {
         case NavigationState::Arrived:
             break;
     }
+}
+
+void NavigationManager::updateGpsSpeed(const GpsData& gpsData) {
+    if (!gpsData.hasFix) {
+        _currentSpeedMs = 0.0f;
+        return;
+    }
+
+    uint32_t now = millis();
+    
+    if (_lastSpeedCalcTime == 0) {
+        _lastSpeedCalcTime = now;
+        _lastSpeedCalcLat = gpsData.latitude;
+        _lastSpeedCalcLon = gpsData.longitude;
+        _currentSpeedMs = 0.0f;
+        return;
+    }
+
+    uint32_t timeDiff = now - _lastSpeedCalcTime;
+    if (timeDiff < speedCalcIntervalMs) {
+        return;
+    }
+
+    float distance = NavigationUtils::calculateDistance(
+        _lastSpeedCalcLat, _lastSpeedCalcLon,
+        gpsData.latitude, gpsData.longitude
+    );
+
+    float timeSeconds = timeDiff / 1000.0f;
+    _currentSpeedMs = distance / timeSeconds;
+
+    _lastSpeedCalcTime = now;
+    _lastSpeedCalcLat = gpsData.latitude;
+    _lastSpeedCalcLon = gpsData.longitude;
+}
+
+float NavigationManager::getCurrentSpeedMs() const {
+    return _currentSpeedMs;
+}
+
+float NavigationManager::getCurrentSpeedKmh() const {
+    return _currentSpeedMs * 3.6f;
 }
 
 void NavigationManager::calculateNavigation(const GpsData& gpsData, float heading) {
@@ -277,8 +335,6 @@ Waypoint NavigationManager::getTarget() const {
     return _target;
 }
 
-// Path Navigation
-
 void NavigationManager::setPath(Path* path) {
     _activePath = path;
     _currentWaypointIndex = 0;
@@ -319,8 +375,12 @@ void NavigationManager::stopPath() {
     _enabled = false;
     _activePath = nullptr;
     _speedState.targetLevel = 0;
+    _isAccelerating = false;
     _isDecelerating = true;
-    Serial.println("[Nav] Path stopped");
+    _lastSpeedChangeTime = 0;
+    _lastSpeedCmd = MotorCommand::SpeedDown;
+    _lastCmdTimestamp = millis();
+    Serial.println("[Nav] Path stopped - Decelerating to stop");
 }
 
 void NavigationManager::advanceToNextWaypoint() {
@@ -379,8 +439,6 @@ Path* NavigationManager::getActivePath() const {
     return _activePath;
 }
 
-// Spot Lock
-
 void NavigationManager::engageSpotLock() {
     if (_target.isSet) {
         engageSpotLock(_target.latitude, _target.longitude);
@@ -402,8 +460,12 @@ void NavigationManager::disengageSpotLock() {
     _state = NavigationState::Idle;
     _enabled = false;
     _speedState.targetLevel = 0;
+    _isAccelerating = false;
     _isDecelerating = true;
-    Serial.println("[Nav] Spot Lock disengaged");
+    _lastSpeedChangeTime = 0;
+    _lastSpeedCmd = MotorCommand::SpeedDown;
+    _lastCmdTimestamp = millis();
+    Serial.println("[Nav] Spot Lock disengaged - Decelerating to stop");
 }
 
 bool NavigationManager::isSpotLockActive() const {
@@ -416,15 +478,15 @@ void NavigationManager::jogSpotLock(float currentHeading, int8_t direction) {
 
     float jogHeading = currentHeading;
     switch (direction) {
-        case 2:  // Forward
+        case 2:
             break;
-        case 0:  // Back
+        case 0:
             jogHeading += 180.0f;
             break;
-        case -1: // Left
+        case -1:
             jogHeading -= 90.0f;
             break;
-        case 1:  // Right
+        case 1:
             jogHeading += 90.0f;
             break;
     }
@@ -473,8 +535,6 @@ void NavigationManager::updateSpotLock(const GpsData& gpsData, float heading) {
 
     _lastSpotLockCorrection = now;
 }
-
-// Speed Control - Gradual Acceleration
 
 void NavigationManager::setTargetSpeed(float speedMs) {
     uint8_t bestLevel = 0;
@@ -532,26 +592,21 @@ int8_t NavigationManager::getSpeedAdjustment() {
     uint32_t now = millis();
     uint32_t requiredInterval;
     
-    // Determine interval based on acceleration/deceleration state
     if (diff > 0) {
-        // Accelerating - use slower intervals
         _isAccelerating = true;
         _isDecelerating = false;
         
-        // Initial delay before first speed increase
         if (_speedState.currentLevel == 0) {
             uint32_t timeSinceStart = now - _accelerationStartTime;
             if (timeSinceStart < initialAccelDelayMs) {
-                return 0;  // Wait before starting
+                return 0;
             }
         }
         requiredInterval = accelIntervalMs;
     } else {
-        // Decelerating
         _isAccelerating = false;
         _isDecelerating = true;
         
-        // Use faster decel for emergency stop
         if (_disableReason != nullptr && strcmp(_disableReason, "Emergency stop") == 0) {
             requiredInterval = emergencyDecelMs;
         } else {
@@ -594,8 +649,6 @@ bool NavigationManager::isDecelerating() const {
     return _isDecelerating;
 }
 
-// Motor Response Detection
-
 void NavigationManager::recordMotorCommand(HeadingCorrection cmd) {
     _lastMotorCommand = cmd;
     _lastCommandTime = millis();
@@ -607,28 +660,11 @@ void NavigationManager::recordSpeedCommand(int8_t direction) {
 }
 
 void NavigationManager::updateMotorDetection(const GpsData& gpsData, float heading) {
-    // Calculate speed from GPS position changes
-    float currentSpeed = 0.0f;
-    if (_sampleIndex > 0) {
-        uint8_t prevIdx = (_sampleIndex - 1 + sampleHistorySize) % sampleHistorySize;
-        MotorSample& prev = _sampleHistory[prevIdx];
-        
-        if (prev.timestamp > 0) {
-            float dist = NavigationUtils::calculateDistance(
-                prev.lat, prev.lon, gpsData.latitude, gpsData.longitude);
-            float timeDiff = (millis() - prev.timestamp) / 1000.0f;
-            if (timeDiff > 0) {
-                currentSpeed = dist / timeDiff;
-            }
-        }
-    }
-    
     _sampleHistory[_sampleIndex] = {
-        gpsData.latitude, gpsData.longitude, heading, currentSpeed, millis()
+        gpsData.latitude, gpsData.longitude, heading, _currentSpeedMs, millis()
     };
     _sampleIndex = (_sampleIndex + 1) % sampleHistorySize;
 
-    // Check steering response
     constexpr uint32_t minResponseTimeMs = 500;
     uint32_t timeSinceCommand = millis() - _lastCommandTime;
     
@@ -677,41 +713,40 @@ void NavigationManager::updateMotorDetection(const GpsData& gpsData, float headi
         }
     }
 
-    // Check speed response
-    uint32_t timeSinceSpeedCmd = millis() - _lastSpeedCommandTime;
-    if (timeSinceSpeedCmd >= 1000 && _lastSpeedDirection != 0) {
-        // Compare speed over time
-        if (_sampleIndex >= 2) {
-            float speedChange = currentSpeed - _lastSpeed;
+    if (_lastSpeedCommandTime > 0 && _lastSpeedDirection != 0) {
+        uint32_t timeSinceSpeedCmd = millis() - _lastSpeedCommandTime;
+        if (timeSinceSpeedCmd >= 1000 && _sampleIndex >= 2) {
+            float speedChange = _currentSpeedMs - _lastSpeed;
             bool speedResponding = false;
             
             if (_lastSpeedDirection > 0) {
-                // Expected speed increase
-                speedResponding = (speedChange > 0.05f);  // At least 0.05 m/s increase
+                speedResponding = (speedChange > 0.05f);
             } else {
-                // Expected speed decrease
                 speedResponding = (speedChange < -0.05f);
             }
             
             if (speedResponding) {
                 _speedNoResponseCount = 0;
+                _lastSpeedDirection = 0;
+                _lastSpeedCommandTime = 0;
             } else if (timeSinceSpeedCmd > 3000) {
                 _speedNoResponseCount++;
                 if (_speedNoResponseCount > 3) {
                     Serial.println("[Nav] WARNING: Motor not responding to speed changes!");
+                    _speedNoResponseCount = 0;
+                    _lastSpeedDirection = 0;
+                    _lastSpeedCommandTime = 0;
                 }
             }
         }
     }
     
-    _lastSpeed = currentSpeed;
+    _lastSpeed = _currentSpeedMs;
 }
 
 bool NavigationManager::isMotorResponding() const {
     return _motorResponding;
 }
-
-// Command logging for app display
 
 MotorCommand NavigationManager::getLastSteeringCommand() const {
     return _lastSteeringCmd;

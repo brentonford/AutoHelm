@@ -140,6 +140,7 @@ struct WaypointListView: View {
         if selectedWaypoint?.id == waypoint.id {
             selectedWaypoint = nil
         }
+        DataStore.shared.saveWaypoints()
     }
 }
 

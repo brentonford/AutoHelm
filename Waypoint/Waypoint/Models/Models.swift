@@ -2,8 +2,6 @@ import Foundation
 import CoreLocation
 import SwiftUI
 
-// MARK: - Waypoint
-
 struct Waypoint: Identifiable, Codable, Equatable, Hashable {
     let id: UUID
     var coordinate: CLLocationCoordinate2D
@@ -38,21 +36,7 @@ struct Waypoint: Identifiable, Codable, Equatable, Hashable {
         name = newName
         dateModified = Date()
     }
-
-    func toGpsString() -> String {
-        let safeName = name.replacingOccurrences(of: ",", with: " ")
-        return String(
-            format: "$GPS,%.6f,%.6f,0,%@,%d,%.1f*",
-            coordinate.latitude,
-            coordinate.longitude,
-            safeName,
-            spotLockEnabled ? 1 : 0,
-            approachSpeed
-        )
-    }
 }
-
-// MARK: - Path
 
 struct Path: Identifiable, Codable {
     let id: UUID
@@ -84,118 +68,6 @@ struct Path: Identifiable, Codable {
         dateModified = Date()
     }
 }
-
-// MARK: - Device Status
-
-struct DeviceStatus: Codable {
-    let hasFix: Bool
-    let satellites: Int
-    let currentLat: Double
-    let currentLon: Double
-    let altitude: Double
-    let hdop: Double
-    let heading: Double
-    let distance: Double
-    let bearing: Double
-    let relative: Double?
-    let targetLat: Double?
-    let targetLon: Double?
-    let hasTarget: Bool?
-    let navState: String?
-    let speedLevel: Int?
-    let targetSpeed: Int?
-    let speedKmh: Double?
-    
-    // Command state from Helm device
-    let steeringCmd: String?
-    let speedCmd: String?
-    let lastCmdTime: UInt32?
-    let isAccelerating: Bool?
-    let isDecelerating: Bool?
-    let motorResponding: Bool?
-
-    var currentLocation: CLLocationCoordinate2D {
-        CLLocationCoordinate2D(latitude: currentLat, longitude: currentLon)
-    }
-
-    var targetLocation: CLLocationCoordinate2D? {
-        guard let lat = targetLat, let lon = targetLon else { return nil }
-        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
-    }
-
-    var isNavigationReady: Bool {
-        hasFix && satellites >= 4 && hdop < 5.0
-    }
-
-    var gpsQuality: GPSQuality {
-        if !hasFix { return .noFix }
-        if satellites < 4 { return .poor }
-        if hdop >= 5.0 { return .poor }
-        if hdop >= 2.0 { return .fair }
-        if hdop >= 1.0 { return .good }
-        return .excellent
-    }
-
-    var isSpotLockActive: Bool {
-        navState == "spotlock"
-    }
-
-    var isPathFollowing: Bool {
-        navState == "path"
-    }
-
-    var isNavigating: Bool {
-        navState == "navigating" || navState == "path"
-    }
-
-    var isManualMode: Bool {
-        navState == "manual"
-    }
-    
-    var isActiveNavigation: Bool {
-        hasTarget == true && (navState == "navigating" || navState == "path" || navState == "spotlock")
-    }
-    
-    var steeringCommand: String {
-        steeringCmd ?? "None"
-    }
-    
-    var speedCommand: String {
-        speedCmd ?? "None"
-    }
-    
-    var isMotorResponding: Bool {
-        motorResponding ?? true
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case hasFix = "has_fix"
-        case satellites
-        case currentLat
-        case currentLon
-        case altitude
-        case hdop
-        case heading
-        case distance
-        case bearing
-        case relative
-        case targetLat
-        case targetLon
-        case hasTarget
-        case navState
-        case speedLevel
-        case targetSpeed
-        case speedKmh
-        case steeringCmd
-        case speedCmd
-        case lastCmdTime
-        case isAccelerating
-        case isDecelerating
-        case motorResponding
-    }
-}
-
-// MARK: - GPS Quality
 
 enum GPSQuality {
     case noFix
@@ -232,8 +104,6 @@ enum GPSQuality {
         }
     }
 }
-
-// MARK: - BLE Signal Strength
 
 enum BLESignalStrength {
     case disconnected
@@ -289,44 +159,6 @@ enum BLESignalStrength {
     }
 }
 
-// MARK: - Waypoint Preview
-
-struct WaypointPreview {
-    let waypoint: Waypoint
-    let distance: Double
-    let bearing: Double
-    let estimatedTime: TimeInterval
-    
-    var distanceString: String {
-        if distance >= 1000 {
-            return String(format: "%.2f km", distance / 1000)
-        }
-        return String(format: "%.0f m", distance)
-    }
-    
-    var bearingString: String {
-        String(format: "%.0f deg", bearing)
-    }
-    
-    var estimatedTimeString: String {
-        let minutes = Int(estimatedTime / 60)
-        if minutes < 60 {
-            return "\(minutes) min"
-        }
-        let hours = minutes / 60
-        let remainingMinutes = minutes % 60
-        return "\(hours)h \(remainingMinutes)m"
-    }
-    
-    var cardinalDirection: String {
-        let directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
-        let index = Int((bearing + 22.5) / 45.0) % 8
-        return directions[index]
-    }
-}
-
-// MARK: - Track Point
-
 struct TrackPoint: Identifiable, Codable {
     let id: UUID
     let coordinate: CLLocationCoordinate2D
@@ -339,14 +171,10 @@ struct TrackPoint: Identifiable, Codable {
     }
 }
 
-// MARK: - BLE Response
-
 struct BleResponse: Codable, Equatable {
     let ack: String?
     let error: String?
 }
-
-// MARK: - Connection State
 
 enum ConnectionState: String {
     case disconnected = "Disconnected"
@@ -355,16 +183,12 @@ enum ConnectionState: String {
     case connected = "Connected"
 }
 
-// MARK: - Jog Direction
-
 enum JogDirection {
     case forward
     case back
     case left
     case right
 }
-
-// MARK: - CLLocationCoordinate2D Codable
 
 extension CLLocationCoordinate2D: @retroactive Codable {
     enum CodingKeys: String, CodingKey {
@@ -399,10 +223,7 @@ extension CLLocationCoordinate2D: @retroactive Hashable {
     }
 }
 
-// MARK: - Navigation Helpers
-
 extension CLLocationCoordinate2D {
-    
     private static let earthRadiusMeters: Double = 6371000.0
     
     func distance(to destination: CLLocationCoordinate2D) -> Double {

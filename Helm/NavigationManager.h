@@ -48,7 +48,7 @@ public:
     void emergencyStop();
 
     // Path navigation
-    void setPath(Path* path);
+    void setPath(Path* path);   
     void startPath();
     void stopPath();
     uint8_t getCurrentWaypointIndex() const;
@@ -70,6 +70,10 @@ public:
     SpeedState getSpeedState() const;
     bool isAccelerating() const;
     bool isDecelerating() const;
+
+    // GPS speed tracking
+    float getCurrentSpeedMs() const;
+    float getCurrentSpeedKmh() const;
 
     // Motor response detection
     void recordMotorCommand(HeadingCorrection cmd);
@@ -128,6 +132,14 @@ private:
     static constexpr float speedTable[11] = {
         0.0f, 0.3f, 0.5f, 0.7f, 1.0f, 1.3f, 1.6f, 1.9f, 2.2f, 2.5f, 2.8f
     };
+
+    // GPS speed tracking
+    uint32_t _lastSpeedCalcTime;
+    double _lastSpeedCalcLat;
+    double _lastSpeedCalcLon;
+    float _currentSpeedMs;
+    static constexpr uint32_t speedCalcIntervalMs = 1000;
+    void updateGpsSpeed(const GpsData& gpsData);
 
     // Motor response detection
     struct MotorSample {

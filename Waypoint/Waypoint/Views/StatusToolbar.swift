@@ -6,14 +6,14 @@ struct StatusToolbar: ToolbarContent {
     
     private var compassColor: Color {
         guard bluetooth.connectionState == .connected else { return .red }
-        guard bluetooth.deviceStatus != nil else { return .red }
+        guard bluetooth.sensorData != nil else { return .red }
         return .green
     }
     
     private var navigationColor: Color {
         guard bluetooth.connectionState == .connected else { return .red }
-        guard let status = bluetooth.deviceStatus else { return .red }
-        return status.isNavigationReady ? .green : .orange
+        guard let sensors = bluetooth.sensorData else { return .red }
+        return sensors.isNavigationReady ? .green : .orange
     }
     
     var body: some ToolbarContent {
@@ -24,10 +24,10 @@ struct StatusToolbar: ToolbarContent {
                     signalStrength: bluetooth.signalStrength
                 )
                 
-                if bluetooth.connectionState == .connected, let status = bluetooth.deviceStatus {
+                if bluetooth.connectionState == .connected, let sensors = bluetooth.sensorData {
                     GPSQualityIndicator(
                         label: "GPS:",
-                        quality: status.gpsQuality
+                        quality: sensors.gpsQuality
                     )
                 } else {
                     GPSQualityIndicator(

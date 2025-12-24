@@ -11,8 +11,7 @@
 namespace BleConfig {
     constexpr const char* deviceName = "Helm";
     constexpr const char* serviceUuid = "0000FFE0-0000-1000-8000-00805F9B34FB";
-    constexpr const char* waypointCharUuid = "0000FFE1-0000-1000-8000-00805F9B34FB";
-    constexpr const char* statusCharUuid = "0000FFE2-0000-1000-8000-00805F9B34FB";
+    constexpr const char* sensorStatusCharUuid = "0000FFE2-0000-1000-8000-00805F9B34FB";
     constexpr const char* commandCharUuid = "0000FFE3-0000-1000-8000-00805F9B34FB";
     constexpr const char* calibrationCharUuid = "0000FFE4-0000-1000-8000-00805F9B34FB";
     constexpr uint32_t statusIntervalMs = 500;
@@ -20,59 +19,24 @@ namespace BleConfig {
 
 enum class BleCommand : uint8_t {
     None,
-    NavEnable,
-    NavDisable,
     StartCalibration,
-    StopCalibration,
-    SpotLockEngage,
-    SpotLockDisengage,
-    SpotLockJogForward,
-    SpotLockJogBack,
-    SpotLockJogLeft,
-    SpotLockJogRight,
-    PathStart,
-    PathStop,
-    SetSpeed,
-    ManualMode,
-    EmergencyStop
-};
-
-struct CommandState {
-    const char* steeringCommand;
-    const char* speedCommand;
-    uint32_t lastCommandTimeMs;
-    bool isAccelerating;
-    bool isDecelerating;
-    bool motorResponding;
+    StopCalibration
 };
 
 struct BleStatus {
     bool connected;
-    bool waypointReceived;
-    float waypointLat;
-    float waypointLon;
-    char waypointName[32];
-    bool waypointSpotLock;
-    float waypointSpeed;
     BleCommand pendingCommand;
     String pendingRfCommand;
     bool isHoldCommand;
-    float pendingSpeed;
-    bool hasPendingSpeed;
+    CompassCalibration pendingCalibration;
+    bool hasCalibrationPending;
 
     BleStatus()
         : connected(false)
-        , waypointReceived(false)
-        , waypointLat(0.0f)
-        , waypointLon(0.0f)
-        , waypointSpotLock(false)
-        , waypointSpeed(0.0f)
         , pendingCommand(BleCommand::None)
         , pendingRfCommand("")
         , isHoldCommand(false)
-        , pendingSpeed(0.0f)
-        , hasPendingSpeed(false) {
-        waypointName[0] = '\0';
+        , hasCalibrationPending(false) {
     }
 };
 
@@ -82,23 +46,16 @@ public:
 
     bool begin();
     void update();
-    void sendStatus(const GpsData& gpsData, float heading, const NavigationData& navData,
-                    const Waypoint& target, NavigationState navState, const SpeedState& speedState,
-                    const CommandState& cmdState);
+    void sendSensorStatus(const GpsData& gpsData, float heading);
     void sendCalibrationData(const String& data);
     void sendResponse(const String& response);
 
     bool isConnected() const;
-    bool hasWaypointPending() const;
-    Waypoint consumeWaypoint();
     BleCommand consumeCommand();
     bool hasRfCommandPending() const;
     String consumeRfCommand();
     bool isRfHoldCommand() const;
-    bool hasPendingSpeed() const;
-    float consumePendingSpeed();
     
-    // Connection state change callback for safety
     bool wasJustDisconnected() const;
     void clearDisconnectFlag();
 
@@ -109,17 +66,13 @@ public:
 private:
     BLEServer* _server;
     BLEService* _service;
-    BLECharacteristic* _waypointChar;
-    BLECharacteristic* _statusChar;
+    BLECharacteristic* _sensorStatusChar;
     BLECharacteristic* _commandChar;
     BLECharacteristic* _calibrationChar;
     BleStatus _status;
     uint32_t _lastStatusTime;
     bool _justDisconnected;
 
-    void parseWaypoint(const String& data);
     void parseCommand(const String& data);
-    String buildStatusJson(const GpsData& gpsData, float heading, const NavigationData& navData,
-                           const Waypoint& target, NavigationState navState, const SpeedState& speedState,
-                           const CommandState& cmdState);
+    String buildSensorStatusJson(const GpsData& gpsData, float heading);
 };

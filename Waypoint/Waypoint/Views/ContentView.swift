@@ -3,8 +3,8 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var bluetooth = BluetoothManager()
     @StateObject private var locationManager = LocationManager()
+    @ObservedObject private var dataStore = DataStore.shared
     
-    @State private var waypoints: [Waypoint] = []
     @State private var selectedWaypoint: Waypoint?
     @State private var selectedTab = 0
     @State private var navigationEnabled = false
@@ -14,7 +14,7 @@ struct ContentView: View {
             NavigationStack {
                 MapView(
                     selectedWaypoint: $selectedWaypoint,
-                    waypoints: $waypoints,
+                    waypoints: $dataStore.waypoints,
                     navigationEnabled: $navigationEnabled
                 )
             }
@@ -26,7 +26,7 @@ struct ContentView: View {
             
             NavigationStack {
                 HelmControlView(
-                    waypoints: $waypoints,
+                    waypoints: $dataStore.waypoints,
                     selectedWaypoint: $selectedWaypoint,
                     navigationEnabled: $navigationEnabled
                 )
@@ -51,6 +51,9 @@ struct ContentView: View {
         .task {
             locationManager.requestAuthorization()
             bluetooth.initialize()
+        }
+        .onChange(of: dataStore.waypoints) { _, _ in
+            dataStore.saveWaypoints()
         }
     }
 }
