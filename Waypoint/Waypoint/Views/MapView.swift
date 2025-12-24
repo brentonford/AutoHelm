@@ -3,7 +3,6 @@ import MapKit
 import CoreLocation
 
 struct MapView: View {
-    @EnvironmentObject private var locationManager: LocationManager
     @EnvironmentObject private var bluetooth: BluetoothManager
     
     @Binding var selectedWaypoint: Waypoint?
@@ -64,7 +63,7 @@ struct MapView: View {
             overlayControls
         }
         .toolbar {
-            StatusToolbar {
+            StatusToolbar(bluetooth: bluetooth) {
                 showingWaypointList = true
             }
         }

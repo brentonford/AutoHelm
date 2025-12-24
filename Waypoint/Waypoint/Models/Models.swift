@@ -207,7 +207,7 @@ class LocationWithSpeed {
     func updateLocation(_ newCoordinate: CLLocationCoordinate2D) {
         let now = Date()
         
-        if let lastCoord = lastCoordinate, let lastTime = lastTimestamp {
+        if let _ = lastCoordinate, let lastTime = lastTimestamp {
             let timeDiff = now.timeIntervalSince(lastTime)
             
             if timeDiff > 0 {

@@ -2,7 +2,6 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var bluetooth = BluetoothManager()
-    @StateObject private var locationManager = LocationManager()
     @ObservedObject private var dataStore = DataStore.shared
     
     @State private var selectedWaypoint: Waypoint?
@@ -47,9 +46,7 @@ struct ContentView: View {
             .tag(2)
         }
         .environmentObject(bluetooth)
-        .environmentObject(locationManager)
         .task {
-            locationManager.requestAuthorization()
             bluetooth.initialize()
         }
         .onChange(of: dataStore.waypoints) { _, _ in

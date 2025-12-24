@@ -57,7 +57,7 @@ struct StatusIndicator: View {
 }
 
 struct StatusToolbar: ToolbarContent {
-    @EnvironmentObject private var bluetooth: BluetoothManager
+    @ObservedObject var bluetooth: BluetoothManager
     let showWaypointList: () -> Void
     
     private var compassColor: Color {
