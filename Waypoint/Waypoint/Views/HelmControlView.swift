@@ -151,6 +151,21 @@ struct HelmControlView: View {
                     }
                 }
             }
+            
+            if let status = bluetooth.deviceStatus {
+                HStack {
+                    Text("Motor Response")
+                    Spacer()
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(status.isMotorResponding ? Color.green : Color.red)
+                            .frame(width: 10, height: 10)
+                        Text(status.isMotorResponding ? "Responding" : "No Response")
+                            .font(.subheadline)
+                            .foregroundColor(status.isMotorResponding ? .green : .red)
+                    }
+                }
+            }
         }
     }
     
@@ -516,6 +531,7 @@ struct HelmControlView: View {
         Section {
             if let status = bluetooth.deviceStatus, navigationEnabled {
                 VStack(spacing: 12) {
+                    // Steering Command - from device
                     steeringCommandRow(status: status)
                     
                     if let relative = status.relative {
@@ -524,7 +540,29 @@ struct HelmControlView: View {
                     
                     Divider()
                     
+                    // Speed Command - from device
                     speedCommandRow(status: status)
+                    
+                    // Acceleration/Deceleration State
+                    if status.isAccelerating == true {
+                        HStack {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .foregroundColor(.blue)
+                            Text("Gradually Accelerating...")
+                                .font(.subheadline)
+                                .foregroundColor(.blue)
+                            Spacer()
+                        }
+                    } else if status.isDecelerating == true {
+                        HStack {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .foregroundColor(.orange)
+                            Text("Decelerating...")
+                                .font(.subheadline)
+                                .foregroundColor(.orange)
+                            Spacer()
+                        }
+                    }
                     
                     LabeledContent("Power Level", value: "\(status.speedLevel ?? 0)/10")
                     if let speedKmh = status.speedKmh {
@@ -542,13 +580,26 @@ struct HelmControlView: View {
                         }
                         .buttonStyle(.borderedProminent)
                     }
+                    
+                    // Emergency Stop Button
+                    Button {
+                        sendEmergencyStop()
+                    } label: {
+                        HStack {
+                            Image(systemName: "exclamationmark.octagon.fill")
+                            Text("Emergency Stop")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
                 }
                 
                 HStack(spacing: 4) {
                     Image(systemName: "info.circle")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    Text("Steering: Every 2s when correction needed.\nSpeed: Default cruise speed is 3.6 km/hr (1 m/s). Enter a value between 0.0-10.0 km/hr")
+                    Text("Steering: Every 2s when correction needed.\nSpeed: Gradual acceleration (1.5s between steps).\nRange: 0.0-10.0 km/hr")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -558,6 +609,8 @@ struct HelmControlView: View {
             }
         } header: {
             Text("Autonomous Commands")
+        } footer: {
+            Text("Commands sent to motor are shown above. Motor response is detected via GPS/compass changes.")
         }
     }
     
@@ -568,11 +621,11 @@ struct HelmControlView: View {
             Spacer()
             HStack(spacing: 4) {
                 Circle()
-                    .fill(steeringCommandColor(for: status.relative))
+                    .fill(steeringCommandColor(for: status.steeringCommand))
                     .frame(width: 10, height: 10)
-                Text(steeringCommandText(for: status.relative))
+                Text(steeringCommandDisplayText(status.steeringCommand))
                     .font(.subheadline.bold())
-                    .foregroundColor(steeringCommandColor(for: status.relative))
+                    .foregroundColor(steeringCommandColor(for: status.steeringCommand))
             }
         }
     }
@@ -584,57 +637,53 @@ struct HelmControlView: View {
             Spacer()
             HStack(spacing: 4) {
                 Circle()
-                    .fill(speedCommandColor(status: status))
+                    .fill(speedCommandColor(for: status.speedCommand))
                     .frame(width: 10, height: 10)
-                Text(speedCommandText(status: status))
+                Text(speedCommandDisplayText(status.speedCommand))
                     .font(.subheadline.bold())
-                    .foregroundColor(speedCommandColor(status: status))
+                    .foregroundColor(speedCommandColor(for: status.speedCommand))
             }
         }
     }
 
-    private func steeringCommandText(for relative: Double?) -> String {
-        guard let relative else { return "None" }
-        
-        let absAngle = abs(relative)
-        let tolerance = 15.0
-        
-        if absAngle <= tolerance {
-            return "✓ On Course"
-        } else if relative > 0 {
-            return "→ RIGHT"
-        } else {
-            return "← LEFT"
+    private func steeringCommandDisplayText(_ command: String) -> String {
+        switch command {
+        case "LEFT": return "← LEFT"
+        case "RIGHT": return "→ RIGHT"
+        case "On Course": return "✓ On Course"
+        case "STOP": return "⊗ STOPPED"
+        default: return command
         }
     }
 
-    private func steeringCommandColor(for relative: Double?) -> Color {
-        guard let relative else { return .gray }
-        
-        let absAngle = abs(relative)
-        let tolerance = 15.0
-        
-        return absAngle <= tolerance ? .green : .orange
-    }
-    
-    private func speedCommandText(status: DeviceStatus) -> String {
-        let currentLevel = status.speedLevel ?? 0
-        let targetLevel = status.targetSpeed ?? 0
-        
-        if currentLevel < targetLevel {
-            return "↑ SPEED +"
-        } else if currentLevel > targetLevel {
-            return "↓ SPEED -"
-        } else {
-            return "✓ At Target"
+    private func steeringCommandColor(for command: String) -> Color {
+        switch command {
+        case "LEFT", "RIGHT": return .orange
+        case "On Course": return .green
+        case "STOP": return .red
+        default: return .gray
         }
     }
     
-    private func speedCommandColor(status: DeviceStatus) -> Color {
-        let currentLevel = status.speedLevel ?? 0
-        let targetLevel = status.targetSpeed ?? 0
-        
-        return currentLevel == targetLevel ? .green : .blue
+    private func speedCommandDisplayText(_ command: String) -> String {
+        switch command {
+        case "SPEED+": return "↑ SPEED +"
+        case "SPEED-": return "↓ SPEED -"
+        case "At Target": return "✓ At Target"
+        case "Stopped": return "⊗ Stopped"
+        case "STOP": return "⊗ STOPPED"
+        default: return command
+        }
+    }
+    
+    private func speedCommandColor(for command: String) -> Color {
+        switch command {
+        case "SPEED+": return .blue
+        case "SPEED-": return .orange
+        case "At Target": return .green
+        case "Stopped", "STOP": return .red
+        default: return .gray
+        }
     }
     
     private func setTargetSpeed() {
@@ -646,6 +695,11 @@ struct HelmControlView: View {
         }
         bluetooth.setSpeed(speed)
         speedFieldFocused = false
+    }
+    
+    private func sendEmergencyStop() {
+        bluetooth.sendCommand("EMERGENCY_STOP")
+        navigationEnabled = false
     }
 
     // MARK: - GPS Status Section

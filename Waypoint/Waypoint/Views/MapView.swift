@@ -22,9 +22,6 @@ struct MapView: View {
     @State private var lastTrackUpdate = Date()
     @State private var showingArrivalAlert = false
     @State private var totalDistance: Double = 0
-    @State private var lastSteeringCommand: String = "None"
-    @State private var lastSpeedCommand: String = "None"
-    @State private var lastCommandTime: Date?
     
     private enum Constants {
         static let distanceRingRadii: [Double] = [100.0, 500.0, 1000.0]
@@ -124,12 +121,6 @@ struct MapView: View {
         }
         .onChange(of: selectedWaypoint?.id) { _, _ in
             handleWaypointChange()
-        }
-        .onChange(of: bluetooth.deviceStatus?.relative) { _, newValue in
-            updateSteeringCommand(relative: newValue)
-        }
-        .onChange(of: bluetooth.deviceStatus?.speedLevel) { oldValue, newValue in
-            updateSpeedCommand(oldLevel: oldValue, newLevel: newValue)
         }
         .onChange(of: bluetooth.connectionState) { _, newState in
             if newState != .connected && navigationEnabled {
@@ -258,14 +249,17 @@ struct MapView: View {
                     navigationProgress: navigationProgress,
                     totalDistance: totalDistance,
                     deviceStatus: bluetooth.deviceStatus,
-                    lastSteeringCommand: lastSteeringCommand,
-                    lastSpeedCommand: lastSpeedCommand,
-                    lastCommandTime: lastCommandTime,
                     onNavigate: {
                         navigateToWaypoint(waypoint)
                     },
                     onStopNavigation: {
                         stopNavigation()
+                    },
+                    onEngageSpotLock: {
+                        bluetooth.engageSpotLock()
+                    },
+                    onDisengageSpotLock: {
+                        bluetooth.disengageSpotLock()
                     }
                 )
                 .padding()
@@ -399,43 +393,9 @@ struct MapView: View {
         showingWaypointSheet = false
         waypointName = ""
     }
-    
-    private func updateSteeringCommand(relative: Double?) {
-        guard navigationEnabled, let relative else {
-            lastSteeringCommand = "None"
-            lastCommandTime = nil
-            return
-        }
-        
-        let absAngle = abs(relative)
-        
-        if absAngle <= Constants.headingToleranceDegrees {
-            lastSteeringCommand = "On Course"
-        } else if relative > 0 {
-            lastSteeringCommand = "RIGHT"
-        } else {
-            lastSteeringCommand = "LEFT"
-        }
-        lastCommandTime = Date()
-    }
-    
-    private func updateSpeedCommand(oldLevel: Int?, newLevel: Int?) {
-        guard navigationEnabled else {
-            lastSpeedCommand = "None"
-            return
-        }
-        
-        guard let oldLevel, let newLevel else { return }
-        
-        if newLevel > oldLevel {
-            lastSpeedCommand = "SPEED +"
-            lastCommandTime = Date()
-        } else if newLevel < oldLevel {
-            lastSpeedCommand = "SPEED -"
-            lastCommandTime = Date()
-        }
-    }
 }
+
+// MARK: - Signal Strength Indicator
 
 struct SignalStrengthIndicator: View {
     let label: String
@@ -463,6 +423,8 @@ struct SignalStrengthIndicator: View {
     }
 }
 
+// MARK: - GPS Quality Indicator
+
 struct GPSQualityIndicator: View {
     let label: String
     let quality: GPSQuality
@@ -478,6 +440,8 @@ struct GPSQualityIndicator: View {
     }
 }
 
+// MARK: - Status Indicator
+
 struct StatusIndicator: View {
     let label: String
     let color: Color
@@ -492,6 +456,8 @@ struct StatusIndicator: View {
         }
     }
 }
+
+// MARK: - Waypoint Marker
 
 struct WaypointMarker: View {
     let isSelected: Bool
@@ -510,21 +476,26 @@ struct WaypointMarker: View {
     }
 }
 
+// MARK: - Selected Waypoint Card
+
 struct SelectedWaypointCard: View {
     let waypoint: Waypoint
     let isActiveNavigation: Bool
     let navigationProgress: Double
     let totalDistance: Double
     let deviceStatus: DeviceStatus?
-    let lastSteeringCommand: String
-    let lastSpeedCommand: String
-    let lastCommandTime: Date?
     let onNavigate: () -> Void
     let onStopNavigation: () -> Void
+    let onEngageSpotLock: () -> Void
+    let onDisengageSpotLock: () -> Void
     
     private var canNavigate: Bool {
         guard let status = deviceStatus else { return false }
         return status.hasFix && status.isNavigationReady
+    }
+    
+    private var isSpotLockActive: Bool {
+        deviceStatus?.isSpotLockActive ?? false
     }
     
     private var distance: Double? {
@@ -548,12 +519,8 @@ struct SelectedWaypointCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             headerRow
-            
-            if isActiveNavigation {
-                activeNavigationContent
-            } else {
-                inactiveNavigationContent
-            }
+            waypointInfoRow
+            actionButtons
         }
         .padding()
         .background(.regularMaterial)
@@ -571,133 +538,125 @@ struct SelectedWaypointCard: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
-
+            
             Spacer()
-
-            if isActiveNavigation {
+            
+            if isSpotLockActive {
                 HStack(spacing: 4) {
-                    if let estimatedTime {
-                        VStack(spacing: 4) {
-                            Image(systemName: "clock.fill")
-                                .font(.title3)
-                                .foregroundColor(Color.green)
-                            Text(formatEstimatedTime(estimatedTime))
-                                .font(.subheadline.bold())
-                            Text("Est. Time")
-                                .font(.caption)
-                                .foregroundColor(Color.green)
-                        }
-                    }
+                    Image(systemName: "pin.fill")
+                        .foregroundColor(.orange)
+                    Text("Spot Lock")
+                        .font(.caption)
+                        .foregroundColor(.orange)
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.orange.opacity(0.2))
+                .cornerRadius(8)
             }
         }
     }
     
-    private var activeNavigationContent: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Text("Progress")
-                    .font(.subheadline)
-                Spacer()
-                Text("\(Int(navigationProgress * 100))%")
-                    .font(.subheadline.bold())
-            }
-            
-            ProgressView(value: navigationProgress, total: 1.0)
-                .tint(Color.blue)
-            
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Distance")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    if let status = deviceStatus {
-                        Text(formatDistance(status.distance))
-                            .font(.headline)
-                    }
-                }
-                
-                Spacer()
-                
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("Total")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(formatDistance(totalDistance))
-                        .font(.headline)
-                }
-            }
-            
-            Button {
-                onStopNavigation()
-            } label: {
-                HStack {
-                    Image(systemName: "stop.fill")
-                    Text("Stop Navigation")
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .tint(Color.red)
-        }
-    }
-    
-    private var inactiveNavigationContent: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 40) {
-                if let distance {
-                    VStack(spacing: 4) {
-                        Image(systemName: "location.fill")
-                            .font(.title3)
-                            .foregroundColor(Color.blue)
-                        Text(formatDistance(distance))
-                            .font(.subheadline.bold())
-                        Text("Distance")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
-                if let bearing {
-                    VStack(spacing: 4) {
-                        Image(systemName: "safari.fill")
-                            .font(.title3)
-                            .foregroundColor(Color.green)
-                        Text("\(Int(bearing)) deg \(cardinalDirection(for: bearing))")
-                            .font(.subheadline.bold())
-                        Text("Bearing")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
-                if let estimatedTime {
-                    VStack(spacing: 4) {
-                        Image(systemName: "clock.fill")
-                            .font(.title3)
-                            .foregroundColor(.orange)
-                        Text(formatEstimatedTime(estimatedTime))
-                            .font(.subheadline.bold())
-                        Text("Est. Time")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
-            
-            Button {
-                onNavigate()
-            } label: {
-                HStack {
+    private var waypointInfoRow: some View {
+        HStack(spacing: 40) {
+            if let distance {
+                VStack(spacing: 4) {
                     Image(systemName: "location.fill")
-                    Text("Navigate to Waypoint")
+                        .font(.title3)
+                        .foregroundColor(Color.blue)
+                    Text(formatDistance(distance))
+                        .font(.subheadline.bold())
+                    Text("Distance")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                 }
-                .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(!canNavigate)
+            
+            if let bearing {
+                VStack(spacing: 4) {
+                    Image(systemName: "safari.fill")
+                        .font(.title3)
+                        .foregroundColor(Color.green)
+                    Text("\(Int(bearing))° \(cardinalDirection(for: bearing))")
+                        .font(.subheadline.bold())
+                    Text("Bearing")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            if let estimatedTime {
+                VStack(spacing: 4) {
+                    Image(systemName: "clock.fill")
+                        .font(.title3)
+                        .foregroundColor(.orange)
+                    Text(formatEstimatedTime(estimatedTime))
+                        .font(.subheadline.bold())
+                    Text("Est. Time")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+    }
+    
+    private var actionButtons: some View {
+        VStack(spacing: 8) {
+            if isActiveNavigation {
+                Button {
+                    onStopNavigation()
+                } label: {
+                    HStack {
+                        Image(systemName: "stop.fill")
+                        Text("Stop Navigation")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .tint(Color.red)
+            } else {
+                Button {
+                    onNavigate()
+                } label: {
+                    HStack {
+                        Image(systemName: "location.fill")
+                        Text("Navigate to Waypoint")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canNavigate)
+            }
+            
+            // Spot Lock Button
+            if isSpotLockActive {
+                Button {
+                    onDisengageSpotLock()
+                } label: {
+                    HStack {
+                        Image(systemName: "pin.slash.fill")
+                        Text("Disengage Spot Lock")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .tint(Color.orange)
+            } else {
+                Button {
+                    onEngageSpotLock()
+                } label: {
+                    HStack {
+                        Image(systemName: "pin.fill")
+                        Text("Engage Spot Lock")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .tint(Color.orange)
+                .disabled(!canNavigate)
+            }
         }
     }
     
@@ -724,6 +683,8 @@ struct SelectedWaypointCard: View {
         return directions[index]
     }
 }
+
+// MARK: - Add Waypoint Sheet
 
 struct AddWaypointSheet: View {
     let coordinate: CLLocationCoordinate2D?

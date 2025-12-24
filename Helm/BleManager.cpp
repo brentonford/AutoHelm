@@ -7,7 +7,8 @@ BleManager::BleManager()
     , _statusChar(nullptr)
     , _commandChar(nullptr)
     , _calibrationChar(nullptr)
-    , _lastStatusTime(0) {
+    , _lastStatusTime(0)
+    , _justDisconnected(false) {
 }
 
 bool BleManager::begin() {
@@ -60,16 +61,26 @@ void BleManager::update() {
 
 void BleManager::onConnect(BLEServer* server) {
     _status.connected = true;
+    _justDisconnected = false;
     Serial.println("[BLE] Client connected");
 }
 
 void BleManager::onDisconnect(BLEServer* server) {
     _status.connected = false;
-    Serial.println("[BLE] Client disconnected");
+    _justDisconnected = true;
+    Serial.println("[BLE] Client disconnected - SAFETY: Motor stop required");
 
     delay(500);
     BLEDevice::startAdvertising();
     Serial.println("[BLE] Advertising restarted");
+}
+
+bool BleManager::wasJustDisconnected() const {
+    return _justDisconnected;
+}
+
+void BleManager::clearDisconnectFlag() {
+    _justDisconnected = false;
 }
 
 void BleManager::onWrite(BLECharacteristic* characteristic) {
@@ -179,6 +190,9 @@ void BleManager::parseCommand(const String& data) {
     } else if (cmd == "MANUAL_MODE") {
         _status.pendingCommand = BleCommand::ManualMode;
         sendResponse("{\"ack\":\"MANUAL_MODE\"}");
+    } else if (cmd == "EMERGENCY_STOP") {
+        _status.pendingCommand = BleCommand::EmergencyStop;
+        sendResponse("{\"ack\":\"EMERGENCY_STOP\"}");
     } else if (cmd.startsWith("SPEED:")) {
         float speed = cmd.substring(6).toFloat();
         if (speed >= 0 && speed <= 15.0f) {
@@ -207,7 +221,8 @@ void BleManager::parseCommand(const String& data) {
 }
 
 String BleManager::buildStatusJson(const GpsData& gpsData, float heading, const NavigationData& navData,
-                                    const Waypoint& target, NavigationState navState, const SpeedState& speedState) {
+                                    const Waypoint& target, NavigationState navState, const SpeedState& speedState,
+                                    const CommandState& cmdState) {
     String json = "{";
     json += "\"has_fix\":" + String(gpsData.hasFix ? "true" : "false") + ",";
     json += "\"satellites\":" + String(gpsData.satellites) + ",";
@@ -241,14 +256,23 @@ String BleManager::buildStatusJson(const GpsData& gpsData, float heading, const 
 
     json += "\"speedLevel\":" + String(speedState.currentLevel) + ",";
     json += "\"targetSpeed\":" + String(speedState.targetLevel) + ",";
-    json += "\"speedKmh\":" + String(speedState.currentLevel * 0.36f, 1);
+    json += "\"speedKmh\":" + String(speedState.currentLevel * 0.36f, 1) + ",";
+
+    // Command state for app display
+    json += "\"steeringCmd\":\"" + String(cmdState.steeringCommand) + "\",";
+    json += "\"speedCmd\":\"" + String(cmdState.speedCommand) + "\",";
+    json += "\"lastCmdTime\":" + String(cmdState.lastCommandTimeMs) + ",";
+    json += "\"isAccelerating\":" + String(cmdState.isAccelerating ? "true" : "false") + ",";
+    json += "\"isDecelerating\":" + String(cmdState.isDecelerating ? "true" : "false") + ",";
+    json += "\"motorResponding\":" + String(cmdState.motorResponding ? "true" : "false");
 
     json += "}";
     return json;
 }
 
 void BleManager::sendStatus(const GpsData& gpsData, float heading, const NavigationData& navData,
-                             const Waypoint& target, NavigationState navState, const SpeedState& speedState) {
+                             const Waypoint& target, NavigationState navState, const SpeedState& speedState,
+                             const CommandState& cmdState) {
     if (!_status.connected)
         return;
 
@@ -258,7 +282,7 @@ void BleManager::sendStatus(const GpsData& gpsData, float heading, const Navigat
 
     _lastStatusTime = now;
 
-    String json = buildStatusJson(gpsData, heading, navData, target, navState, speedState);
+    String json = buildStatusJson(gpsData, heading, navData, target, navState, speedState, cmdState);
     _statusChar->setValue(json.c_str());
     _statusChar->notify();
 }

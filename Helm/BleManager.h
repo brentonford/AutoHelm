@@ -33,7 +33,17 @@ enum class BleCommand : uint8_t {
     PathStart,
     PathStop,
     SetSpeed,
-    ManualMode
+    ManualMode,
+    EmergencyStop
+};
+
+struct CommandState {
+    const char* steeringCommand;
+    const char* speedCommand;
+    uint32_t lastCommandTimeMs;
+    bool isAccelerating;
+    bool isDecelerating;
+    bool motorResponding;
 };
 
 struct BleStatus {
@@ -73,7 +83,8 @@ public:
     bool begin();
     void update();
     void sendStatus(const GpsData& gpsData, float heading, const NavigationData& navData,
-                    const Waypoint& target, NavigationState navState, const SpeedState& speedState);
+                    const Waypoint& target, NavigationState navState, const SpeedState& speedState,
+                    const CommandState& cmdState);
     void sendCalibrationData(const String& data);
     void sendResponse(const String& response);
 
@@ -86,6 +97,10 @@ public:
     bool isRfHoldCommand() const;
     bool hasPendingSpeed() const;
     float consumePendingSpeed();
+    
+    // Connection state change callback for safety
+    bool wasJustDisconnected() const;
+    void clearDisconnectFlag();
 
     void onConnect(BLEServer* server) override;
     void onDisconnect(BLEServer* server) override;
@@ -100,9 +115,11 @@ private:
     BLECharacteristic* _calibrationChar;
     BleStatus _status;
     uint32_t _lastStatusTime;
+    bool _justDisconnected;
 
     void parseWaypoint(const String& data);
     void parseCommand(const String& data);
     String buildStatusJson(const GpsData& gpsData, float heading, const NavigationData& navData,
-                           const Waypoint& target, NavigationState navState, const SpeedState& speedState);
+                           const Waypoint& target, NavigationState navState, const SpeedState& speedState,
+                           const CommandState& cmdState);
 };

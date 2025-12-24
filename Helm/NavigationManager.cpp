@@ -12,11 +12,21 @@ NavigationManager::NavigationManager()
     , _spotLockActive(false)
     , _lastSpotLockCorrection(0)
     , _lastSpeedChangeTime(0)
+    , _accelerationStartTime(0)
+    , _isAccelerating(false)
+    , _isDecelerating(false)
     , _sampleIndex(0)
     , _lastMotorCommand(HeadingCorrection::None)
     , _lastCommandTime(0)
     , _noResponseCount(0)
-    , _motorResponding(true) {
+    , _motorResponding(true)
+    , _lastSpeed(0.0f)
+    , _lastSpeedDirection(0)
+    , _lastSpeedCommandTime(0)
+    , _speedNoResponseCount(0)
+    , _lastSteeringCmd(MotorCommand::None)
+    , _lastSpeedCmd(MotorCommand::None)
+    , _lastCmdTimestamp(0) {
 }
 
 void NavigationManager::setTarget(float latitude, float longitude) {
@@ -30,6 +40,8 @@ void NavigationManager::clearTarget() {
     _enabled = false;
     _lastCorrectionTime = 0;
     _disableReason = nullptr;
+    _isAccelerating = false;
+    _isDecelerating = false;
     Serial.println("[Nav] Target cleared");
 }
 
@@ -49,7 +61,20 @@ void NavigationManager::disableWithReason(const char* reason) {
     _enabled = false;
     _state = NavigationState::Idle;
     _disableReason = reason;
+    _isAccelerating = false;
+    _isDecelerating = false;
     Serial.printf("[Nav] DISABLED: %s\n", reason);
+}
+
+void NavigationManager::emergencyStop() {
+    Serial.println("[Nav] EMERGENCY STOP - Initiating rapid deceleration");
+    _enabled = false;
+    _state = NavigationState::Idle;
+    _disableReason = "Emergency stop";
+    _speedState.targetLevel = 0;
+    _isAccelerating = false;
+    _isDecelerating = true;
+    _lastSpeedChangeTime = 0;  // Force immediate speed change
 }
 
 void NavigationManager::checkSafetyConditions(const GpsData& gpsData) {
@@ -89,10 +114,16 @@ void NavigationManager::setEnabled(bool enabled) {
     if (_enabled) {
         _state = NavigationState::Navigating;
         _lastCorrectionTime = 0;
+        _accelerationStartTime = millis();
+        _isAccelerating = true;
+        _isDecelerating = false;
+        _lastSpeedChangeTime = millis();  // Start acceleration timer
         resetMotorDetection();
-        Serial.println("[Nav] Navigation ENABLED");
+        Serial.println("[Nav] Navigation ENABLED - Beginning gradual acceleration");
     } else {
         _state = NavigationState::Idle;
+        _isAccelerating = false;
+        _isDecelerating = false;
         resetMotorDetection();
         Serial.println("[Nav] Navigation DISABLED");
     }
@@ -104,6 +135,9 @@ void NavigationManager::resetMotorDetection() {
     _lastMotorCommand = HeadingCorrection::None;
     _lastCommandTime = 0;
     _sampleIndex = 0;
+    _speedNoResponseCount = 0;
+    _lastSpeedDirection = 0;
+    _lastSpeedCommandTime = 0;
 }
 
 void NavigationManager::update(const GpsData& gpsData, float heading) {
@@ -132,6 +166,8 @@ void NavigationManager::update(const GpsData& gpsData, float heading) {
             if (checkArrival()) {
                 _state = NavigationState::Arrived;
                 _enabled = false;
+                _speedState.targetLevel = 0;
+                _isDecelerating = true;
                 _disableReason = "Arrived at destination";
                 Serial.println("[Nav] ARRIVED at destination!");
             }
@@ -194,17 +230,22 @@ HeadingCorrection NavigationManager::getRequiredCorrection() {
         return HeadingCorrection::None;
 
     float absAngle = fabsf(_navData.relativeAngle);
-    if (absAngle <= NavigationConfig::headingToleranceDeg)
+    if (absAngle <= NavigationConfig::headingToleranceDeg) {
+        _lastSteeringCmd = MotorCommand::None;
         return HeadingCorrection::None;
+    }
 
     _lastCorrectionTime = millis();
+    _lastCmdTimestamp = millis();
 
     HeadingCorrection correction;
     if (_navData.relativeAngle > 0) {
         correction = HeadingCorrection::Right;
+        _lastSteeringCmd = MotorCommand::Right;
         Serial.printf("[Nav] Correction: RIGHT (%+.1f deg)\n", _navData.relativeAngle);
     } else {
         correction = HeadingCorrection::Left;
+        _lastSteeringCmd = MotorCommand::Left;
         Serial.printf("[Nav] Correction: LEFT (%+.1f deg)\n", _navData.relativeAngle);
     }
 
@@ -260,6 +301,9 @@ void NavigationManager::startPath() {
     _state = NavigationState::PathFollowing;
     _enabled = true;
     _lastCorrectionTime = 0;
+    _accelerationStartTime = millis();
+    _isAccelerating = true;
+    _lastSpeedChangeTime = millis();
 
     Waypoint* wp = _activePath->getCurrentWaypoint(0);
     if (wp) {
@@ -274,6 +318,8 @@ void NavigationManager::stopPath() {
     _state = NavigationState::Idle;
     _enabled = false;
     _activePath = nullptr;
+    _speedState.targetLevel = 0;
+    _isDecelerating = true;
     Serial.println("[Nav] Path stopped");
 }
 
@@ -290,6 +336,8 @@ void NavigationManager::advanceToNextWaypoint() {
         } else {
             _state = NavigationState::Arrived;
             _enabled = false;
+            _speedState.targetLevel = 0;
+            _isDecelerating = true;
             Serial.println("[Nav] Path complete!");
             return;
         }
@@ -353,6 +401,8 @@ void NavigationManager::disengageSpotLock() {
     _spotLockActive = false;
     _state = NavigationState::Idle;
     _enabled = false;
+    _speedState.targetLevel = 0;
+    _isDecelerating = true;
     Serial.println("[Nav] Spot Lock disengaged");
 }
 
@@ -424,7 +474,7 @@ void NavigationManager::updateSpotLock(const GpsData& gpsData, float heading) {
     _lastSpotLockCorrection = now;
 }
 
-// Speed Control
+// Speed Control - Gradual Acceleration
 
 void NavigationManager::setTargetSpeed(float speedMs) {
     uint8_t bestLevel = 0;
@@ -439,6 +489,15 @@ void NavigationManager::setTargetSpeed(float speedMs) {
     }
 
     _speedState.targetLevel = bestLevel;
+    
+    if (bestLevel > _speedState.currentLevel) {
+        _isAccelerating = true;
+        _isDecelerating = false;
+    } else if (bestLevel < _speedState.currentLevel) {
+        _isAccelerating = false;
+        _isDecelerating = true;
+    }
+    
     Serial.printf("[Nav] Target speed: %.1f m/s (level %d)\n", speedMs, bestLevel);
 }
 
@@ -450,33 +509,89 @@ void NavigationManager::setTargetSpeedKmh(float speedKmh) {
 void NavigationManager::setSpeedLevel(uint8_t level) {
     constexpr uint8_t maxLevel = 10;
     _speedState.targetLevel = min(level, maxLevel);
+    
+    if (_speedState.targetLevel > _speedState.currentLevel) {
+        _isAccelerating = true;
+        _isDecelerating = false;
+    } else if (_speedState.targetLevel < _speedState.currentLevel) {
+        _isAccelerating = false;
+        _isDecelerating = true;
+    }
 }
 
 int8_t NavigationManager::getSpeedAdjustment() {
     int8_t diff = static_cast<int8_t>(_speedState.targetLevel) - 
                   static_cast<int8_t>(_speedState.currentLevel);
 
-    if (diff == 0)
+    if (diff == 0) {
+        _isAccelerating = false;
+        _isDecelerating = false;
         return 0;
+    }
 
-    constexpr uint32_t speedChangeIntervalMs = 500;
     uint32_t now = millis();
-    if (now - _lastSpeedChangeTime < speedChangeIntervalMs)
+    uint32_t requiredInterval;
+    
+    // Determine interval based on acceleration/deceleration state
+    if (diff > 0) {
+        // Accelerating - use slower intervals
+        _isAccelerating = true;
+        _isDecelerating = false;
+        
+        // Initial delay before first speed increase
+        if (_speedState.currentLevel == 0) {
+            uint32_t timeSinceStart = now - _accelerationStartTime;
+            if (timeSinceStart < initialAccelDelayMs) {
+                return 0;  // Wait before starting
+            }
+        }
+        requiredInterval = accelIntervalMs;
+    } else {
+        // Decelerating
+        _isAccelerating = false;
+        _isDecelerating = true;
+        
+        // Use faster decel for emergency stop
+        if (_disableReason != nullptr && strcmp(_disableReason, "Emergency stop") == 0) {
+            requiredInterval = emergencyDecelMs;
+        } else {
+            requiredInterval = decelIntervalMs;
+        }
+    }
+
+    if (now - _lastSpeedChangeTime < requiredInterval)
         return 0;
 
     _lastSpeedChangeTime = now;
+    _lastCmdTimestamp = now;
 
     if (diff > 0) {
         _speedState.currentLevel++;
+        _lastSpeedCmd = MotorCommand::SpeedUp;
+        recordSpeedCommand(1);
+        Serial.printf("[Nav] Speed UP: %d -> %d (target: %d)\n", 
+            _speedState.currentLevel - 1, _speedState.currentLevel, _speedState.targetLevel);
         return 1;
     }
 
     _speedState.currentLevel--;
+    _lastSpeedCmd = MotorCommand::SpeedDown;
+    recordSpeedCommand(-1);
+    Serial.printf("[Nav] Speed DOWN: %d -> %d (target: %d)\n", 
+        _speedState.currentLevel + 1, _speedState.currentLevel, _speedState.targetLevel);
     return -1;
 }
 
 SpeedState NavigationManager::getSpeedState() const {
     return _speedState;
+}
+
+bool NavigationManager::isAccelerating() const {
+    return _isAccelerating;
+}
+
+bool NavigationManager::isDecelerating() const {
+    return _isDecelerating;
 }
 
 // Motor Response Detection
@@ -486,62 +601,130 @@ void NavigationManager::recordMotorCommand(HeadingCorrection cmd) {
     _lastCommandTime = millis();
 }
 
+void NavigationManager::recordSpeedCommand(int8_t direction) {
+    _lastSpeedDirection = direction;
+    _lastSpeedCommandTime = millis();
+}
+
 void NavigationManager::updateMotorDetection(const GpsData& gpsData, float heading) {
+    // Calculate speed from GPS position changes
+    float currentSpeed = 0.0f;
+    if (_sampleIndex > 0) {
+        uint8_t prevIdx = (_sampleIndex - 1 + sampleHistorySize) % sampleHistorySize;
+        MotorSample& prev = _sampleHistory[prevIdx];
+        
+        if (prev.timestamp > 0) {
+            float dist = NavigationUtils::calculateDistance(
+                prev.lat, prev.lon, gpsData.latitude, gpsData.longitude);
+            float timeDiff = (millis() - prev.timestamp) / 1000.0f;
+            if (timeDiff > 0) {
+                currentSpeed = dist / timeDiff;
+            }
+        }
+    }
+    
     _sampleHistory[_sampleIndex] = {
-        gpsData.latitude, gpsData.longitude, heading, millis()
+        gpsData.latitude, gpsData.longitude, heading, currentSpeed, millis()
     };
     _sampleIndex = (_sampleIndex + 1) % sampleHistorySize;
 
+    // Check steering response
     constexpr uint32_t minResponseTimeMs = 500;
     uint32_t timeSinceCommand = millis() - _lastCommandTime;
-    if (timeSinceCommand < minResponseTimeMs || _lastMotorCommand == HeadingCorrection::None)
-        return;
+    
+    if (timeSinceCommand >= minResponseTimeMs && _lastMotorCommand != HeadingCorrection::None) {
+        uint8_t oldestIdx = _sampleIndex;
+        uint8_t newestIdx = (_sampleIndex - 1 + sampleHistorySize) % sampleHistorySize;
 
-    uint8_t oldestIdx = _sampleIndex;
-    uint8_t newestIdx = (_sampleIndex - 1 + sampleHistorySize) % sampleHistorySize;
+        MotorSample& oldest = _sampleHistory[oldestIdx];
+        MotorSample& newest = _sampleHistory[newestIdx];
 
-    MotorSample& oldest = _sampleHistory[oldestIdx];
-    MotorSample& newest = _sampleHistory[newestIdx];
+        if (newest.timestamp > oldest.timestamp && oldest.timestamp > 0) {
+            float headingChange = newest.heading - oldest.heading;
+            while (headingChange > 180.0f)
+                headingChange -= 360.0f;
+            while (headingChange < -180.0f)
+                headingChange += 360.0f;
 
-    if (newest.timestamp <= oldest.timestamp)
-        return;
+            constexpr float responseThreshold = 2.0f;
+            bool responding = false;
 
-    float headingChange = newest.heading - oldest.heading;
-    while (headingChange > 180.0f)
-        headingChange -= 360.0f;
-    while (headingChange < -180.0f)
-        headingChange += 360.0f;
+            switch (_lastMotorCommand) {
+                case HeadingCorrection::Left:
+                    responding = (headingChange < -responseThreshold);
+                    break;
+                case HeadingCorrection::Right:
+                    responding = (headingChange > responseThreshold);
+                    break;
+                case HeadingCorrection::None:
+                    responding = true;
+                    break;
+            }
 
-    constexpr float responseThreshold = 2.0f;
-    bool responding = false;
+            constexpr uint32_t noResponseTimeoutMs = 2000;
+            constexpr uint8_t maxNoResponseCount = 3;
 
-    switch (_lastMotorCommand) {
-        case HeadingCorrection::Left:
-            responding = (headingChange < -responseThreshold);
-            break;
-        case HeadingCorrection::Right:
-            responding = (headingChange > responseThreshold);
-            break;
-        case HeadingCorrection::None:
-            responding = true;
-            break;
-    }
-
-    constexpr uint32_t noResponseTimeoutMs = 2000;
-    constexpr uint8_t maxNoResponseCount = 3;
-
-    if (responding) {
-        _noResponseCount = 0;
-        _motorResponding = true;
-    } else if (timeSinceCommand > noResponseTimeoutMs) {
-        _noResponseCount++;
-        if (_noResponseCount > maxNoResponseCount) {
-            _motorResponding = false;
-            Serial.println("[Nav] WARNING: Motor not responding!");
+            if (responding) {
+                _noResponseCount = 0;
+                _motorResponding = true;
+            } else if (timeSinceCommand > noResponseTimeoutMs) {
+                _noResponseCount++;
+                if (_noResponseCount > maxNoResponseCount) {
+                    _motorResponding = false;
+                    Serial.println("[Nav] WARNING: Motor not responding to steering!");
+                }
+            }
         }
     }
+
+    // Check speed response
+    uint32_t timeSinceSpeedCmd = millis() - _lastSpeedCommandTime;
+    if (timeSinceSpeedCmd >= 1000 && _lastSpeedDirection != 0) {
+        // Compare speed over time
+        if (_sampleIndex >= 2) {
+            float speedChange = currentSpeed - _lastSpeed;
+            bool speedResponding = false;
+            
+            if (_lastSpeedDirection > 0) {
+                // Expected speed increase
+                speedResponding = (speedChange > 0.05f);  // At least 0.05 m/s increase
+            } else {
+                // Expected speed decrease
+                speedResponding = (speedChange < -0.05f);
+            }
+            
+            if (speedResponding) {
+                _speedNoResponseCount = 0;
+            } else if (timeSinceSpeedCmd > 3000) {
+                _speedNoResponseCount++;
+                if (_speedNoResponseCount > 3) {
+                    Serial.println("[Nav] WARNING: Motor not responding to speed changes!");
+                }
+            }
+        }
+    }
+    
+    _lastSpeed = currentSpeed;
 }
 
 bool NavigationManager::isMotorResponding() const {
     return _motorResponding;
+}
+
+// Command logging for app display
+
+MotorCommand NavigationManager::getLastSteeringCommand() const {
+    return _lastSteeringCmd;
+}
+
+MotorCommand NavigationManager::getLastSpeedCommand() const {
+    return _lastSpeedCmd;
+}
+
+uint32_t NavigationManager::getLastCommandTime() const {
+    return _lastCmdTimestamp;
+}
+
+bool NavigationManager::hasCommandPending() const {
+    return (_lastSteeringCmd != MotorCommand::None) || (_lastSpeedCmd != MotorCommand::None);
 }

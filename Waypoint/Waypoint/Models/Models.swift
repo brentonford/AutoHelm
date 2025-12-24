@@ -105,6 +105,14 @@ struct DeviceStatus: Codable {
     let speedLevel: Int?
     let targetSpeed: Int?
     let speedKmh: Double?
+    
+    // Command state from Helm device
+    let steeringCmd: String?
+    let speedCmd: String?
+    let lastCmdTime: UInt32?
+    let isAccelerating: Bool?
+    let isDecelerating: Bool?
+    let motorResponding: Bool?
 
     var currentLocation: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: currentLat, longitude: currentLon)
@@ -147,6 +155,18 @@ struct DeviceStatus: Codable {
     var isActiveNavigation: Bool {
         hasTarget == true && (navState == "navigating" || navState == "path" || navState == "spotlock")
     }
+    
+    var steeringCommand: String {
+        steeringCmd ?? "None"
+    }
+    
+    var speedCommand: String {
+        speedCmd ?? "None"
+    }
+    
+    var isMotorResponding: Bool {
+        motorResponding ?? true
+    }
 
     enum CodingKeys: String, CodingKey {
         case hasFix = "has_fix"
@@ -166,6 +186,12 @@ struct DeviceStatus: Codable {
         case speedLevel
         case targetSpeed
         case speedKmh
+        case steeringCmd
+        case speedCmd
+        case lastCmdTime
+        case isAccelerating
+        case isDecelerating
+        case motorResponding
     }
 }
 

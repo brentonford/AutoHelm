@@ -38,8 +38,45 @@ uint32_t holdStartTime = 0;
 constexpr uint32_t holdTransmitIntervalMs = 68;
 constexpr uint32_t holdTransmitTimeoutMs = 30000;
 
+// Command state tracking for app display
+const char* lastSteeringCommand = "None";
+const char* lastSpeedCommand = "None";
+uint32_t lastCommandTime = 0;
+
 constexpr float testWaypointLat = -33.8523f;
 constexpr float testWaypointLon = 151.2108f;
+
+const char* motorCommandToString(MotorCommand cmd) {
+    switch (cmd) {
+        case MotorCommand::None: return "None";
+        case MotorCommand::Left: return "LEFT";
+        case MotorCommand::Right: return "RIGHT";
+        case MotorCommand::SpeedUp: return "SPEED+";
+        case MotorCommand::SpeedDown: return "SPEED-";
+        case MotorCommand::MotorStop: return "STOP";
+        default: return "Unknown";
+    }
+}
+
+void performEmergencyStop() {
+    Serial.println("[SAFETY] EMERGENCY STOP - Stopping motor");
+    
+    // Stop any hold transmissions
+    if (isHoldActive && remoteAvailable) {
+        remote.transmitSingle(Button::Release);
+        isHoldActive = false;
+    }
+    
+    // Trigger navigation emergency stop (will gradually reduce speed to 0)
+    navigation.emergencyStop();
+    
+    // Update command state
+    lastSteeringCommand = "STOP";
+    lastSpeedCommand = "STOP";
+    lastCommandTime = millis();
+    
+    Serial.println("[SAFETY] Emergency stop initiated - decelerating to stop");
+}
 
 void printGpsStatus() {
     GpsData data = gps.getData();
@@ -65,7 +102,7 @@ void printCompassHeading() {
         Serial.println("[Compass] Not available");
         return;
     }
-    Serial.printf("[Compass] Heading: %.1f°\n", currentHeading);
+    Serial.printf("[Compass] Heading: %.1f deg\n", currentHeading);
 }
 
 void printSensorStatus() {
@@ -108,9 +145,14 @@ void printNavigationStatus() {
     Serial.printf("  State: %s\n", stateStr);
     Serial.printf("  Enabled: %s\n", navigation.isEnabled() ? "YES" : "NO");
     Serial.printf("  Spot Lock: %s\n", navigation.isSpotLockActive() ? "ACTIVE" : "OFF");
+    Serial.printf("  Accelerating: %s\n", navigation.isAccelerating() ? "YES" : "NO");
+    Serial.printf("  Decelerating: %s\n", navigation.isDecelerating() ? "YES" : "NO");
 
     SpeedState speedState = navigation.getSpeedState();
     Serial.printf("  Speed Level: %d/%d\n", speedState.currentLevel, speedState.targetLevel);
+
+    Serial.printf("  Last Steering Cmd: %s\n", lastSteeringCommand);
+    Serial.printf("  Last Speed Cmd: %s\n", lastSpeedCommand);
 
     if (navigation.hasTarget()) {
         Waypoint target = navigation.getTarget();
@@ -119,8 +161,8 @@ void printNavigationStatus() {
         if (navigation.isEnabled()) {
             NavigationData navData = navigation.getNavigationData();
             Serial.printf("  Distance: %.1f m\n", navData.distanceToTarget);
-            Serial.printf("  Bearing:  %.1f°\n", navData.bearingToTarget);
-            Serial.printf("  Relative: %+.1f°\n", navData.relativeAngle);
+            Serial.printf("  Bearing:  %.1f deg\n", navData.bearingToTarget);
+            Serial.printf("  Relative: %+.1f deg\n", navData.relativeAngle);
             Serial.printf("  Needs Correction: %s\n", navigation.needsCorrection() ? "YES" : "NO");
         }
     } else {
@@ -145,11 +187,18 @@ void processHeadingCorrection() {
     switch (correction) {
         case HeadingCorrection::Left:
             remote.transmitSingle(Button::Left);
+            lastSteeringCommand = "LEFT";
+            lastCommandTime = millis();
             break;
         case HeadingCorrection::Right:
             remote.transmitSingle(Button::Right);
+            lastSteeringCommand = "RIGHT";
+            lastCommandTime = millis();
             break;
         case HeadingCorrection::None:
+            if (navigation.isEnabled() && !navigation.needsCorrection()) {
+                lastSteeringCommand = "On Course";
+            }
             break;
     }
 }
@@ -161,10 +210,21 @@ void processSpeedControl() {
     int8_t speedAdj = navigation.getSpeedAdjustment();
     if (speedAdj > 0) {
         remote.transmitSingle(Button::Up);
-        Serial.println("[Speed] UP");
+        lastSpeedCommand = "SPEED+";
+        lastCommandTime = millis();
+        Serial.println("[Speed] UP - Gradual acceleration");
     } else if (speedAdj < 0) {
         remote.transmitSingle(Button::Down);
-        Serial.println("[Speed] DOWN");
+        lastSpeedCommand = "SPEED-";
+        lastCommandTime = millis();
+        Serial.println("[Speed] DOWN - Decelerating");
+    } else if (navigation.isEnabled()) {
+        SpeedState state = navigation.getSpeedState();
+        if (state.currentLevel == state.targetLevel && state.currentLevel > 0) {
+            lastSpeedCommand = "At Target";
+        } else if (state.currentLevel == 0 && state.targetLevel == 0) {
+            lastSpeedCommand = "Stopped";
+        }
     }
 }
 
@@ -277,6 +337,11 @@ void processBleCommand() {
             ble.sendResponse("{\"ack\":\"NAV_DISABLED\"}");
             break;
 
+        case BleCommand::EmergencyStop:
+            performEmergencyStop();
+            ble.sendResponse("{\"ack\":\"EMERGENCY_STOP\"}");
+            break;
+
         case BleCommand::StartCalibration:
             Serial.println("[BLE] Calibration start requested");
             ble.sendResponse("{\"ack\":\"CAL_STARTED\"}");
@@ -364,8 +429,17 @@ void broadcastStatus() {
     Waypoint target = navigation.getTarget();
     NavigationState navState = navigation.getState();
     SpeedState speedState = navigation.getSpeedState();
+    
+    // Build command state for app display
+    CommandState cmdState;
+    cmdState.steeringCommand = lastSteeringCommand;
+    cmdState.speedCommand = lastSpeedCommand;
+    cmdState.lastCommandTimeMs = lastCommandTime;
+    cmdState.isAccelerating = navigation.isAccelerating();
+    cmdState.isDecelerating = navigation.isDecelerating();
+    cmdState.motorResponding = navigation.isMotorResponding();
 
-    ble.sendStatus(gpsData, currentHeading, navData, target, navState, speedState);
+    ble.sendStatus(gpsData, currentHeading, navData, target, navState, speedState, cmdState);
 }
 
 void checkSafetyConditions() {
@@ -389,6 +463,14 @@ void checkSafetyConditions() {
 void checkBleConnection() {
     bool bleConnected = ble.isConnected();
 
+    // Check for disconnect event - trigger emergency stop
+    if (ble.wasJustDisconnected()) {
+        Serial.println("[SAFETY] BLE disconnected - triggering emergency stop");
+        performEmergencyStop();
+        ble.clearDisconnectFlag();
+    }
+
+    // Also check state transition
     if (bleWasConnected && !bleConnected) {
         if (isHoldActive) {
             Serial.println("[Safety] BLE disconnected - stopping hold transmission");
@@ -399,8 +481,8 @@ void checkBleConnection() {
         }
 
         if (navigation.isEnabled()) {
-            Serial.println("[Safety] BLE disconnected - disabling navigation");
-            navigation.setEnabled(false);
+            Serial.println("[Safety] BLE disconnected - emergency stop");
+            performEmergencyStop();
         }
     }
 
@@ -419,14 +501,21 @@ void printPeriodicStatus() {
 
     GpsData gpsData = gps.getData();
     NavigationData navData = navigation.getNavigationData();
+    SpeedState speedState = navigation.getSpeedState();
 
     Serial.println();
     Serial.println("[Nav] Periodic Status:");
     Serial.printf("  GPS: %s, Sats: %d, HDOP: %.1f\n",
         gpsData.hasFix ? "FIX" : "NO FIX", gpsData.satellites, gpsData.hdop);
     Serial.printf("  Position: %.6f, %.6f\n", gpsData.latitude, gpsData.longitude);
-    Serial.printf("  Heading: %.1f°, Target Bearing: %.1f°\n", currentHeading, navData.bearingToTarget);
-    Serial.printf("  Distance: %.1f m, Relative: %+.1f°\n", navData.distanceToTarget, navData.relativeAngle);
+    Serial.printf("  Heading: %.1f deg, Target Bearing: %.1f deg\n", currentHeading, navData.bearingToTarget);
+    Serial.printf("  Distance: %.1f m, Relative: %+.1f deg\n", navData.distanceToTarget, navData.relativeAngle);
+    Serial.printf("  Speed: %d/%d (Accel: %s, Decel: %s)\n", 
+        speedState.currentLevel, speedState.targetLevel,
+        navigation.isAccelerating() ? "YES" : "NO",
+        navigation.isDecelerating() ? "YES" : "NO");
+    Serial.printf("  Last Steering: %s, Last Speed: %s\n", lastSteeringCommand, lastSpeedCommand);
+    Serial.printf("  Motor Responding: %s\n", navigation.isMotorResponding() ? "YES" : "NO");
 }
 
 void setup() {
@@ -475,6 +564,7 @@ void setup() {
     Serial.println("  Nav:     x (clear waypoint)");
     Serial.println("  Spot:    p (engage spot lock)");
     Serial.println("  Spot:    o (disengage spot lock)");
+    Serial.println("  Safety:  ! (emergency stop)");
 }
 
 void loop() {
@@ -499,6 +589,11 @@ void loop() {
         GpsData gpsData = gps.getData();
         navigation.update(gpsData, currentHeading);
         processHeadingCorrection();
+        processSpeedControl();
+    }
+    
+    // Process emergency deceleration even when navigation disabled
+    if (navigation.isDecelerating() && remoteAvailable) {
         processSpeedControl();
     }
 
@@ -546,6 +641,10 @@ void loop() {
         }
         case 'o':
             navigation.disengageSpotLock();
+            break;
+            
+        case '!':
+            performEmergencyStop();
             break;
     }
 }
