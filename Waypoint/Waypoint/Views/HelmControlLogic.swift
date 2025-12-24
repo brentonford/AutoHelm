@@ -92,6 +92,20 @@ extension HelmControlView {
     func handleWaypointChange() {
         guard let sensors = bluetooth.sensorData, let waypoint = selectedWaypoint else { return }
         totalDistance = sensors.currentLocation.distance(to: waypoint.coordinate)
+        
+        if waypoint.approachSpeed > 0 {
+            targetSpeedKmh = waypoint.approachSpeed
+            targetSpeedLevel = calculateTargetSpeedLevel(for: waypoint.approachSpeed)
+        } else {
+            targetSpeedKmh = 3.6
+            targetSpeedLevel = 10
+        }
+    }
+    
+    func calculateTargetSpeedLevel(for speedKmh: Double) -> Int {
+        let speedMs = speedKmh / 3.6
+        let level = Int(round(speedMs / 0.36))
+        return min(max(level, 1), 10)
     }
     
     func startNavigation(to waypoint: Waypoint) {
@@ -100,19 +114,32 @@ extension HelmControlView {
         totalDistance = sensors.currentLocation.distance(to: waypoint.coordinate)
         motorOn = false
         currentSpeedLevel = 0
-        targetSpeedLevel = 4
         lastSpeedCommandTime = nil
         accelerationStartTime = Date()
         steeringCommand = "None"
-        speedCommand = "Stopped"
+        speedCommand = "Initializing"
         navigationEnabled = true
+        navigationPhase = .clearingPowerLevel
+        motorVerificationAttempts = 0
+        lastGpsSpeed = 0
         
-        startNavigationAutomation()
+        if waypoint.approachSpeed > 0 {
+            targetSpeedKmh = waypoint.approachSpeed
+            targetSpeedLevel = calculateTargetSpeedLevel(for: waypoint.approachSpeed)
+        } else {
+            targetSpeedKmh = 3.6
+            targetSpeedLevel = 10
+        }
+        
+        Task {
+            await initializeMotor()
+        }
     }
     
     func stopNavigation() {
         navigationEnabled = false
         stopNavigationAutomation()
+        navigationPhase = .idle
         
         Task {
             await shutdownMotor()
@@ -126,6 +153,77 @@ extension HelmControlView {
         if isSpotLockEngaged {
             stopSpotLock()
         }
+    }
+    
+    func initializeMotor() async {
+        navigationPhase = .clearingPowerLevel
+        speedCommand = "Clearing power levels..."
+        
+        for _ in 0..<10 {
+            bluetooth.sendMotorCommand("RF_DOWN")
+            await delay(0.5)
+        }
+        
+        await delay(1.0)
+        
+        navigationPhase = .verifyingMotor
+        speedCommand = "Verifying motor response..."
+        motorVerificationAttempts = 0
+        
+        let verificationSuccess = await verifyMotorResponse()
+        
+        if verificationSuccess {
+            navigationPhase = .accelerating
+            startNavigationAutomation()
+        } else {
+            navigationEnabled = false
+            navigationPhase = .idle
+            errorMessage = "Motor not responding to commands. Check motor connection and power."
+            showingError = true
+            await shutdownMotor()
+        }
+    }
+    
+    func verifyMotorResponse() async -> Bool {
+        while motorVerificationAttempts < Constants.maxMotorVerificationAttempts {
+            guard let sensors = bluetooth.sensorData else {
+                await delay(1.0)
+                continue
+            }
+            
+            let initialSpeed = sensors.speedKmh
+            lastGpsSpeed = initialSpeed
+            speedVerificationStartTime = Date()
+            
+            bluetooth.sendMotorCommand("RF_MOTOR")
+            await delay(Constants.navigationCommandDelaySeconds)
+            
+            bluetooth.sendMotorCommand("RF_UP")
+            await delay(Constants.motorVerificationDelaySeconds)
+            
+            guard let updatedSensors = bluetooth.sensorData else {
+                motorVerificationAttempts += 1
+                continue
+            }
+            
+            let currentSpeed = updatedSensors.speedKmh
+            let speedIncrease = currentSpeed - initialSpeed
+            
+            if speedIncrease > 0.2 {
+                motorOn = true
+                currentSpeedLevel = 1
+                return true
+            }
+            
+            motorVerificationAttempts += 1
+            
+            if motorVerificationAttempts < Constants.maxMotorVerificationAttempts {
+                bluetooth.sendMotorCommand("RF_MOTOR")
+                await delay(Constants.navigationCommandDelaySeconds)
+            }
+        }
+        
+        return false
     }
     
     func startNavigationAutomation() {
@@ -151,21 +249,24 @@ extension HelmControlView {
         let distance = sensors.currentLocation.distance(to: waypoint.coordinate)
         if distance <= waypoint.arrivalRadius {
             showingArrivalAlert = true
-            stopNavigation()
+            navigationPhase = .arrived
+            
+            if waypoint.spotLockEnabled {
+                isSpotLockEngaged = true
+                spotLockPosition = waypoint.coordinate
+                startSpotLockAutomation()
+            } else {
+                stopNavigation()
+            }
             return
         }
         
-        if !motorOn && currentSpeedLevel == 0 {
-            if let accelStart = accelerationStartTime {
-                let timeSinceStart = Date().timeIntervalSince(accelStart)
-                if timeSinceStart >= Constants.initialAccelDelaySeconds {
-                    bluetooth.sendMotorCommand("RF_MOTOR")
-                    await delay(Constants.navigationCommandDelaySeconds)
-                    motorOn = true
-                }
-            }
-        }
+        await performSteeringCorrection(sensors: sensors, waypoint: waypoint)
         
+        await performSpeedControl(sensors: sensors)
+    }
+    
+    func performSteeringCorrection(sensors: SensorData, waypoint: Waypoint) async {
         let bearing = sensors.currentLocation.bearing(to: waypoint.coordinate)
         let relativeAngle = bearing - sensors.heading
         let normalizedRelative = ((relativeAngle + 180).truncatingRemainder(dividingBy: 360)) - 180
@@ -178,29 +279,62 @@ extension HelmControlView {
                 steeringCommand = "LEFT"
                 bluetooth.sendMotorCommand("RF_LEFT")
             }
-            await delay(Constants.navigationCommandDelaySeconds)
+            await delay(0.5)
         } else {
             steeringCommand = "On Course"
         }
-        
-        if currentSpeedLevel < targetSpeedLevel && motorOn {
+    }
+    
+    func performSpeedControl(sensors: SensorData) async {
+        if currentSpeedLevel < targetSpeedLevel {
             if let lastCmd = lastSpeedCommandTime {
                 let timeSinceCommand = Date().timeIntervalSince(lastCmd)
-                if timeSinceCommand >= Constants.accelIntervalSeconds {
+                if timeSinceCommand >= 1.5 {
                     speedCommand = "SPEED+"
                     bluetooth.sendMotorCommand("RF_UP")
                     currentSpeedLevel += 1
                     lastSpeedCommandTime = Date()
-                    await delay(Constants.navigationCommandDelaySeconds)
+                    navigationPhase = .accelerating
+                    await delay(0.5)
                 }
             } else {
                 speedCommand = "SPEED+"
                 bluetooth.sendMotorCommand("RF_UP")
                 currentSpeedLevel += 1
                 lastSpeedCommandTime = Date()
-                await delay(Constants.navigationCommandDelaySeconds)
+                navigationPhase = .accelerating
+                await delay(0.5)
             }
-        } else if currentSpeedLevel == targetSpeedLevel {
+        } else if currentSpeedLevel > targetSpeedLevel {
+            speedCommand = "SPEED-"
+            bluetooth.sendMotorCommand("RF_DOWN")
+            currentSpeedLevel -= 1
+            lastSpeedCommandTime = Date()
+            await delay(0.5)
+        } else {
+            navigationPhase = .cruising
+            await maintainTargetSpeed(sensors: sensors)
+        }
+    }
+    
+    func maintainTargetSpeed(sensors: SensorData) async {
+        let currentSpeed = sensors.speedKmh
+        
+        if currentSpeed < targetSpeedKmh - Constants.speedToleranceKmh && currentSpeedLevel < 10 {
+            navigationPhase = .maintaining
+            speedCommand = "SPEED+ (maintaining)"
+            bluetooth.sendMotorCommand("RF_UP")
+            currentSpeedLevel += 1
+            lastSpeedCommandTime = Date()
+            await delay(0.5)
+        } else if currentSpeed > targetSpeedKmh + Constants.speedToleranceKmh && currentSpeedLevel > 1 {
+            navigationPhase = .maintaining
+            speedCommand = "SPEED- (maintaining)"
+            bluetooth.sendMotorCommand("RF_DOWN")
+            currentSpeedLevel -= 1
+            lastSpeedCommandTime = Date()
+            await delay(0.5)
+        } else {
             speedCommand = "At Target"
         }
     }
@@ -208,11 +342,13 @@ extension HelmControlView {
     func shutdownMotor() async {
         guard motorOn else { return }
         
+        speedCommand = "Shutting down..."
+        
         while currentSpeedLevel > 0 {
             speedCommand = "SPEED-"
             bluetooth.sendMotorCommand("RF_DOWN")
             currentSpeedLevel -= 1
-            await delay(Constants.navigationCommandDelaySeconds)
+            await delay(1.0)
         }
         
         bluetooth.sendMotorCommand("RF_MOTOR")
@@ -224,6 +360,7 @@ extension HelmControlView {
     func startSpotLockAutomation() {
         stopSpotLock()
         isHoldingMomentary = false
+        navigationPhase = .spotLock
         
         spotLockTimer = Timer.scheduledTimer(withTimeInterval: Constants.navigationCommandDelaySeconds, repeats: true) { [self] _ in
             Task { @MainActor in

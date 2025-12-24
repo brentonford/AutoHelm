@@ -20,24 +20,42 @@ struct HelmControlView: View {
     @State var navigationTimer: Timer?
     @State var motorOn = false
     @State var currentSpeedLevel: Int = 0
-    @State var targetSpeedLevel: Int = 4
+    @State var targetSpeedLevel: Int = 10
+    @State var targetSpeedKmh: Double = 3.6
     @State var lastSpeedCommandTime: Date?
     @State var accelerationStartTime: Date?
     @State var steeringCommand: String = "None"
     @State var speedCommand: String = "Stopped"
+    @State var navigationPhase: NavigationPhase = .idle
+    @State var motorVerificationAttempts: Int = 0
+    @State var lastGpsSpeed: Double = 0
+    @State var speedVerificationStartTime: Date?
     
     @State var spotLockTimer: Timer?
     @State var spotLockPosition: CLLocationCoordinate2D?
     @State var isSpotLockEngaged = false
     @State var isHoldingMomentary = false
     
+    enum NavigationPhase {
+        case idle
+        case clearingPowerLevel
+        case verifyingMotor
+        case accelerating
+        case cruising
+        case maintaining
+        case spotLock
+        case arrived
+    }
+    
     enum Constants {
         static let navigationCommandDelaySeconds: Double = 2.0
-        static let initialAccelDelaySeconds: Double = 2.0
-        static let accelIntervalSeconds: Double = 1.5
+        static let speedMaintenanceIntervalSeconds: Double = 5.0
+        static let motorVerificationDelaySeconds: Double = 3.0
         static let spotLockHoldRadius: Double = 2.0
         static let headingToleranceDegrees: Double = 15.0
         static let jogDistanceM: Double = 1.5
+        static let speedToleranceKmh: Double = 0.5
+        static let maxMotorVerificationAttempts: Int = 3
     }
 
     private var canNavigate: Bool {
@@ -356,7 +374,7 @@ struct HelmControlView: View {
             Spacer()
             metricColumn(title: "Distance", value: formatDistance(distance))
             Spacer()
-            metricColumn(title: "Est. Time", value: formatEstimatedTime(distance / 1.0))
+            metricColumn(title: "Est. Time", value: formatEstimatedTime(distance / (targetSpeedKmh / 3.6)))
         }
     }
     
@@ -383,12 +401,41 @@ struct HelmControlView: View {
     @ViewBuilder
     private var autonomousCommandContent: some View {
         if navigationEnabled {
+            phaseStatusView
+            targetSpeedView
             commandStatusView
-            accelerationStatusView
             powerLevelView
+            speedStatusView
         } else {
             Text("Navigation disabled")
                 .foregroundColor(.secondary)
+        }
+    }
+    
+    private var phaseStatusView: some View {
+        HStack {
+            Text("Navigation Phase")
+                .font(.subheadline)
+            Spacer()
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(phaseColor(navigationPhase))
+                    .frame(width: 10, height: 10)
+                Text(phaseText(navigationPhase))
+                    .font(.subheadline.bold())
+                    .foregroundColor(phaseColor(navigationPhase))
+            }
+        }
+    }
+    
+    private var targetSpeedView: some View {
+        HStack {
+            Text("Target Speed")
+                .font(.subheadline)
+            Spacer()
+            Text(String(format: "%.1f km/hr", targetSpeedKmh))
+                .font(.subheadline.bold())
+                .foregroundColor(.blue)
         }
     }
     
@@ -427,28 +474,18 @@ struct HelmControlView: View {
     }
     
     @ViewBuilder
-    private var accelerationStatusView: some View {
-        if currentSpeedLevel < targetSpeedLevel {
-            statusRow(icon: "arrow.up.circle.fill", text: "Accelerating...", color: .blue)
-        } else if currentSpeedLevel > targetSpeedLevel {
-            statusRow(icon: "arrow.down.circle.fill", text: "Decelerating...", color: .orange)
-        }
-    }
-    
-    private func statusRow(icon: String, text: String, color: Color) -> some View {
-        HStack {
-            Image(systemName: icon)
-                .foregroundColor(color)
-            Text(text)
-                .font(.subheadline)
-                .foregroundColor(color)
-            Spacer()
-        }
+    private var powerLevelView: some View {
+        LabeledContent("Power Level", value: "\(currentSpeedLevel)/10")
     }
     
     @ViewBuilder
-    private var powerLevelView: some View {
-        LabeledContent("Power Level", value: "\(currentSpeedLevel)/\(targetSpeedLevel)")
+    private var speedStatusView: some View {
+        if let sensors = bluetooth.sensorData {
+            let gpsSpeed = sensors.speedKmh
+            if gpsSpeed > 0 {
+                LabeledContent("GPS Speed", value: String(format: "%.1f km/hr", gpsSpeed))
+            }
+        }
         if currentSpeedLevel > 0 {
             let estimatedSpeed = Double(currentSpeedLevel) * 0.36
             LabeledContent("Est. Speed", value: String(format: "%.1f km/hr", estimatedSpeed))
@@ -532,6 +569,31 @@ struct HelmControlView: View {
             Spacer()
         }
         .listRowBackground(Color.clear)
+    }
+    
+    private func phaseColor(_ phase: NavigationPhase) -> Color {
+        switch phase {
+        case .idle: return .gray
+        case .clearingPowerLevel: return .orange
+        case .verifyingMotor: return .yellow
+        case .accelerating: return .blue
+        case .cruising, .maintaining: return .green
+        case .spotLock: return .purple
+        case .arrived: return .green
+        }
+    }
+    
+    private func phaseText(_ phase: NavigationPhase) -> String {
+        switch phase {
+        case .idle: return "Idle"
+        case .clearingPowerLevel: return "Clearing Power"
+        case .verifyingMotor: return "Verifying Motor"
+        case .accelerating: return "Accelerating"
+        case .cruising: return "Cruising"
+        case .maintaining: return "Maintaining Speed"
+        case .spotLock: return "Spot Lock"
+        case .arrived: return "Arrived"
+        }
     }
 }
 

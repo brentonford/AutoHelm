@@ -37,6 +37,9 @@ class BluetoothManager: NSObject, ObservableObject {
     private var reconnectTimer: Timer?
     private var rssiTimer: Timer?
     private var shouldReconnect = true
+    
+    private var locationTracker: LocationWithSpeed?
+    private var lastLocationUpdate: Date?
 
     override init() {
         super.init()
@@ -140,12 +143,29 @@ class BluetoothManager: NSObject, ObservableObject {
     private func clearDeviceData() {
         sensorData = nil
         lastResponse = nil
+        locationTracker = nil
+        lastLocationUpdate = nil
     }
     
     private func parseSensorStatus(_ data: Data) {
         do {
-            let status = try JSONDecoder().decode(SensorData.self, from: data)
+            var status = try JSONDecoder().decode(SensorData.self, from: data)
+            
+            let coordinate = CLLocationCoordinate2D(
+                latitude: status.currentLat,
+                longitude: status.currentLon
+            )
+            
+            if locationTracker == nil {
+                locationTracker = LocationWithSpeed(coordinate: coordinate)
+            } else {
+                locationTracker?.updateLocation(coordinate)
+            }
+            
+            status.calculatedSpeed = locationTracker?.speed ?? 0
+            
             self.sensorData = status
+            lastLocationUpdate = Date()
         } catch {
             print("Sensor status parse error: \(error)")
         }
@@ -316,9 +336,14 @@ struct SensorData: Codable, Equatable {
     let altitude: Double
     let hdop: Double
     let heading: Double
+    var calculatedSpeed: Double = 0
 
     var currentLocation: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: currentLat, longitude: currentLon)
+    }
+    
+    var speedKmh: Double {
+        calculatedSpeed * 3.6
     }
 
     var isNavigationReady: Bool {

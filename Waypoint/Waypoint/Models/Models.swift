@@ -190,6 +190,39 @@ enum JogDirection {
     case right
 }
 
+class LocationWithSpeed {
+    var coordinate: CLLocationCoordinate2D
+    var speed: Double
+    var timestamp: Date
+    
+    private var lastCoordinate: CLLocationCoordinate2D?
+    private var lastTimestamp: Date?
+    
+    init(coordinate: CLLocationCoordinate2D) {
+        self.coordinate = coordinate
+        self.speed = 0
+        self.timestamp = Date()
+    }
+    
+    func updateLocation(_ newCoordinate: CLLocationCoordinate2D) {
+        let now = Date()
+        
+        if let lastCoord = lastCoordinate, let lastTime = lastTimestamp {
+            let timeDiff = now.timeIntervalSince(lastTime)
+            
+            if timeDiff > 0 {
+                let distance = coordinate.distance(to: newCoordinate)
+                speed = distance / timeDiff
+            }
+        }
+        
+        lastCoordinate = coordinate
+        lastTimestamp = timestamp
+        coordinate = newCoordinate
+        timestamp = now
+    }
+}
+
 extension CLLocationCoordinate2D: @retroactive Codable {
     enum CodingKeys: String, CodingKey {
         case latitude

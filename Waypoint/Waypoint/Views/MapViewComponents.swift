@@ -150,7 +150,7 @@ struct SelectedWaypointCard: View {
                 }
                 .buttonStyle(.bordered)
                 .tint(Color.red)
-            } else if !isSpotLockActive {
+            } else {
                 Button {
                     onNavigate()
                 } label: {
