@@ -4,14 +4,14 @@ import CoreLocation
 import Combine
 
 private enum BleUuids {
-    static let service = CBUUID(string: "FFE0")
-    static let sensorStatus = CBUUID(string: "FFE2")
-    static let command = CBUUID(string: "FFE3")
-    static let calibration = CBUUID(string: "FFE4")
+    nonisolated static let service = CBUUID(string: "FFE0")
+    nonisolated static let sensorStatus = CBUUID(string: "FFE2")
+    nonisolated static let command = CBUUID(string: "FFE3")
+    nonisolated static let calibration = CBUUID(string: "FFE4")
 }
 
 private enum BleConstants {
-    static let deviceName = "Helm"
+    nonisolated static let deviceName = "Helm"
     static let reconnectDelaySeconds: TimeInterval = 3.0
     static let rssiUpdateIntervalSeconds: TimeInterval = 2.0
 }

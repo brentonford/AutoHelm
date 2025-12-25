@@ -159,18 +159,6 @@ enum BLESignalStrength {
     }
 }
 
-struct TrackPoint: Identifiable, Codable {
-    let id: UUID
-    let coordinate: CLLocationCoordinate2D
-    let timestamp: Date
-    
-    init(coordinate: CLLocationCoordinate2D, timestamp: Date = Date()) {
-        self.id = UUID()
-        self.coordinate = coordinate
-        self.timestamp = timestamp
-    }
-}
-
 struct BleResponse: Codable, Equatable {
     let ack: String?
     let error: String?
