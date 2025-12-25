@@ -26,7 +26,7 @@ bool BleManager::begin() {
 
     _commandChar = _service->createCharacteristic(
         BleConfig::commandCharUuid,
-        BLECharacteristic::PROPERTY_WRITE
+        BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR
     );
     _commandChar->setCallbacks(this);
 
@@ -37,6 +37,7 @@ bool BleManager::begin() {
     _calibrationChar->addDescriptor(new BLE2902());
 
     _service->start();
+    Serial.println("[BLE] Service started");
 
     BLEAdvertising* advertising = BLEDevice::getAdvertising();
     advertising->addServiceUUID(BleConfig::serviceUuid);
@@ -77,59 +78,150 @@ void BleManager::clearDisconnectFlag() {
 }
 
 void BleManager::onWrite(BLECharacteristic* characteristic) {
-    String uuid = characteristic->getUUID().toString().c_str();
-    String value = characteristic->getValue().c_str();
-
-    if (characteristic == _commandChar) {
-        Serial.printf("[BLE] Command received: %s\n", value.c_str());
-        parseCommand(value);
+    
+    if (!characteristic) {
+        Serial.println("[BLE] ERROR: characteristic is NULL");
+        return;
     }
+
+    if (characteristic != _commandChar) {
+        Serial.println("[BLE] Not command characteristic - ignoring");
+        return;
+    }
+
+    // Get the raw data pointer and length
+    uint8_t* pData = characteristic->getData();
+    size_t len = characteristic->getValue().length();
+    
+    if (len == 0 || !pData) {
+        Serial.println("[BLE] Empty write or null data - ignoring");
+        return;
+    }
+    
+    if (len > 127) {
+        Serial.printf("[BLE] ERROR: Command too long (%d bytes)\n", len);
+        return;
+    }
+
+    // Copy raw bytes to buffer
+    static char cmdBuffer[128];
+    memcpy(cmdBuffer, pData, len);
+    cmdBuffer[len] = '\0';
+
+    bool isAllNullBytes = true;
+    for (size_t i = 0; i < len; i++) {
+        if (cmdBuffer[i] != '\0') {
+            isAllNullBytes = false;
+            break;
+        }
+    }
+    
+    if (isAllNullBytes) {
+        Serial.println("[BLE] All null bytes - ignoring");
+        return;
+    }
+
+    parseCommand(cmdBuffer);
 }
 
-void BleManager::parseCommand(const String& data) {
-    String cmd = data;
-    cmd.trim();
-    cmd.toUpperCase();
+void BleManager::parseCommand(const char* data) {
+    if (!data) {
+        return;
+    }
+    
+    size_t dataLen = strlen(data);
+    if (dataLen == 0) {
+        return;
+    }
+    
+    if (dataLen > 127) {
+        Serial.println("[BLE] ERROR: Invalid command length");
+        return;
+    }
 
-    if (cmd == "START_CAL") {
+    static char cmdBuffer[128];
+    strncpy(cmdBuffer, data, 127);
+    cmdBuffer[127] = '\0';
+    
+    char* cmd = cmdBuffer;
+    while (*cmd && (*cmd == ' ' || *cmd == '\t' || *cmd == '\r' || *cmd == '\n' || *cmd == '\0')) {
+        cmd++;
+    }
+    
+    size_t len = strlen(cmd);
+    if (len == 0) {
+        return;
+    }
+    
+    while (len > 0 && (cmd[len-1] == ' ' || cmd[len-1] == '\t' || cmd[len-1] == '\r' || cmd[len-1] == '\n')) {
+        cmd[len-1] = '\0';
+        len--;
+    }
+    
+    if (len == 0) {
+        return;
+    }
+    
+    for (char* p = cmd; *p; p++) {
+        *p = toupper(*p);
+    }
+
+    if (strcmp(cmd, "START_CAL") == 0) {
         _status.pendingCommand = BleCommand::StartCalibration;
         sendResponse("{\"ack\":\"START_CAL\"}");
-    } else if (cmd == "STOP_CAL") {
+    } else if (strcmp(cmd, "STOP_CAL") == 0) {
         _status.pendingCommand = BleCommand::StopCalibration;
         sendResponse("{\"ack\":\"STOP_CAL\"}");
-    } else if (cmd.startsWith("RF_")) {
-        String rfCmd = cmd.substring(3);
+    } else if (strncmp(cmd, "RF_", 3) == 0) {
+        if (len < 4 || len > 32) {
+            Serial.println("[BLE] ERROR: Invalid RF command length");
+            return;
+        }
 
-        if (rfCmd.endsWith("_HOLD")) {
-            rfCmd = rfCmd.substring(0, rfCmd.length() - 5);
-            _status.pendingRfCommand = rfCmd;
+        static char rfCmdBuffer[32];
+        strncpy(rfCmdBuffer, cmd + 3, 31);
+        rfCmdBuffer[31] = '\0';
+        
+        size_t rfLen = strlen(rfCmdBuffer);
+
+        if (rfLen > 5 && strcmp(rfCmdBuffer + rfLen - 5, "_HOLD") == 0) {
+            rfCmdBuffer[rfLen - 5] = '\0';
+            if (strlen(rfCmdBuffer) == 0) {
+                Serial.println("[BLE] ERROR: Invalid RF_HOLD command");
+                return;
+            }
+            _status.pendingRfCommand = String(rfCmdBuffer);
             _status.isHoldCommand = true;
         } else {
-            _status.pendingRfCommand = rfCmd;
+            _status.pendingRfCommand = String(rfCmdBuffer);
             _status.isHoldCommand = false;
         }
 
-        sendResponse("{\"ack\":\"" + cmd + "\"}");
+        char ack[64];
+        snprintf(ack, sizeof(ack), "{\"ack\":\"%s\"}", cmd);
+        sendResponse(ack);
     } else {
         sendResponse("{\"error\":\"Unknown command\"}");
     }
 }
 
 String BleManager::buildSensorStatusJson(const GpsData& gpsData, float heading) {
-    String json = "{";
-    json += "\"has_fix\":" + String(gpsData.hasFix ? "true" : "false") + ",";
-    json += "\"satellites\":" + String(gpsData.satellites) + ",";
-    json += "\"currentLat\":" + String(gpsData.latitude, 6) + ",";
-    json += "\"currentLon\":" + String(gpsData.longitude, 6) + ",";
-    json += "\"altitude\":" + String(gpsData.altitude, 1) + ",";
-    json += "\"hdop\":" + String(gpsData.hdop, 1) + ",";
-    json += "\"heading\":" + String(heading, 1);
-    json += "}";
-    return json;
+    static char json[256];
+    snprintf(json, sizeof(json),
+        "{\"has_fix\":%s,\"satellites\":%d,\"currentLat\":%.6f,\"currentLon\":%.6f,\"altitude\":%.1f,\"hdop\":%.1f,\"heading\":%.1f}",
+        gpsData.hasFix ? "true" : "false",
+        gpsData.satellites,
+        gpsData.latitude,
+        gpsData.longitude,
+        gpsData.altitude,
+        gpsData.hdop,
+        heading
+    );
+    return String(json);
 }
 
 void BleManager::sendSensorStatus(const GpsData& gpsData, float heading) {
-    if (!_status.connected)
+    if (!_status.connected || !_sensorStatusChar)
         return;
 
     uint32_t now = millis();
@@ -138,24 +230,59 @@ void BleManager::sendSensorStatus(const GpsData& gpsData, float heading) {
 
     _lastStatusTime = now;
 
-    String json = buildSensorStatusJson(gpsData, heading);
-    _sensorStatusChar->setValue(json.c_str());
+    static char json[256];
+    snprintf(json, sizeof(json),
+        "{\"has_fix\":%s,\"satellites\":%d,\"currentLat\":%.6f,\"currentLon\":%.6f,\"altitude\":%.1f,\"hdop\":%.1f,\"heading\":%.1f}",
+        gpsData.hasFix ? "true" : "false",
+        gpsData.satellites,
+        gpsData.latitude,
+        gpsData.longitude,
+        gpsData.altitude,
+        gpsData.hdop,
+        heading
+    );
+
+    _sensorStatusChar->setValue((uint8_t*)json, strlen(json));
     _sensorStatusChar->notify();
 }
 
 void BleManager::sendCalibrationData(const String& data) {
-    if (!_status.connected)
+    if (!_status.connected || !_calibrationChar)
         return;
 
-    _calibrationChar->setValue(data.c_str());
+    if (data.length() > 512) {
+        Serial.println("[BLE] ERROR: Calibration data too large");
+        return;
+    }
+
+    _calibrationChar->setValue((uint8_t*)data.c_str(), data.length());
     _calibrationChar->notify();
 }
 
 void BleManager::sendResponse(const String& response) {
-    if (!_status.connected)
+    if (!_status.connected || !_calibrationChar)
         return;
 
-    _calibrationChar->setValue(response.c_str());
+    if (response.length() > 256) {
+        Serial.println("[BLE] ERROR: Response too large");
+        return;
+    }
+
+    _calibrationChar->setValue((uint8_t*)response.c_str(), response.length());
+    _calibrationChar->notify();
+}
+
+void BleManager::sendResponse(const char* response) {
+    if (!_status.connected || !_calibrationChar)
+        return;
+
+    size_t len = strlen(response);
+    if (len > 256) {
+        Serial.println("[BLE] ERROR: Response too large");
+        return;
+    }
+
+    _calibrationChar->setValue((uint8_t*)response, len);
     _calibrationChar->notify();
 }
 

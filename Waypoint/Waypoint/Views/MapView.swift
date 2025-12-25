@@ -4,6 +4,7 @@ import CoreLocation
 
 struct MapView: View {
     @EnvironmentObject private var bluetooth: BluetoothManager
+    @StateObject private var spotLockController: SpotLockController
     
     @Binding var selectedWaypoint: Waypoint?
     @Binding var waypoints: [Waypoint]
@@ -17,7 +18,14 @@ struct MapView: View {
     @State private var isGeocodingName = false
     @State private var showingArrivalAlert = false
     @State private var totalDistance: Double = 0
-    @State private var isSpotLockEngaged = false
+    @State private var spotLockTimer: Timer?
+    
+    init(selectedWaypoint: Binding<Waypoint?>, waypoints: Binding<[Waypoint]>, navigationEnabled: Binding<Bool>, bluetooth: BluetoothManager) {
+        self._selectedWaypoint = selectedWaypoint
+        self._waypoints = waypoints
+        self._navigationEnabled = navigationEnabled
+        self._spotLockController = StateObject(wrappedValue: SpotLockController(bluetooth: bluetooth))
+    }
     
     private enum Constants {
         static let longPressMinimumDuration: Double = 0.5
@@ -36,7 +44,7 @@ struct MapView: View {
     }
     
     private var isSpotLockActive: Bool {
-        isSpotLockEngaged
+        spotLockController.isActive
     }
     
     private var navigationProgress: Double {
@@ -60,7 +68,7 @@ struct MapView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            if waypoints.isEmpty && selectedWaypoint == nil {
+            if waypoints.isEmpty && selectedWaypoint == nil && !spotLockController.isActive {
                 Text("Long press on map to create a waypoint")
                     .font(.caption)
                     .padding(8)
@@ -107,7 +115,20 @@ struct MapView: View {
             }
             if newState != .connected {
                 totalDistance = 0
+                Task {
+                    await spotLockController.disengage()
+                }
             }
+        }
+        .onChange(of: spotLockController.isActive) { _, isActive in
+            if isActive {
+                startSpotLockTimer()
+            } else {
+                stopSpotLockTimer()
+            }
+        }
+        .onDisappear {
+            stopSpotLockTimer()
         }
     }
 
@@ -141,6 +162,22 @@ struct MapView: View {
                     MapPolyline(coordinates: [helmLocation, selected.coordinate])
                         .stroke(Color.orange, style: StrokeStyle(lineWidth: 2, dash: [5, 5]))
                 }
+                
+                if let lockPosition = spotLockController.lockPosition {
+                    Annotation("Spot Lock", coordinate: lockPosition) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.purple.opacity(0.3))
+                                .frame(width: 40, height: 40)
+                            Circle()
+                                .stroke(Color.purple, lineWidth: 3)
+                                .frame(width: 40, height: 40)
+                            Image(systemName: "pin.fill")
+                                .foregroundColor(.purple)
+                                .font(.title2)
+                        }
+                    }
+                }
             }
             .mapStyle(.standard)
             .mapControls {
@@ -160,6 +197,10 @@ struct MapView: View {
     
     private var overlayControls: some View {
         VStack {
+            if spotLockController.isActive {
+                spotLockStatusCard
+                    .padding(.top)
+            }
 
             Spacer()
 
@@ -186,8 +227,167 @@ struct MapView: View {
                     }
                 )
                 .padding()
+            } else if !spotLockController.isActive {
+                quickSpotLockButton
+                    .padding()
             }
         }
+    }
+    
+    private var spotLockStatusCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "pin.circle.fill")
+                    .foregroundColor(.purple)
+                    .font(.title2)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Spot Lock Active")
+                        .font(.headline)
+                        .foregroundColor(.purple)
+                    
+                    if let lockPos = spotLockController.lockPosition {
+                        Text(String(format: "%.6f, %.6f", lockPos.latitude, lockPos.longitude))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                Spacer()
+                
+                Button {
+                    Task {
+                        await spotLockController.disengage()
+                    }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundColor(.red)
+                }
+            }
+            
+            Divider()
+            
+            HStack(spacing: 40) {
+                VStack(spacing: 4) {
+                    Image(systemName: "location.fill")
+                        .font(.title3)
+                        .foregroundColor(.blue)
+                    Text(String(format: "%.2f m", spotLockController.distanceFromLock))
+                        .font(.subheadline.bold())
+                    Text("Distance")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                
+                VStack(spacing: 4) {
+                    Image(systemName: spotLockController.isApplyingThrust ? "bolt.fill" : "bolt.slash.fill")
+                        .font(.title3)
+                        .foregroundColor(spotLockController.isApplyingThrust ? .green : .orange)
+                    Text(spotLockController.isApplyingThrust ? "Active" : "Holding")
+                        .font(.subheadline.bold())
+                    Text("Thrust")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                
+                if spotLockController.isApplyingThrust {
+                    VStack(spacing: 4) {
+                        Image(systemName: "speedometer")
+                            .font(.title3)
+                            .foregroundColor(.purple)
+                        Text("Level \(spotLockController.currentSpeedLevel)")
+                            .font(.subheadline.bold())
+                        Text("Speed")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            
+            jogControls
+        }
+        .padding()
+        .background(.regularMaterial)
+        .cornerRadius(12)
+    }
+    
+    private var jogControls: some View {
+        VStack(spacing: 8) {
+            Text("Jog Position (1.5m)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            
+            HStack(spacing: 16) {
+                Button {
+                    spotLockController.jog(direction: .left)
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: "arrow.left")
+                        Text("W")
+                            .font(.caption2)
+                    }
+                    .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.bordered)
+                
+                VStack(spacing: 8) {
+                    Button {
+                        spotLockController.jog(direction: .forward)
+                    } label: {
+                        VStack(spacing: 4) {
+                            Image(systemName: "arrow.up")
+                            Text("N")
+                                .font(.caption2)
+                        }
+                        .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.bordered)
+                    
+                    Button {
+                        spotLockController.jog(direction: .back)
+                    } label: {
+                        VStack(spacing: 4) {
+                            Image(systemName: "arrow.down")
+                            Text("S")
+                                .font(.caption2)
+                        }
+                        .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                
+                Button {
+                    spotLockController.jog(direction: .right)
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: "arrow.right")
+                        Text("E")
+                            .font(.caption2)
+                    }
+                    .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(.top, 8)
+    }
+    
+    private var quickSpotLockButton: some View {
+        Button {
+            toggleSpotLock()
+        } label: {
+            HStack {
+                Image(systemName: "pin.circle.fill")
+                Text("Engage Spot Lock Here")
+            }
+            .frame(maxWidth: .infinity)
+            .padding()
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.purple)
+        .disabled(!canNavigate)
     }
     
     private func handleMapLongPress(value: SequenceGesture<LongPressGesture, DragGesture>.Value, proxy: MapProxy) {
@@ -212,8 +412,31 @@ struct MapView: View {
         }
     }
     
-    private func toggleSpotLock() {
-        isSpotLockEngaged.toggle()
+private func toggleSpotLock() {
+    guard let sensors = bluetooth.sensorData else { return }
+    
+    Task {
+        if spotLockController.isActive {
+            await spotLockController.disengage()
+        } else {
+            let lockPosition = sensors.currentLocation
+            await spotLockController.engage(at: lockPosition)
+        }
+    }
+}
+    
+    private func startSpotLockTimer() {
+        stopSpotLockTimer()
+        spotLockTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+            Task { @MainActor in
+                await spotLockController.update()
+            }
+        }
+    }
+    
+    private func stopSpotLockTimer() {
+        spotLockTimer?.invalidate()
+        spotLockTimer = nil
     }
 
     private func navigateToWaypoint(_ waypoint: Waypoint) {

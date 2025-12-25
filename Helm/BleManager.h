@@ -49,6 +49,7 @@ public:
     void sendSensorStatus(const GpsData& gpsData, float heading);
     void sendCalibrationData(const String& data);
     void sendResponse(const String& response);
+    void sendResponse(const char* response);
 
     bool isConnected() const;
     BleCommand consumeCommand();
@@ -73,6 +74,6 @@ private:
     uint32_t _lastStatusTime;
     bool _justDisconnected;
 
-    void parseCommand(const String& data);
+    void parseCommand(const char* data);
     String buildSensorStatusJson(const GpsData& gpsData, float heading);
 };

@@ -44,7 +44,7 @@ bool Remote::begin() {
     buildPayloads();
 
     _initialized = true;
-    Serial.println("Ready");
+    Serial.println("[Remote] Ready");
     return true;
 }
 
@@ -99,9 +99,6 @@ uint16_t Remote::buildManchesterItems(const char* hexPayload) {
         nibblePos--;
         uint8_t bit = (nibble >> nibblePos) & 0x01;
 
-        // Manchester encoding:
-        // Bit 0: LOW then HIGH (rising edge)
-        // Bit 1: HIGH then LOW (falling edge)
         if (bit == 0) {
             _rmtItems[itemIndex].duration0 = ManchesterTiming::halfBitUs;
             _rmtItems[itemIndex].level0 = 0;
@@ -116,7 +113,6 @@ uint16_t Remote::buildManchesterItems(const char* hexPayload) {
         itemIndex++;
     }
 
-    // Terminator
     _rmtItems[itemIndex].duration0 = 0;
     _rmtItems[itemIndex].level0 = 0;
     _rmtItems[itemIndex].duration1 = 0;
@@ -166,12 +162,15 @@ void Remote::transmitHold(Button button, uint16_t durationMs) {
         esp_pm_lock_acquire(_pmLock);
 
     uint32_t startTime = millis();
+    uint32_t burstCount = 0;
+    
     while ((millis() - startTime) < durationMs) {
         transmitBurst(button);
+        burstCount++;
         delay(RemoteProtocol::burstGapMs);
     }
 
-    Serial.println("[TX] RELEASE");
+    Serial.printf("[TX] RELEASE (sent %d bursts)\n", burstCount);
     transmitBurst(Button::Release);
 
     if (_pmLock)

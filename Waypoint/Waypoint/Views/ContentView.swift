@@ -14,7 +14,8 @@ struct ContentView: View {
                 MapView(
                     selectedWaypoint: $selectedWaypoint,
                     waypoints: $dataStore.waypoints,
-                    navigationEnabled: $navigationEnabled
+                    navigationEnabled: $navigationEnabled,
+                    bluetooth: bluetooth
                 )
             }
             .tabItem {

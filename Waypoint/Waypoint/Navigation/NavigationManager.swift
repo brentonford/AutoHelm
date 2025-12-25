@@ -75,10 +75,10 @@ class NavigationManager: ObservableObject {
         currentPhase = .idle
     }
     
-    func engageSpotLock(at position: CLLocationCoordinate2D) {
+    func engageSpotLock(at position: CLLocationCoordinate2D) async {
         state = .spotLock(position: position)
         currentPhase = .spotLock
-        spotLockController.engage(at: position)
+        await spotLockController.engage(at: position)
         startSpotLockLoop()
     }
     
@@ -115,7 +115,7 @@ class NavigationManager: ObservableObject {
             currentPhase = .arrived
             
             if waypoint.spotLockEnabled {
-                engageSpotLock(at: waypoint.coordinate)
+                await engageSpotLock(at: waypoint.coordinate)
             } else {
                 await stopNavigation()
             }
