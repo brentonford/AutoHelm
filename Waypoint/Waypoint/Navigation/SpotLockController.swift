@@ -15,8 +15,10 @@ class SpotLockController: ObservableObject {
     
     private let bluetooth: BluetoothManager
     
-    private let deadZoneRadiusMeters: Double = 1.5
-    private let activationThresholdMeters: Double = 2.0
+    private var isMotorOperationInProgress: Bool = false
+    
+    private let deadZoneRadiusMeters: Double = 2.0
+    private let activationThresholdMeters: Double = 4.0
     private let hysteresisRatio: Double = 0.5
     private let jogDistanceMeters: Double = 1.5
     private let minCorrectionSpeed: Int = 1
@@ -30,9 +32,9 @@ class SpotLockController: ObservableObject {
     
     private var speedHistory: [SpeedSample] = []
     private let speedHistorySize: Int = 10
-    private let initialMotorValidationDelaySeconds: Double = 4.0
-    private let speedChangeValidationDelaySeconds: Double = 2.0
-    private let movementThresholdKmh: Double = 0.3
+    private let initialMotorValidationDelaySeconds: Double = 3.0
+    private let speedChangeDelaySeconds: Double = 1.5
+    private let movementThresholdKmh: Double = 2.0 // to account for GPS drift
     
     private struct FilteredPosition {
         let coordinate: CLLocationCoordinate2D
@@ -46,8 +48,8 @@ class SpotLockController: ObservableObject {
     
     enum MotorState {
         case unknown
-        case motorOff      // Propeller is OFF but ready to turn ON
-        case motorOn       // Propeller is ON and running
+        case motorOff
+        case motorOn
         case validating
     }
     
@@ -65,6 +67,7 @@ class SpotLockController: ObservableObject {
         lastCorrectionTime = nil
         currentSpeedLevel = 0
         motorState = .unknown
+        isMotorOperationInProgress = false
         
         logWithTime("[SpotLock] Engaged at \(String(format: "%.6f, %.6f", position.latitude, position.longitude))")
         logWithTime("[SpotLock] Dead zone: \(deadZoneRadiusMeters)m, Activation: \(activationThresholdMeters)m, Hysteresis: \(activationThresholdMeters * hysteresisRatio)m")
@@ -87,6 +90,7 @@ class SpotLockController: ObservableObject {
         positionHistory.removeAll()
         speedHistory.removeAll()
         lastCorrectionTime = nil
+        isMotorOperationInProgress = false
         
         logWithTime("[SpotLock] Disengaged")
     }
@@ -98,13 +102,13 @@ class SpotLockController: ObservableObject {
         
         switch direction {
         case .forward:
-            jogHeading = 0.0      // North
+            jogHeading = 0.0
         case .back:
-            jogHeading = 180.0    // South
+            jogHeading = 180.0
         case .left:
-            jogHeading = 270.0    // West
+            jogHeading = 270.0
         case .right:
-            jogHeading = 90.0     // East
+            jogHeading = 90.0
         }
         
         let newPosition = calculateNewPosition(
@@ -171,35 +175,27 @@ class SpotLockController: ObservableObject {
     }
     
     private func ensureMotorReady() async {
-        logWithTime("[SpotLock] Checking motor state...")
-        motorState = .validating
+        logWithTime("[SpotLock] Clearing motor state - sending 10x RF_DOWN")
         
-        let initialSpeed = getAverageSpeed()
-        let isMoving = initialSpeed > movementThresholdKmh
-        
-        if isMoving {
-            logWithTime("[SpotLock] Motor appears ON (speed: \(String(format: "%.2f", initialSpeed)) km/h)")
-            motorState = .motorOn
-            await estimateCurrentSpeedLevel()
-        } else {
-            logWithTime("[SpotLock] Motor appears OFF - will turn ON when needed")
-            motorState = .motorOff
-            currentSpeedLevel = 0
+        for i in 1...10 {
+            bluetooth.sendMotorCommand("RF_DOWN")
+            try? await Task.sleep(for: .seconds(0.8))
         }
-    }
-    
-    private func estimateCurrentSpeedLevel() async {
-        let currentSpeed = getAverageSpeed()
-        let estimatedLevel = Int(round(currentSpeed / 0.36))
-        currentSpeedLevel = min(max(estimatedLevel, 0), 10)
-        logWithTime("[SpotLock] Estimated speed level: \(currentSpeedLevel) (GPS: \(String(format: "%.2f", currentSpeed)) km/h)")
+        
+        currentSpeedLevel = 0
+        motorState = .motorOff
+        logWithTime("[SpotLock] Motor ready at speed 0")
     }
     
     private func startThrust() async {
         guard !isApplyingThrust else { return }
+        guard !isMotorOperationInProgress else {
+            logWithTime("[SpotLock] Motor operation in progress - skipping startThrust")
+            return
+        }
         
         if motorState != .motorOn {
-            logWithTime("[SpotLock] Turning motor ON before applying thrust")
+            logWithTime("[SpotLock] Turning motor ON")
             await turnMotorOn()
         }
         
@@ -228,28 +224,60 @@ class SpotLockController: ObservableObject {
     }
     
     private func turnMotorOn() async {
-        guard motorState != .motorOn else { return }
+        guard !isMotorOperationInProgress else {
+            logWithTime("[SpotLock] Motor operation already in progress")
+            return
+        }
         
-        logWithTime("[SpotLock] Sending RF_MOTOR to turn ON")
-        bluetooth.sendMotorCommand("RF_MOTOR")
+        isMotorOperationInProgress = true
         motorState = .validating
+        
+        logWithTime("[SpotLock] Validating motor state - ramping speed to detect if motor is ON")
+        
+        // Ramp speed to level 2 to detect if motor is already running
+        let targetValidationLevel = 2
+        while currentSpeedLevel < targetValidationLevel {
+            bluetooth.sendMotorCommand("RF_UP")
+            currentSpeedLevel += 1
+            try? await Task.sleep(for: .seconds(speedChangeDelaySeconds))
+        }
+        
+        logWithTime("[SpotLock] Speed at level \(currentSpeedLevel) - checking for movement")
+        try? await Task.sleep(for: .seconds(initialMotorValidationDelaySeconds))
+        
+        let speedAfterRamp = getAverageSpeed()
+        
+        if speedAfterRamp > movementThresholdKmh {
+            logWithTime("[SpotLock] Motor already ON - detected movement (speed: \(String(format: "%.2f", speedAfterRamp)) km/h)")
+            motorState = .motorOn
+            isMotorOperationInProgress = false
+            return
+        }
+        
+        logWithTime("[SpotLock] No movement detected - toggling RF_MOTOR to turn ON")
+        bluetooth.sendMotorCommand("RF_MOTOR")
         
         try? await Task.sleep(for: .seconds(initialMotorValidationDelaySeconds))
         
-        let speed = getAverageSpeed()
-        if speed > movementThresholdKmh {
+        let speedAfterToggle = getAverageSpeed()
+        
+        if speedAfterToggle > movementThresholdKmh {
+            logWithTime("[SpotLock] Motor confirmed ON (speed: \(String(format: "%.2f", speedAfterToggle)) km/h)")
             motorState = .motorOn
-            currentSpeedLevel = 1
-            logWithTime("[SpotLock] Motor confirmed ON (speed: \(String(format: "%.2f", speed)) km/h)")
         } else {
+            logWithTime("[SpotLock] WARNING: No movement detected after motor toggle (speed: \(String(format: "%.2f", speedAfterToggle)) km/h)")
+            logWithTime("[SpotLock] Assuming motor is ON - may be stationary or GPS speed not updating")
             motorState = .motorOn
-            currentSpeedLevel = 1
-            logWithTime("[SpotLock] Motor assumed ON (no speed validation available)")
         }
+        
+        isMotorOperationInProgress = false
     }
     
     private func turnMotorOff() async {
         guard motorState == .motorOn else { return }
+        guard !isMotorOperationInProgress else { return }
+        
+        isMotorOperationInProgress = true
         
         if currentSpeedLevel > 0 {
             await setSpeed(0)
@@ -260,7 +288,7 @@ class SpotLockController: ObservableObject {
         motorState = .motorOff
         currentSpeedLevel = 0
         
-        try? await Task.sleep(for: .seconds(1.0))
+        isMotorOperationInProgress = false
     }
     
     private func setSpeed(_ targetLevel: Int) async {
@@ -273,27 +301,17 @@ class SpotLockController: ObservableObject {
             for _ in currentSpeedLevel..<clampedTarget {
                 bluetooth.sendMotorCommand("RF_UP")
                 currentSpeedLevel += 1
-                try? await Task.sleep(for: .seconds(1.5))
+                try? await Task.sleep(for: .seconds(speedChangeDelaySeconds))
             }
         } else {
             for _ in clampedTarget..<currentSpeedLevel {
                 bluetooth.sendMotorCommand("RF_DOWN")
                 currentSpeedLevel -= 1
-                try? await Task.sleep(for: .seconds(1.5))
+                try? await Task.sleep(for: .seconds(speedChangeDelaySeconds))
             }
         }
         
-        try? await Task.sleep(for: .seconds(speedChangeValidationDelaySeconds))
-        
-        let actualSpeed = getAverageSpeed()
-        let expectedSpeed = Double(clampedTarget) * 0.36
-        let speedDiff = abs(actualSpeed - expectedSpeed)
-        
-        if speedDiff < 0.5 || actualSpeed < 0.1 {
-            logWithTime("[SpotLock] Speed set: level \(clampedTarget)")
-        } else {
-            logWithTime("[SpotLock] Speed set: level \(clampedTarget) (GPS: \(String(format: "%.2f", actualSpeed)) km/h)")
-        }
+        logWithTime("[SpotLock] Speed set to level \(clampedTarget)")
     }
     
     private func applyCorrection(
