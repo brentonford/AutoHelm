@@ -178,6 +178,7 @@ struct CompassCalibration {
     float scaleX;
     float scaleY;
     float scaleZ;
+    float headingOffset;
 
     CompassCalibration()
         : offsetX(0.0f)
@@ -185,7 +186,8 @@ struct CompassCalibration {
         , offsetZ(0.0f)
         , scaleX(1.0f)
         , scaleY(1.0f)
-        , scaleZ(1.0f) {
+        , scaleZ(1.0f)
+        , headingOffset(0.0f) {
     }
 };
 

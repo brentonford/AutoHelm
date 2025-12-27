@@ -33,6 +33,9 @@ public:
     bool shouldStreamCalibrationData() const;
     void markCalibrationDataSent();
     String getCalibrationJson() const;
+    
+    void setDebugEnabled(bool enabled);
+    bool isDebugEnabled() const;
 
 private:
     uint8_t _sdaPin;
@@ -47,6 +50,9 @@ private:
     float _calMinY, _calMaxY;
     float _calMinZ, _calMaxZ;
     uint32_t _calSampleCount;
+    
+    bool _debugEnabled;
+    uint32_t _lastDebugTime;
 
     void applyCalibration(float& x, float& y, float& z);
     float normalizeHeading(float heading);

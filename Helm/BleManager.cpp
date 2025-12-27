@@ -89,7 +89,6 @@ void BleManager::onWrite(BLECharacteristic* characteristic) {
         return;
     }
 
-    // Get the raw data pointer and length
     uint8_t* pData = characteristic->getData();
     size_t len = characteristic->getValue().length();
     
@@ -103,7 +102,6 @@ void BleManager::onWrite(BLECharacteristic* characteristic) {
         return;
     }
 
-    // Copy raw bytes to buffer
     static char cmdBuffer[128];
     memcpy(cmdBuffer, pData, len);
     cmdBuffer[len] = '\0';
@@ -172,6 +170,27 @@ void BleManager::parseCommand(const char* data) {
     } else if (strcmp(cmd, "STOP_CAL") == 0) {
         _status.pendingCommand = BleCommand::StopCalibration;
         sendResponse("{\"ack\":\"STOP_CAL\"}");
+    } else if (strncmp(cmd, "CAL_VALUES:", 11) == 0) {
+        float offsetX, offsetY, offsetZ, scaleX, scaleY, scaleZ, headingOffset = 0.0f;
+        int parsed = sscanf(cmd + 11, "%f,%f,%f,%f,%f,%f,%f", 
+                   &offsetX, &offsetY, &offsetZ, &scaleX, &scaleY, &scaleZ, &headingOffset);
+        
+        if (parsed >= 6) {  // headingOffset is optional (for backward compatibility)
+            _status.pendingCalibration.offsetX = offsetX;
+            _status.pendingCalibration.offsetY = offsetY;
+            _status.pendingCalibration.offsetZ = offsetZ;
+            _status.pendingCalibration.scaleX = scaleX;
+            _status.pendingCalibration.scaleY = scaleY;
+            _status.pendingCalibration.scaleZ = scaleZ;
+            _status.pendingCalibration.headingOffset = (parsed == 7) ? headingOffset : 0.0f;
+            _status.hasCalibrationPending = true;
+            Serial.printf("[BLE] Calibration values received: Offsets(%.2f,%.2f,%.2f) Scales(%.4f,%.4f,%.4f) HeadingOffset(%.1f)\n",
+                offsetX, offsetY, offsetZ, scaleX, scaleY, scaleZ, _status.pendingCalibration.headingOffset);
+            sendResponse("{\"ack\":\"CAL_VALUES\"}");
+        } else {
+            Serial.println("[BLE] ERROR: Failed to parse calibration values");
+            sendResponse("{\"error\":\"Invalid CAL_VALUES format\"}");
+        }
     } else if (strncmp(cmd, "RF_", 3) == 0) {
         if (len < 4 || len > 32) {
             Serial.println("[BLE] ERROR: Invalid RF command length");
@@ -309,4 +328,13 @@ String BleManager::consumeRfCommand() {
     _status.pendingRfCommand = "";
     _status.isHoldCommand = false;
     return cmd;
+}
+
+bool BleManager::hasCalibrationPending() const {
+    return _status.hasCalibrationPending;
+}
+
+CompassCalibration BleManager::consumeCalibration() {
+    _status.hasCalibrationPending = false;
+    return _status.pendingCalibration;
 }

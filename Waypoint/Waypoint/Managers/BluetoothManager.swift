@@ -16,6 +16,17 @@ private enum BleConstants {
     static let rssiUpdateIntervalSeconds: TimeInterval = 2.0
 }
 
+private struct FinalCalibrationResponse: Codable {
+    let ack: String
+    let offsetX: Double
+    let offsetY: Double
+    let offsetZ: Double
+    let scaleX: Double
+    let scaleY: Double
+    let scaleZ: Double
+    let headingOffset: Double?
+}
+
 @MainActor
 class BluetoothManager: NSObject, ObservableObject {
 
@@ -89,6 +100,7 @@ class BluetoothManager: NSObject, ObservableObject {
 
     func startCalibration() {
         sendCommand("START_CAL")
+        isCalibrating = true
     }
 
     func stopCalibration() {
@@ -96,8 +108,40 @@ class BluetoothManager: NSObject, ObservableObject {
     }
 
     func sendCalibrationValues(_ calibration: CompassCalibration) {
+        print("[BLE] sendCalibrationValues called with: offset(\(calibration.offsetX),\(calibration.offsetY),\(calibration.offsetZ)) scale(\(calibration.scaleX),\(calibration.scaleY),\(calibration.scaleZ)) headingOffset(\(calibration.headingOffset)) sampleCount=\(calibration.sampleCount) isCalibrated=\(calibration.isCalibrated)")
+        
+        guard calibration.isCalibrated else {
+            print("[BLE] ERROR: Attempted to send uncalibrated values to device")
+            return
+        }
+        
+        guard abs(calibration.offsetX) > 0.01 || abs(calibration.offsetY) > 0.01 || abs(calibration.offsetZ) > 0.01 else {
+            print("[BLE] ERROR: Attempted to send zero calibration offsets to device")
+            return
+        }
+        
         let command = calibration.toCommandString()
+        print("[BLE] Sending command: \(command)")
         sendCommand(command)
+    }
+    
+    // MARK: - Heading Calibration Methods
+    
+    func getCurrentHeading() async -> Double? {
+        guard let sensorData = sensorData else {
+            print("[BLE] No sensor data available for heading")
+            return nil
+        }
+        return sensorData.heading
+    }
+    
+    func setHeadingOffset(_ offset: Double) {
+        var calibration = DataStore.shared.calibration
+        calibration.headingOffset = offset
+        DataStore.shared.updateCalibration(calibration)
+        
+        print("[BLE] Heading offset set to \(offset)° - sending to device...")
+        sendCalibrationValues(calibration)
     }
 
     private func writeToCharacteristic(_ characteristic: CBCharacteristic?, data: Data) {
@@ -145,6 +189,26 @@ class BluetoothManager: NSObject, ObservableObject {
         lastResponse = nil
         locationTracker = nil
         lastLocationUpdate = nil
+        isCalibrating = false
+        calibrationData = nil
+    }
+    
+    @MainActor
+    private func autoUploadCalibration() {
+        let calibration = DataStore.shared.calibration
+        
+        guard calibration.isCalibrated else {
+            print("[BLE] No calibration to auto-upload")
+            return
+        }
+        
+        guard commandChar != nil else {
+            print("[BLE] Command characteristic not ready for auto-upload")
+            return
+        }
+        
+        print("[BLE] Auto-uploading calibration on connect...")
+        sendCalibrationValues(calibration)
     }
     
     private func parseSensorStatus(_ data: Data) {
@@ -171,16 +235,75 @@ class BluetoothManager: NSObject, ObservableObject {
         }
     }
 
-    private func parseResponse(_ data: Data) {
-        do {
-            let response = try JSONDecoder().decode(BleResponse.self, from: data)
+    private func parseCalibrationCharacteristic(_ data: Data) {
+        // Try to decode final calibration response first (most specific)
+        if let finalCal = try? JSONDecoder().decode(FinalCalibrationResponse.self, from: data) {
+            print("[BLE] Received final calibration: offset(\(finalCal.offsetX),\(finalCal.offsetY),\(finalCal.offsetZ)) scale(\(finalCal.scaleX),\(finalCal.scaleY),\(finalCal.scaleZ)) headingOffset(\(finalCal.headingOffset ?? 0))")
+            
+            if finalCal.ack == "CAL_STOPPED" {
+                isCalibrating = false
+                
+                let sampleCount = calibrationData?.samples ?? 0
+                print("[BLE] Using sample count: \(sampleCount)")
+                
+                // Preserve existing headingOffset when updating magnetometer calibration
+                let existingHeadingOffset = DataStore.shared.calibration.headingOffset
+                
+                let calibration = CompassCalibration(
+                    offsetX: finalCal.offsetX,
+                    offsetY: finalCal.offsetY,
+                    offsetZ: finalCal.offsetZ,
+                    scaleX: finalCal.scaleX,
+                    scaleY: finalCal.scaleY,
+                    scaleZ: finalCal.scaleZ,
+                    headingOffset: finalCal.headingOffset ?? existingHeadingOffset,
+                    dateCalibrated: Date(),
+                    sampleCount: max(sampleCount, 1)
+                )
+                
+                print("[BLE] Created calibration object with headingOffset: \(calibration.headingOffset)")
+                
+                DataStore.shared.updateCalibration(calibration)
+                print("[BLE] Saved calibration to DataStore")
+                
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(500))
+                    let commandString = calibration.toCommandString()
+                    print("[BLE] Sending calibration back to device: \(commandString)")
+                    self.sendCalibrationValues(calibration)
+                }
+                
+                self.lastResponse = BleResponse(ack: finalCal.ack, error: nil)
+            }
+            return
+        }
+        
+        // Only update calibration data if we're actively calibrating
+        if isCalibrating {
+            if let calData = try? JSONDecoder().decode(CalibrationData.self, from: data) {
+                self.calibrationData = calData
+                return
+            }
+        }
+        
+        if let response = try? JSONDecoder().decode(BleResponse.self, from: data) {
             self.lastResponse = response
+            
+            if let ack = response.ack {
+                if ack == "START_CAL" || ack == "CAL_STARTED" {
+                    isCalibrating = true
+                } else if ack == "STOP_CAL" || ack == "CAL_STOPPED" {
+                    isCalibrating = false
+                }
+            }
+            
             if let error = response.error {
                 self.lastError = error
             }
-        } catch {
-            print("Response parse error: \(error)")
+            return
         }
+        
+        print("[BLE] Failed to parse calibration characteristic data: \(String(data: data, encoding: .utf8) ?? "non-UTF8")")
     }
 }
 
@@ -230,6 +353,12 @@ extension BluetoothManager: CBCentralManagerDelegate {
             shouldReconnect = true
             peripheral.discoverServices([BleUuids.service])
             startRSSIMonitoring()
+            
+            // AUTO-UPLOAD: Wait for characteristics to be discovered, then send calibration
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2))
+                autoUploadCalibration()
+            }
         }
     }
 
@@ -312,7 +441,7 @@ extension BluetoothManager: CBPeripheralDelegate {
             case BleUuids.sensorStatus:
                 parseSensorStatus(data)
             case BleUuids.calibration:
-                parseResponse(data)
+                parseCalibrationCharacteristic(data)
             default:
                 break
             }

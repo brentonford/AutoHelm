@@ -73,20 +73,17 @@ void printSensorStatus() {
 }
 
 void processBleRfCommand() {
-    if (!ble.hasRfCommandPending()) {
+    if (!ble.hasRfCommandPending())
         return;
-    }
 
-    if (!remoteAvailable) {
-        ble.consumeRfCommand();
+    if (!remoteAvailable)
         return;
-    }
 
     bool isHold = ble.isRfHoldCommand();
     String cmd = ble.consumeRfCommand();
+    Serial.printf("[BLE] RF Command: %s (Hold: %s)\n", cmd.c_str(), isHold ? "YES" : "NO");
 
     if (cmd == "LEFT") {
-        Serial.println("[BLE] Processing LEFT command");
         if (isHold) {
             activeHoldButton = Button::Left;
             isHoldActive = true;
@@ -103,6 +100,7 @@ void processBleRfCommand() {
             isHoldActive = true;
             holdStartTime = millis();
             lastHoldTransmitTime = millis();
+            Serial.println("[BLE] Starting RIGHT hold transmission");
             remote.transmitSingle(Button::Right);
         } else {
             remote.transmitHold(Button::Right, 1000);
@@ -118,8 +116,7 @@ void processBleRfCommand() {
     } else if (cmd == "RELEASE") {
         isHoldActive = false;
         remote.transmitSingle(Button::Release);
-    } else {
-        Serial.printf("[BLE] Unknown RF command: %s\n", cmd.c_str());
+        Serial.println("[BLE] Stopping hold transmission");
     }
 }
 
@@ -174,6 +171,12 @@ void processBleCommand() {
         default:
             break;
     }
+    
+    if (ble.hasCalibrationPending()) {
+        CompassCalibration cal = ble.consumeCalibration();
+        compass.setCalibration(cal);
+        Serial.println("[BLE] Calibration values applied to compass");
+    }
 }
 
 void broadcastSensorStatus() {
@@ -188,6 +191,24 @@ void broadcastSensorStatus() {
 
     GpsData gpsData = gps.getData();
     ble.sendSensorStatus(gpsData, currentHeading);
+}
+
+void streamCalibrationData() {
+    if (!bleAvailable || !ble.isConnected())
+        return;
+    
+    if (!compassAvailable)
+        return;
+    
+    if (!compass.isCalibrating())
+        return;
+    
+    if (!compass.shouldStreamCalibrationData())
+        return;
+    
+    String calibrationJson = compass.getCalibrationJson();
+    ble.sendCalibrationData(calibrationJson);
+    compass.markCalibrationDataSent();
 }
 
 void checkBleDisconnect() {
@@ -247,6 +268,7 @@ void setup() {
     Serial.println("  GPS:     g (print status)");
     Serial.println("  GPS:     G (toggle debug output)");
     Serial.println("  Compass: c (print heading)");
+    Serial.println("  Compass: C (toggle debug output)");
     Serial.println("  Sensors: v (validation status)");
 }
 
@@ -262,6 +284,7 @@ void loop() {
         processBleCommand();
         processBleRfCommand();
         processHoldTransmission();
+        streamCalibrationData();
     }
 
     checkBleDisconnect();
@@ -280,39 +303,19 @@ void loop() {
         case 'M': remote.transmitHold(Button::Motor); break;
         case 'S': remote.transmitHold(Button::Momentary); break;
 
-        case 'r': 
-            Serial.println("[TEST] Manual RIGHT command");
-            remote.transmitSingle(Button::Right); 
-            break;
-        case 'l': 
-            Serial.println("[TEST] Manual LEFT command");
-            remote.transmitSingle(Button::Left); 
-            break;
-        case 'u': 
-            Serial.println("[TEST] Manual UP command");
-            remote.transmitSingle(Button::Up); 
-            break;
-        case 'd': 
-            Serial.println("[TEST] Manual DOWN command");
-            remote.transmitSingle(Button::Down); 
-            break;
-        case 'm': 
-            Serial.println("[TEST] Manual MOTOR command");
-            remote.transmitSingle(Button::Motor); 
-            break;
-        case 's': 
-            Serial.println("[TEST] Manual MOMENTARY command");
-            remote.transmitSingle(Button::Momentary); 
-            break;
+        case 'r': remote.transmitSingle(Button::Right); break;
+        case 'l': remote.transmitSingle(Button::Left); break;
+        case 'u': remote.transmitSingle(Button::Up); break;
+        case 'd': remote.transmitSingle(Button::Down); break;
+        case 'm': remote.transmitSingle(Button::Motor); break;
+        case 's': remote.transmitSingle(Button::Momentary); break;
 
-        case '0': 
-            Serial.println("[TEST] Manual RELEASE command");
-            remote.transmitSingle(Button::Release); 
-            break;
+        case '0': remote.transmitSingle(Button::Release); break;
 
         case 'g': printGpsStatus(); break;
         case 'G': gps.setDebugEnabled(!gps.isDebugEnabled()); break;
         case 'c': printCompassHeading(); break;
+        case 'C': compass.setDebugEnabled(!compass.isDebugEnabled()); break;
         case 'v': printSensorStatus(); break;
     }
 }

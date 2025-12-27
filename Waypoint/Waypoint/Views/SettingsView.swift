@@ -12,6 +12,7 @@ struct SettingsView: View {
     var body: some View {
         List {
             calibrationSection
+            northCalibrationSection
             navigationSettingsSection
             displaySettingsSection
             deviceSection
@@ -39,7 +40,7 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     } else {
-                        Text("Not calibrated")
+                        Text("Not calibrated!")
                             .font(.caption)
                             .foregroundColor(.orange)
                     }
@@ -88,6 +89,82 @@ struct SettingsView: View {
             Text("Compass")
         } footer: {
             Text("Calibration improves compass accuracy by correcting for magnetic interference. Rotate the Helm device slowly during calibration.")
+        }
+    }
+    
+    // MARK: - North Calibration Section
+    
+    private var northCalibrationSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("North Alignment")
+                            .font(.headline)
+                        if dataStore.calibration.headingOffset != 0 {
+                            Text("Offset: \(dataStore.calibration.headingOffset, specifier: "%.1f")°")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            Text("Not calibrated")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    Circle()
+                        .fill(dataStore.calibration.headingOffset != 0 ? Color.green : Color.orange)
+                        .frame(width: 12, height: 12)
+                }
+                
+                if let heading = bluetooth.sensorData?.heading {
+                    HStack {
+                        Text("Current Heading:")
+                            .font(.subheadline)
+                        Spacer()
+                        Text("\(heading, specifier: "%.1f")°")
+                            .font(.headline)
+                            .foregroundColor(.blue)
+                    }
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 12)
+                    .background(Color.blue.opacity(0.1))
+                    .cornerRadius(8)
+                }
+            }
+            
+            Button {
+                Task {
+                    await calibrateNorth()
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "location.north.circle")
+                    Text("Calibrate North")
+                }
+            }
+            .disabled(bluetooth.connectionState != .connected || bluetooth.sensorData == nil)
+            
+            if dataStore.calibration.headingOffset != 0 {
+                Button(role: .destructive) {
+                    var cal = dataStore.calibration
+                    cal.headingOffset = 0
+                    dataStore.updateCalibration(cal)
+                    bluetooth.sendCalibrationValues(cal)
+                } label: {
+                    HStack {
+                        Image(systemName: "arrow.counterclockwise")
+                        Text("Reset North Offset")
+                    }
+                }
+                .disabled(bluetooth.connectionState != .connected)
+            }
+        } header: {
+            Text("North Calibration")
+        } footer: {
+            Text("Point the Helm device directly north (use a compass app), then tap 'Calibrate North' to set 0° heading.")
         }
     }
     
@@ -265,6 +342,22 @@ struct SettingsView: View {
             Text("About")
         }
     }
+    
+    // MARK: - Helper Methods
+    
+    @MainActor
+    private func calibrateNorth() async {
+        guard let currentHeading = await bluetooth.getCurrentHeading() else {
+            print("[Settings] Failed to get current heading")
+            return
+        }
+        
+        print("[Settings] Current heading: \(currentHeading)°, setting as north offset")
+        
+        // The offset is what we subtract from readings to get true north
+        // If device shows 104° when pointing north, offset = 104
+        bluetooth.setHeadingOffset(currentHeading)
+    }
 }
 
 // MARK: - Calibration View
@@ -303,14 +396,6 @@ struct CalibrationView: View {
                         dismiss()
                     }
                 }
-            }
-            .alert("Save Calibration?", isPresented: $showingSaveConfirmation) {
-                Button("Save") {
-                    saveCalibration()
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("This will save the calibration data and send it to the Helm device.")
             }
         }
     }
@@ -450,16 +535,6 @@ struct CalibrationView: View {
                 .buttonStyle(.bordered)
             }
         }
-    }
-    
-    private func saveCalibration() {
-        guard let data = bluetooth.calibrationData else { return }
-        
-        let calibration = data.toCalibration()
-        dataStore.updateCalibration(calibration)
-        bluetooth.sendCalibrationValues(calibration)
-        
-        dismiss()
     }
 }
 

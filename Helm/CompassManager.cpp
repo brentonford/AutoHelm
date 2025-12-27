@@ -9,7 +9,9 @@ CompassManager::CompassManager(uint8_t sdaPin, uint8_t sclPin)
     , _calMinX(9999.0f), _calMaxX(-9999.0f)
     , _calMinY(9999.0f), _calMaxY(-9999.0f)
     , _calMinZ(9999.0f), _calMaxZ(-9999.0f)
-    , _calSampleCount(0) {
+    , _calSampleCount(0)
+    , _debugEnabled(false)
+    , _lastDebugTime(0) {
 }
 
 bool CompassManager::begin() {
@@ -85,17 +87,49 @@ float CompassManager::readHeading() {
         updateCalibrationMinMax(x, y, z);
     }
 
+    if (_debugEnabled) {
+        uint32_t now = millis();
+        if ((now - _lastDebugTime) >= 1000) {
+            Serial.printf("[Compass] Raw: X=%.2f Y=%.2f Z=%.2f\n", x, y, z);
+            _lastDebugTime = now;
+        }
+    }
+
+    float rawX = x, rawY = y, rawZ = z;
     applyCalibration(x, y, z);
 
+    if (_debugEnabled) {
+        Serial.printf("[Compass] Calibrated: X=%.2f Y=%.2f Z=%.2f\n", x, y, z);
+    }
+
+    // Calculate heading with headingOffset applied
     float heading = atan2(y, x) * 180.0f / PI;
-    return normalizeHeading(heading);
+    heading -= _calibration.headingOffset;
+    heading = normalizeHeading(heading);
+    
+    if (_debugEnabled) {
+        Serial.printf("[Compass] Heading: %.1f° (offset: %.1f°)\n", heading, _calibration.headingOffset);
+    }
+
+    return heading;
+}
+
+void CompassManager::setDebugEnabled(bool enabled) {
+    _debugEnabled = enabled;
+    _lastDebugTime = 0;
+    Serial.printf("[Compass] Debug output %s\n", enabled ? "ENABLED" : "DISABLED");
+}
+
+bool CompassManager::isDebugEnabled() const {
+    return _debugEnabled;
 }
 
 void CompassManager::setCalibration(const CompassCalibration& cal) {
     _calibration = cal;
-    Serial.printf("[Compass] Calibration set - Offsets: %.2f, %.2f, %.2f  Scales: %.3f, %.3f, %.3f\n",
+    Serial.printf("[Compass] Calibration set - Offsets: %.2f, %.2f, %.2f  Scales: %.3f, %.3f, %.3f  HeadingOffset: %.1f\n",
         cal.offsetX, cal.offsetY, cal.offsetZ,
-        cal.scaleX, cal.scaleY, cal.scaleZ);
+        cal.scaleX, cal.scaleY, cal.scaleZ,
+        cal.headingOffset);
 }
 
 CompassCalibration CompassManager::getCalibration() const {
@@ -143,6 +177,7 @@ void CompassManager::stopCalibration() {
     _calibration.scaleX = scaleX;
     _calibration.scaleY = scaleY;
     _calibration.scaleZ = scaleZ;
+    // Note: headingOffset is NOT changed during magnetometer calibration
     
     Serial.printf("[Compass] Calibration complete - %d samples\n", _calSampleCount);
     Serial.printf("[Compass] Min: %.2f, %.2f, %.2f  Max: %.2f, %.2f, %.2f\n",
@@ -166,6 +201,14 @@ void CompassManager::markCalibrationDataSent() {
 }
 
 void CompassManager::updateCalibrationMinMax(float x, float y, float z) {
+    // Reject obvious outliers (valid magnetometer readings are typically -150 to +150 µT)
+    bool validReading = (abs(x) < 500 && abs(y) < 500 && abs(z) < 500);
+    
+    if (!validReading) {
+        Serial.printf("[Compass] REJECTED outlier: X=%.2f Y=%.2f Z=%.2f\n", x, y, z);
+        return;
+    }
+    
     if (x < _calMinX) _calMinX = x;
     if (x > _calMaxX) _calMaxX = x;
     if (y < _calMinY) _calMinY = y;

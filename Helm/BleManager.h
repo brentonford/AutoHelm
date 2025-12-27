@@ -56,6 +56,8 @@ public:
     bool hasRfCommandPending() const;
     String consumeRfCommand();
     bool isRfHoldCommand() const;
+    bool hasCalibrationPending() const;
+    CompassCalibration consumeCalibration();
     
     bool wasJustDisconnected() const;
     void clearDisconnectFlag();

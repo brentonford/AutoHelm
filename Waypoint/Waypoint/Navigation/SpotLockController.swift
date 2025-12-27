@@ -177,7 +177,7 @@ class SpotLockController: ObservableObject {
     private func ensureMotorReady() async {
         logWithTime("[SpotLock] Clearing motor state - sending 10x RF_DOWN")
         
-        for i in 1...10 {
+        for _ in 1...10 {
             bluetooth.sendMotorCommand("RF_DOWN")
             try? await Task.sleep(for: .seconds(0.8))
         }

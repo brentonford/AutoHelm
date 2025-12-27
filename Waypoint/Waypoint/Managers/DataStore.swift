@@ -100,6 +100,7 @@ struct CompassCalibration: Codable, Equatable {
     var scaleX: Double = 1.0
     var scaleY: Double = 1.0
     var scaleZ: Double = 1.0
+    var headingOffset: Double = 0.0
     var dateCalibrated: Date?
     var sampleCount: Int = 0
     
@@ -108,8 +109,8 @@ struct CompassCalibration: Codable, Equatable {
     }
     
     func toCommandString() -> String {
-        String(format: "CAL_VALUES:%.2f,%.2f,%.2f,%.4f,%.4f,%.4f",
-               offsetX, offsetY, offsetZ, scaleX, scaleY, scaleZ)
+        String(format: "CAL_VALUES:%.2f,%.2f,%.2f,%.4f,%.4f,%.4f,%.1f",
+               offsetX, offsetY, offsetZ, scaleX, scaleY, scaleZ, headingOffset)
     }
 }
 
@@ -180,6 +181,7 @@ struct CalibrationData: Codable {
             scaleX: scaleX,
             scaleY: scaleY,
             scaleZ: scaleZ,
+            headingOffset: 0.0,  // Don't set headingOffset from magnetometer calibration
             dateCalibrated: Date(),
             sampleCount: samples ?? 0
         )
