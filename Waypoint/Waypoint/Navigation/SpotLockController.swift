@@ -16,25 +16,37 @@ class SpotLockController: ObservableObject {
     private let bluetooth: BluetoothManager
     
     private var isMotorOperationInProgress: Bool = false
+    private var lastSteeringDirection: SteeringDirection = .none
     
     private let deadZoneRadiusMeters: Double = 2.0
     private let activationThresholdMeters: Double = 4.0
     private let hysteresisRatio: Double = 0.5
     private let jogDistanceMeters: Double = 1.5
-    private let minCorrectionSpeed: Int = 1
-    private let maxCorrectionSpeed: Int = 3
-    private let headingToleranceDegrees: Double = 30.0
+    private let minCorrectionSpeed: Int = 2  // CHANGED: Increased from 1 to overcome drift
+    private let maxCorrectionSpeed: Int = 4  // CHANGED: Increased from 3 for more power
+    private let headingToleranceDegrees: Double = 45.0  // CHANGED: Increased from 30° to reduce steering frequency
+    
+    // NEW: Steering parameters tuned for wind/current
+    private let steeringHoldDurationMs: Int = 400  // CHANGED: Reduced from 800ms - less aggressive
+    private let largeAngleThreshold: Double = 120.0  // CHANGED: Increased from 90° - only for very large errors
+    private let minSpeedForLargeAngle: Int = 2  // CHANGED: Don't go below speed 2 even for large angles
     
     private var positionHistory: [FilteredPosition] = []
     private let filterWindowSize: Int = 5
     private var lastCorrectionTime: Date?
-    private let correctionIntervalSeconds: Double = 2.0
+    private let correctionIntervalSeconds: Double = 3.0  // CHANGED: Increased from 2.0 to let boat respond
+    
+    // NEW: Progress tracking to detect failure
+    private var lastDistanceCheck: Date?
+    private var lastDistanceValue: Double = 0
+    private let progressCheckIntervalSeconds: Double = 10.0
+    private let maxAcceptableDrift: Double = 5.0  // If distance increases > 5m in 10s, we're failing
     
     private var speedHistory: [SpeedSample] = []
     private let speedHistorySize: Int = 10
-    private let initialMotorValidationDelaySeconds: Double = 3.0
-    private let speedChangeDelaySeconds: Double = 1.5
-    private let movementThresholdKmh: Double = 2.0 // to account for GPS drift
+    private let initialMotorValidationDelaySeconds: Double = 2.0  // CHANGED: Reduced from 3.0
+    private let speedChangeDelaySeconds: Double = 1.0  // CHANGED: Reduced from 1.5 for faster response
+    private let movementThresholdKmh: Double = 3.5  // CHANGED: Increased from 2.0 to distinguish from drift
     
     private struct FilteredPosition {
         let coordinate: CLLocationCoordinate2D
@@ -68,9 +80,13 @@ class SpotLockController: ObservableObject {
         currentSpeedLevel = 0
         motorState = .unknown
         isMotorOperationInProgress = false
+        lastSteeringDirection = .none
+        lastDistanceCheck = nil
+        lastDistanceValue = 0
         
         logWithTime("[SpotLock] Engaged at \(String(format: "%.6f, %.6f", position.latitude, position.longitude))")
         logWithTime("[SpotLock] Dead zone: \(deadZoneRadiusMeters)m, Activation: \(activationThresholdMeters)m, Hysteresis: \(activationThresholdMeters * hysteresisRatio)m")
+        logWithTime("[SpotLock] Min speed: \(minCorrectionSpeed), Max speed: \(maxCorrectionSpeed), Heading tolerance: \(headingToleranceDegrees)°")
         
         await ensureMotorReady()
     }
@@ -79,6 +95,11 @@ class SpotLockController: ObservableObject {
         guard isActive else { return }
         
         logWithTime("[SpotLock] Disengaging...")
+        
+        // Release any active steering
+        if lastSteeringDirection != .none {
+            await releaseSteering()
+        }
         
         if motorState == .motorOn {
             await turnMotorOff()
@@ -91,6 +112,9 @@ class SpotLockController: ObservableObject {
         speedHistory.removeAll()
         lastCorrectionTime = nil
         isMotorOperationInProgress = false
+        lastSteeringDirection = .none
+        lastDistanceCheck = nil
+        lastDistanceValue = 0
         
         logWithTime("[SpotLock] Disengaged")
     }
@@ -119,6 +143,8 @@ class SpotLockController: ObservableObject {
         
         lockPosition = newPosition
         positionHistory.removeAll()
+        lastDistanceCheck = nil
+        lastDistanceValue = 0
         
         let compassDirection: String
         switch direction {
@@ -150,6 +176,9 @@ class SpotLockController: ObservableObject {
         let locationForDistance = positionHistory.count >= 3 ? filteredLocation : currentLocation
         distanceFromLock = locationForDistance.distance(to: lockPos)
         
+        // NEW: Check if we're making progress
+        checkProgress()
+        
         guard canSendCorrection() else { return }
         
         if isApplyingThrust {
@@ -174,13 +203,18 @@ class SpotLockController: ObservableObject {
         }
     }
     
+    // NEW: Simplified motor ready - just trust the commands
     private func ensureMotorReady() async {
-        logWithTime("[SpotLock] Clearing motor state - sending 10x RF_DOWN")
+        logWithTime("[SpotLock] Ensuring motor OFF - sending 5x RF_DOWN")
         
-        for _ in 1...10 {
+        for _ in 1...5 {
             bluetooth.sendMotorCommand("RF_DOWN")
-            try? await Task.sleep(for: .seconds(0.8))
+            try? await Task.sleep(for: .seconds(0.5))
         }
+        
+        // Send one more DOWN and wait longer to ensure motor is definitely OFF
+        bluetooth.sendMotorCommand("RF_DOWN")
+        try? await Task.sleep(for: .seconds(1.0))
         
         currentSpeedLevel = 0
         motorState = .motorOff
@@ -206,7 +240,8 @@ class SpotLockController: ObservableObject {
         
         isApplyingThrust = true
         
-        if currentSpeedLevel == 0 {
+        // Start at minimum correction speed
+        if currentSpeedLevel < minCorrectionSpeed {
             await setSpeed(minCorrectionSpeed)
         }
         
@@ -218,11 +253,17 @@ class SpotLockController: ObservableObject {
         
         logWithTime("[SpotLock] Thrust STOP (within hysteresis: \(String(format: "%.2f", distanceFromLock))m)")
         
+        // Release any active steering before stopping
+        if lastSteeringDirection != .none {
+            await releaseSteering()
+        }
+        
         await setSpeed(0)
         
         isApplyingThrust = false
     }
     
+    // NEW: Simplified motor on - just toggle and trust it
     private func turnMotorOn() async {
         guard !isMotorOperationInProgress else {
             logWithTime("[SpotLock] Motor operation already in progress")
@@ -230,45 +271,15 @@ class SpotLockController: ObservableObject {
         }
         
         isMotorOperationInProgress = true
-        motorState = .validating
         
-        logWithTime("[SpotLock] Validating motor state - ramping speed to detect if motor is ON")
-        
-        // Ramp speed to level 2 to detect if motor is already running
-        let targetValidationLevel = 2
-        while currentSpeedLevel < targetValidationLevel {
-            bluetooth.sendMotorCommand("RF_UP")
-            currentSpeedLevel += 1
-            try? await Task.sleep(for: .seconds(speedChangeDelaySeconds))
-        }
-        
-        logWithTime("[SpotLock] Speed at level \(currentSpeedLevel) - checking for movement")
-        try? await Task.sleep(for: .seconds(initialMotorValidationDelaySeconds))
-        
-        let speedAfterRamp = getAverageSpeed()
-        
-        if speedAfterRamp > movementThresholdKmh {
-            logWithTime("[SpotLock] Motor already ON - detected movement (speed: \(String(format: "%.2f", speedAfterRamp)) km/h)")
-            motorState = .motorOn
-            isMotorOperationInProgress = false
-            return
-        }
-        
-        logWithTime("[SpotLock] No movement detected - toggling RF_MOTOR to turn ON")
+        logWithTime("[SpotLock] Sending RF_MOTOR to turn ON")
         bluetooth.sendMotorCommand("RF_MOTOR")
         
-        try? await Task.sleep(for: .seconds(initialMotorValidationDelaySeconds))
+        // Wait for motor to spin up
+        try? await Task.sleep(for: .seconds(2.0))
         
-        let speedAfterToggle = getAverageSpeed()
-        
-        if speedAfterToggle > movementThresholdKmh {
-            logWithTime("[SpotLock] Motor confirmed ON (speed: \(String(format: "%.2f", speedAfterToggle)) km/h)")
-            motorState = .motorOn
-        } else {
-            logWithTime("[SpotLock] WARNING: No movement detected after motor toggle (speed: \(String(format: "%.2f", speedAfterToggle)) km/h)")
-            logWithTime("[SpotLock] Assuming motor is ON - may be stationary or GPS speed not updating")
-            motorState = .motorOn
-        }
+        motorState = .motorOn
+        logWithTime("[SpotLock] Motor assumed ON")
         
         isMotorOperationInProgress = false
     }
@@ -287,6 +298,8 @@ class SpotLockController: ObservableObject {
         bluetooth.sendMotorCommand("RF_MOTOR")
         motorState = .motorOff
         currentSpeedLevel = 0
+        
+        try? await Task.sleep(for: .seconds(1.0))
         
         isMotorOperationInProgress = false
     }
@@ -327,49 +340,119 @@ class SpotLockController: ObservableObject {
         )
         
         let needsSteering = abs(relativeAngle) > headingToleranceDegrees
+        let isLargeAngle = abs(relativeAngle) > largeAngleThreshold
         
         if needsSteering {
             let direction = determineSteeringDirection(relativeAngle)
+            
+            // If direction changed, release previous steering first
+            if lastSteeringDirection != .none && lastSteeringDirection != direction {
+                await releaseSteering()
+            }
+            
+            // For very large angle corrections (>120°), reduce speed slightly
+            if isLargeAngle && currentSpeedLevel > minSpeedForLargeAngle {
+                logWithTime("[SpotLock] Large angle (\(String(format: "%.1f", relativeAngle))°) - reducing to speed \(minSpeedForLargeAngle)")
+                await setSpeed(minSpeedForLargeAngle)
+            }
+            
             await steer(direction: direction)
-        }
-        
-        let distanceBeyondDeadZone = max(0, distanceFromLock - deadZoneRadiusMeters)
-        let targetSpeed = calculateProportionalSpeed(distanceBeyondDeadZone)
-        
-        if targetSpeed != currentSpeedLevel && targetSpeed <= maxCorrectionSpeed {
-            await setSpeed(targetSpeed)
+        } else {
+            // Heading is good, release steering if active
+            if lastSteeringDirection != .none {
+                await releaseSteering()
+            }
+            
+            // When heading is aligned, adjust speed based on distance
+            let distanceBeyondDeadZone = max(0, distanceFromLock - deadZoneRadiusMeters)
+            let targetSpeed = calculateProportionalSpeed(distanceBeyondDeadZone)
+            
+            if targetSpeed != currentSpeedLevel {
+                await setSpeed(targetSpeed)
+            }
         }
         
         lastCorrectionTime = Date()
         
         logWithTime("[SpotLock] Correction - Distance: \(String(format: "%.2f", distanceFromLock))m, " +
               "Bearing: \(String(format: "%.1f", currentCorrectionBearing))°, " +
+              "Heading: \(String(format: "%.1f", currentHeading))°, " +
               "Relative: \(String(format: "%.1f", relativeAngle))°, " +
               "Speed: \(currentSpeedLevel), " +
-              "Steering: \(needsSteering ? (relativeAngle > 0 ? "RIGHT" : "LEFT") : "NONE")")
+              "Steering: \(needsSteering ? (relativeAngle > 0 ? "RIGHT" : "LEFT") : "NONE")" +
+              (isLargeAngle ? " [LARGE ANGLE]" : ""))
     }
     
     private func calculateProportionalSpeed(_ distanceBeyondDeadZone: Double) -> Int {
         guard distanceBeyondDeadZone > 0 else { return minCorrectionSpeed }
         
-        let proportionalGain = 0.5
-        let rawSpeed = distanceBeyondDeadZone * proportionalGain
+        // More aggressive gain for wind/current conditions
+        let proportionalGain = 0.3
+        let rawSpeed = distanceBeyondDeadZone * proportionalGain + Double(minCorrectionSpeed)
         let clampedSpeed = min(rawSpeed, Double(maxCorrectionSpeed))
         
         return max(minCorrectionSpeed, Int(round(clampedSpeed)))
     }
     
+    // CHANGED: Reduced steering hold duration and better logging
     private func steer(direction: SteeringDirection) async {
+        guard direction != .none else { return }
+        
+        let command: String
         switch direction {
         case .left:
-            bluetooth.sendMotorCommand("RF_LEFT")
+            command = "RF_LEFT_HOLD"
         case .right:
-            bluetooth.sendMotorCommand("RF_RIGHT")
+            command = "RF_RIGHT_HOLD"
         case .none:
-            break
+            return
         }
         
-        try? await Task.sleep(for: .milliseconds(100))
+        bluetooth.sendMotorCommand(command)
+        lastSteeringDirection = direction
+        
+        // Shorter hold for less aggressive steering
+        try? await Task.sleep(for: .milliseconds(steeringHoldDurationMs))
+        
+        // Auto-release after hold duration
+        await releaseSteering()
+    }
+    
+    private func releaseSteering() async {
+        guard lastSteeringDirection != .none else { return }
+        
+        bluetooth.sendMotorCommand("RF_RELEASE")
+        lastSteeringDirection = .none
+        
+        try? await Task.sleep(for: .milliseconds(200))
+    }
+    
+    // NEW: Track progress and warn if drifting
+    private func checkProgress() {
+        let now = Date()
+        
+        if lastDistanceCheck == nil {
+            lastDistanceCheck = now
+            lastDistanceValue = distanceFromLock
+            return
+        }
+        
+        guard let lastCheck = lastDistanceCheck else { return }
+        let timeSinceCheck = now.timeIntervalSince(lastCheck)
+        
+        if timeSinceCheck >= progressCheckIntervalSeconds {
+            let distanceChange = distanceFromLock - lastDistanceValue
+            
+            if distanceChange > maxAcceptableDrift {
+                logWithTime("[SpotLock] ⚠️ WARNING: Drifting away! Distance increased by \(String(format: "%.2f", distanceChange))m in \(String(format: "%.0f", timeSinceCheck))s")
+                logWithTime("[SpotLock] Consider: 1) Motor may not be ON, 2) Speed too low for conditions, 3) Heading not aligned")
+            } else if distanceChange < -2.0 {
+                logWithTime("[SpotLock] ✓ Making progress: Distance decreased by \(String(format: "%.2f", -distanceChange))m")
+            }
+            
+            lastDistanceCheck = now
+            lastDistanceValue = distanceFromLock
+        }
     }
     
     private func updateSpeedHistory(_ speedKmh: Double) {

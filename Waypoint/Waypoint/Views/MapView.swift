@@ -197,39 +197,42 @@ struct MapView: View {
     
     private var overlayControls: some View {
         VStack {
-            if spotLockController.isActive {
-                spotLockStatusCard
-                    .padding(.top)
-            }
 
             Spacer()
 
-            if let waypoint = selectedWaypoint {
-                SelectedWaypointCard(
-                    waypoint: waypoint,
-                    isNavigationFunctioning: navigationFunctioning,
-                    isSpotLockActive: isSpotLockActive,
-                    navigationProgress: navigationProgress,
-                    totalDistance: totalDistance,
-                    sensorData: bluetooth.sensorData,
-                    canNavigate: canNavigate,
-                    onNavigate: {
-                        navigateToWaypoint(waypoint)
-                    },
-                    onStopNavigation: {
-                        stopNavigation()
-                    },
-                    onEngageSpotLock: {
-                        toggleSpotLock()
-                    },
-                    onDisengageSpotLock: {
-                        toggleSpotLock()
-                    }
-                )
-                .padding()
-            } else if !spotLockController.isActive {
-                quickSpotLockButton
+            if spotLockController.isActive {
+                spotLockStatusCard
                     .padding()
+            } else {
+
+                if let waypoint = selectedWaypoint {
+                SelectedWaypointCard(
+                        waypoint: waypoint,
+                        isNavigationFunctioning: navigationFunctioning,
+                        isSpotLockActive: isSpotLockActive,
+                        navigationProgress: navigationProgress,
+                        totalDistance: totalDistance,
+                        sensorData: bluetooth.sensorData,
+                        canNavigate: canNavigate,
+                        onNavigate: {
+                            navigateToWaypoint(waypoint)
+                        },
+                        onStopNavigation: {
+                            stopNavigation()
+                        },
+                        onEngageSpotLock: {
+                            stopNavigation()
+                            toggleSpotLock()
+                        },
+                        onDisengageSpotLock: {
+                            toggleSpotLock()
+                        }
+                    )
+                    .padding()
+                } else if !spotLockController.isActive {
+                    quickSpotLockButton
+                        .padding()
+                }
             }
         }
     }
