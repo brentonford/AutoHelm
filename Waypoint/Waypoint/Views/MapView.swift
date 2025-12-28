@@ -57,6 +57,19 @@ struct MapView: View {
         return min(max(traveled / totalDistance, 0), 1.0)
     }
 
+    private var bearing: Double? {
+        guard let sensors = bluetooth.sensorData,
+        let lockPos = spotLockController.lockPosition else { return nil }
+        let currentLocation = sensors.currentLocation
+        return currentLocation.bearing(to: lockPos)
+    }
+
+    private func cardinalDirection(for bearing: Double) -> String {
+        let directions = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+        let index = Int((bearing + 11.25) / 22.5) % 16
+        return directions[index]
+    }
+
     var body: some View {
         ZStack {
             mapContent
@@ -283,28 +296,28 @@ struct MapView: View {
                         .foregroundColor(.secondary)
                 }
                 
-                VStack(spacing: 4) {
-                    Image(systemName: spotLockController.isApplyingThrust ? "bolt.fill" : "bolt.slash.fill")
-                        .font(.title3)
-                        .foregroundColor(spotLockController.isApplyingThrust ? .green : .orange)
-                    Text(spotLockController.isApplyingThrust ? "Active" : "Holding")
-                        .font(.subheadline.bold())
-                    Text("Thrust")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-                
-                if spotLockController.isApplyingThrust {
+                if let bearing {
                     VStack(spacing: 4) {
-                        Image(systemName: "speedometer")
+                        Image(systemName: "safari.fill")
                             .font(.title3)
-                            .foregroundColor(.purple)
-                        Text("Level \(spotLockController.currentSpeedLevel)")
+                            .foregroundColor(Color.green)
+                        Text("\(Int(bearing))° \(cardinalDirection(for: bearing))")
                             .font(.subheadline.bold())
-                        Text("Speed")
+                        Text("Bearing")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
+                }
+                
+                VStack(spacing: 4) {
+                    Image(systemName: "speedometer")
+                        .font(.title3)
+                        .foregroundColor(spotLockController.isApplyingThrust ? .green : .orange)
+                    Text("Level \(spotLockController.currentSpeedLevel)")
+                        .font(.subheadline.bold())
+                    Text("Speed")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -374,7 +387,7 @@ struct MapView: View {
                 .buttonStyle(.bordered)
             }
         }
-        .padding(.top, 8)
+        .padding()
     }
     
     private var quickSpotLockButton: some View {
