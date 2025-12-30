@@ -8,6 +8,9 @@ struct ManualMotorControls: View {
     @State private var activeHoldButton: String?
     @State private var activeMomentaryButton: String?
     
+    private let momentaryPressDurationMs: Int = 1000
+    private let momentaryFeedbackDurationMs: Int = 300
+    
     var body: some View {
         VStack(spacing: 16) {
             HStack(spacing: 20) {
@@ -57,7 +60,7 @@ struct ManualMotorControls: View {
         bluetooth.sendCommand("RF_RELEASE")
 
         Task {
-            try? await Task.sleep(for: .milliseconds(300))
+            try? await Task.sleep(for: .milliseconds(momentaryFeedbackDurationMs))
             activeHoldButton = nil
         }
     }
@@ -68,7 +71,7 @@ struct ManualMotorControls: View {
         bluetooth.sendCommand(command)
 
         Task {
-            try? await Task.sleep(for: .milliseconds(800))
+            try? await Task.sleep(for: .milliseconds(momentaryPressDurationMs + momentaryFeedbackDurationMs))
             activeMomentaryButton = nil
         }
     }

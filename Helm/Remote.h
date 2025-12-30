@@ -22,6 +22,7 @@ namespace RemoteProtocol {
     constexpr const char* syncWord = "d391d391";
     constexpr uint16_t burstGapMs = 68;
     constexpr uint16_t defaultHoldMs = 1000;
+    constexpr uint16_t minReliableHoldMs = 500;
 }
 
 enum class Button : uint8_t {

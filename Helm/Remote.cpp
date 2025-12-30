@@ -156,7 +156,9 @@ void Remote::transmitHold(Button button, uint16_t durationMs) {
     if (button == Button::Release)
         return;
 
-    Serial.printf("[TX] HOLD %s (%dms)\n", buttonName(button), durationMs);
+    uint16_t effectiveDuration = max(durationMs, RemoteProtocol::minReliableHoldMs);
+    
+    Serial.printf("[TX] HOLD %s (%dms)\n", buttonName(button), effectiveDuration);
 
     if (_pmLock)
         esp_pm_lock_acquire(_pmLock);
@@ -164,7 +166,7 @@ void Remote::transmitHold(Button button, uint16_t durationMs) {
     uint32_t startTime = millis();
     uint32_t burstCount = 0;
     
-    while ((millis() - startTime) < durationMs) {
+    while ((millis() - startTime) < effectiveDuration) {
         transmitBurst(button);
         burstCount++;
         delay(RemoteProtocol::burstGapMs);
