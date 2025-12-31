@@ -97,12 +97,12 @@ struct StatusToolbar: ToolbarContent {
             }
         }
         
-        ToolbarItem(placement: .topBarTrailing) {
-            Button {
-                showWaypointList()
-            } label: {
-                Label("Waypoints", systemImage: "list.bullet")
-            }
-        }
+        // ToolbarItem(placement: .topBarTrailing) {
+        //     Button {
+        //         showWaypointList()
+        //     } label: {
+        //         Label("Waypoints", systemImage: "list.bullet")
+        //     }
+        // }
     }
 }

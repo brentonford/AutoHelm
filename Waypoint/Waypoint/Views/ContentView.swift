@@ -2,20 +2,24 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var bluetooth = BluetoothManager()
+    @StateObject private var spotLockController: SpotLockController
     @ObservedObject private var dataStore = DataStore.shared
     
     @State private var selectedWaypoint: Waypoint?
     @State private var selectedTab = 0
-    @State private var navigationEnabled = false
+    
+    init() {
+        let bluetooth = BluetoothManager()
+        _bluetooth = StateObject(wrappedValue: bluetooth)
+        _spotLockController = StateObject(wrappedValue: SpotLockController(bluetooth: bluetooth))
+    }
     
     var body: some View {
         TabView(selection: $selectedTab) {
             NavigationStack {
                 MapView(
                     selectedWaypoint: $selectedWaypoint,
-                    waypoints: $dataStore.waypoints,
-                    navigationEnabled: $navigationEnabled,
-                    bluetooth: bluetooth
+                    waypoints: $dataStore.waypoints
                 )
             }
             .tabItem {
@@ -27,8 +31,7 @@ struct ContentView: View {
             NavigationStack {
                 HelmControlView(
                     waypoints: $dataStore.waypoints,
-                    selectedWaypoint: $selectedWaypoint,
-                    navigationEnabled: $navigationEnabled
+                    selectedWaypoint: $selectedWaypoint
                 )
             }
             .tabItem {
@@ -47,12 +50,46 @@ struct ContentView: View {
             .tag(2)
         }
         .environmentObject(bluetooth)
+        .environmentObject(spotLockController)
         .task {
             bluetooth.initialize()
         }
         .onChange(of: dataStore.waypoints) { _, _ in
             dataStore.saveWaypoints()
         }
+        .onChange(of: spotLockController.isActive) { _, isActive in
+            if isActive {
+                startSpotLockTimer()
+            } else {
+                stopSpotLockTimer()
+            }
+        }
+        .onChange(of: bluetooth.connectionState) { _, newState in
+            if newState != .connected {
+                Task {
+                    await spotLockController.disengage()
+                }
+            }
+        }
+        .onDisappear {
+            stopSpotLockTimer()
+        }
+    }
+    
+    @State private var spotLockTimer: Timer?
+    
+    private func startSpotLockTimer() {
+        stopSpotLockTimer()
+        spotLockTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+            Task { @MainActor in
+                await spotLockController.update()
+            }
+        }
+    }
+    
+    private func stopSpotLockTimer() {
+        spotLockTimer?.invalidate()
+        spotLockTimer = nil
     }
 }
 

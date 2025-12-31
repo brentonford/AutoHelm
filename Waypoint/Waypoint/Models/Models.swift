@@ -38,37 +38,6 @@ struct Waypoint: Identifiable, Codable, Equatable, Hashable {
     }
 }
 
-struct Path: Identifiable, Codable {
-    let id: UUID
-    var name: String
-    var waypoints: [Waypoint]
-    var defaultSpeed: Double
-    var loop: Bool
-    var dateCreated: Date
-    var dateModified: Date
-
-    init(name: String = "New Path") {
-        self.id = UUID()
-        self.name = name
-        self.waypoints = []
-        self.defaultSpeed = 3.6
-        self.loop = false
-        self.dateCreated = Date()
-        self.dateModified = Date()
-    }
-
-    mutating func addWaypoint(_ waypoint: Waypoint) {
-        waypoints.append(waypoint)
-        dateModified = Date()
-    }
-
-    mutating func removeWaypoint(at index: Int) {
-        guard index >= 0 && index < waypoints.count else { return }
-        waypoints.remove(at: index)
-        dateModified = Date()
-    }
-}
-
 enum GPSQuality {
     case noFix
     case poor

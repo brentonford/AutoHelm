@@ -130,235 +130,154 @@ struct MomentaryButton: View {
 }
 
 struct SpotLockControls: View {
-    let navigationManager: NavigationManager
+    let spotLockController: SpotLockController
     let canNavigate: Bool
+    let onEngageHere: () -> Void
+    let onEngageAtWaypoint: () -> Void
+    let onDisengage: () -> Void
+    let onJog: (SpotLockController.JogDirection) -> Void
     
     var body: some View {
         VStack(spacing: 12) {
             HStack {
                 Text("Status")
                 Spacer()
-                Text("Coming Soon")
-                    .foregroundColor(.secondary)
+                if spotLockController.isActive {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 10, height: 10)
+                        Text("Active")
+                            .foregroundColor(.green)
+                    }
+                } else {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(Color.gray)
+                            .frame(width: 10, height: 10)
+                        Text("Inactive")
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            
+            if spotLockController.isActive {
+                Divider()
+                
+                LabeledContent("Distance from Lock") {
+                    Text(String(format: "%.2f m", spotLockController.distanceFromLock))
+                }
+                
+                LabeledContent("Speed Level") {
+                    Text("\(spotLockController.currentSpeedLevel)")
+                }
+                
+                LabeledContent("Thrust") {
+                    Text(spotLockController.isApplyingThrust ? "Active" : "Inactive")
+                        .foregroundColor(spotLockController.isApplyingThrust ? .green : .secondary)
+                }
+                
+                LabeledContent("Motor State") {
+                    Text(spotLockController.motorState == .on ? "On" : "Off")
+                        .foregroundColor(spotLockController.motorState == .on ? .green : .secondary)
+                }
+                
+                Divider()
+                
+                jogControls
+                
+                Divider()
+                
+                Button {
+                    onDisengage()
+                } label: {
+                    HStack {
+                        Image(systemName: "pin.slash.fill")
+                        Text("Disengage Spot Lock")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+            } else {
+                Divider()
+                
+                Button {
+                    onEngageHere()
+                } label: {
+                    HStack {
+                        Image(systemName: "pin.circle.fill")
+                        Text("Engage at Current Position")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.blue)
+                .disabled(!canNavigate)
+                
             }
         }
     }
-}
-
-struct WaypointInfo: View {
-    let waypoint: Waypoint
     
-    var body: some View {
-        Group {
-            LabeledContent("Waypoint") {
-                Text(waypoint.name)
-            }
-
-            LabeledContent("Coordinates") {
-                Text(String(format: "%.6f, %.6f",
-                            waypoint.coordinate.latitude,
-                            waypoint.coordinate.longitude))
-                .font(.caption)
-            }
-        }
-    }
-}
-
-struct NavigationMetrics: View {
-    let waypoint: Waypoint
-    let sensors: SensorData
-    let targetSpeed: Double
-    
-    private var bearing: Double {
-        sensors.currentLocation.bearing(to: waypoint.coordinate)
-    }
-    
-    private var distance: Double {
-        sensors.currentLocation.distance(to: waypoint.coordinate)
-    }
-    
-    var body: some View {
+    private var jogControls: some View {
         VStack(spacing: 8) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Bearing")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(String(format: "%.1f°", bearing))
-                        .font(.headline)
-                }
-                
-                Spacer()
-                
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Distance")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(formatDistance(distance))
-                        .font(.headline)
-                }
-                
-                Spacer()
-                
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Target Speed")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(String(format: "%.1f km/hr", targetSpeed))
-                        .font(.headline)
-                        .foregroundColor(.blue)
-                }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-    
-    private func formatDistance(_ meters: Double) -> String {
-        if meters >= 1000 {
-            return String(format: "%.2f km", meters / 1000)
-        }
-        return String(format: "%.0f m", meters)
-    }
-}
-
-struct NavigationPhaseView: View {
-    let phase: NavigationPhase
-    
-    var body: some View {
-        HStack {
-            Text("Navigation Phase")
-                .font(.subheadline)
-            Spacer()
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(phaseColor(phase))
-                    .frame(width: 10, height: 10)
-                Text(phaseText(phase))
-                    .font(.subheadline.bold())
-                    .foregroundColor(phaseColor(phase))
-            }
-        }
-    }
-    
-    private func phaseColor(_ phase: NavigationPhase) -> Color {
-        switch phase {
-        case .idle: return .gray
-        case .initializing, .clearingPower, .verifyingMotor: return .orange
-        case .navigating, .accelerating: return .blue
-        case .cruising: return .green
-        case .maintaining: return .cyan
-        case .spotLock: return .purple
-        case .arrived, .stopping: return .green
-        }
-    }
-    
-    private func phaseText(_ phase: NavigationPhase) -> String {
-        switch phase {
-        case .idle: return "Idle"
-        case .initializing: return "Initializing"
-        case .clearingPower: return "Clearing Power"
-        case .verifyingMotor: return "Verifying Motor"
-        case .navigating: return "Navigating"
-        case .accelerating: return "Accelerating"
-        case .cruising: return "Cruising"
-        case .maintaining: return "Maintaining Speed"
-        case .spotLock: return "Spot Lock"
-        case .arrived: return "Arrived"
-        case .stopping: return "Stopping"
-        }
-    }
-}
-
-struct CommandStatusView: View {
-    let steeringCommand: String
-    let speedCommand: String
-    
-    var body: some View {
-        Group {
-            HStack {
-                Text("Steering Command")
-                    .font(.subheadline)
-                Spacer()
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(steeringCommandColor(for: steeringCommand))
-                        .frame(width: 10, height: 10)
-                    Text(steeringCommandDisplayText(steeringCommand))
-                        .font(.subheadline.bold())
-                        .foregroundColor(steeringCommandColor(for: steeringCommand))
-                }
-            }
+            Text("Jog Position (1.5m)")
+                .font(.caption)
+                .foregroundColor(.secondary)
             
-            Divider()
-            
-            HStack {
-                Text("Speed Command")
-                    .font(.subheadline)
-                Spacer()
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(speedCommandColor(for: speedCommand))
-                        .frame(width: 10, height: 10)
-                    Text(speedCommandDisplayText(speedCommand))
-                        .font(.subheadline.bold())
-                        .foregroundColor(speedCommandColor(for: speedCommand))
+            HStack(spacing: 16) {
+                Button {
+                    onJog(.left)
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: "arrow.left")
+                        Text("W")
+                            .font(.caption2)
+                    }
+                    .frame(width: 44, height: 44)
                 }
+                .buttonStyle(.bordered)
+                
+                VStack(spacing: 8) {
+                    Button {
+                        onJog(.forward)
+                    } label: {
+                        VStack(spacing: 4) {
+                            Image(systemName: "arrow.up")
+                            Text("N")
+                                .font(.caption2)
+                        }
+                        .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.bordered)
+                    
+                    Button {
+                        onJog(.back)
+                    } label: {
+                        VStack(spacing: 4) {
+                            Image(systemName: "arrow.down")
+                            Text("S")
+                                .font(.caption2)
+                        }
+                        .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                
+                Button {
+                    onJog(.right)
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: "arrow.right")
+                        Text("E")
+                            .font(.caption2)
+                    }
+                    .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.bordered)
             }
         }
-    }
-    
-    private func steeringCommandDisplayText(_ command: String) -> String {
-        switch command {
-        case "LEFT": return "← LEFT"
-        case "RIGHT": return "→ RIGHT"
-        case "On Course": return "✓ On Course"
-        case "None": return "⊗ None"
-        default: return command
-        }
-    }
-
-    private func steeringCommandColor(for command: String) -> Color {
-        switch command {
-        case "LEFT", "RIGHT": return .orange
-        case "On Course": return .green
-        default: return .gray
-        }
-    }
-    
-    private func speedCommandDisplayText(_ command: String) -> String {
-        switch command {
-        case "SPEED+": return "↑ SPEED +"
-        case "SPEED-": return "↓ SPEED -"
-        case "At Target": return "✓ At Target"
-        case "Stopped": return "⊗ Stopped"
-        default: return command
-        }
-    }
-    
-    private func speedCommandColor(for command: String) -> Color {
-        switch command {
-        case "SPEED+": return .blue
-        case "SPEED-": return .orange
-        case "At Target": return .green
-        default: return .gray
-        }
-    }
-}
-
-struct SpeedStatusView: View {
-    let gpsSpeed: Double
-    let powerLevel: Int
-    
-    var body: some View {
-        Group {
-            if gpsSpeed > 0 {
-                LabeledContent("GPS Speed", value: String(format: "%.1f km/hr", gpsSpeed))
-            }
-            if powerLevel > 0 {
-                let estimatedSpeed = Double(powerLevel) * 0.36
-                LabeledContent("Est. Speed", value: String(format: "%.1f km/hr", estimatedSpeed))
-            }
-        }
+        .padding(.vertical, 8)
     }
 }
 

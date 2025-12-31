@@ -14,7 +14,6 @@ struct WaypointListView: View {
     @EnvironmentObject var bluetooth: BluetoothManager
     @Binding var waypoints: [Waypoint]
     @Binding var selectedWaypoint: Waypoint?
-    @Binding var navigationEnabled: Bool
 
     @State private var searchText = ""
     @State private var sortOrder: WaypointSortOrder = .dateCreatedNewest

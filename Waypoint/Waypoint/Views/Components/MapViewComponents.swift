@@ -21,14 +21,9 @@ struct WaypointMarker: View {
 
 struct SelectedWaypointCard: View {
     let waypoint: Waypoint
-    let isNavigationFunctioning: Bool
     let isSpotLockActive: Bool
-    let navigationProgress: Double
-    let totalDistance: Double
     let sensorData: SensorData?
     let canNavigate: Bool
-    let onNavigate: () -> Void
-    let onStopNavigation: () -> Void
     let onEngageSpotLock: () -> Void
     let onDisengageSpotLock: () -> Void
     
@@ -54,7 +49,7 @@ struct SelectedWaypointCard: View {
         VStack(alignment: .leading, spacing: 12) {
             headerRow
             waypointInfoRow
-            actionButtons
+            spotLockButton
         }
         .padding()
         .background(.regularMaterial)
@@ -136,34 +131,8 @@ struct SelectedWaypointCard: View {
         .padding(.vertical, 8)
     }
     
-    private var actionButtons: some View {
+    private var spotLockButton: some View {
         VStack(spacing: 8) {
-            if isNavigationFunctioning {
-                Button {
-                    onStopNavigation()
-                } label: {
-                    HStack {
-                        Image(systemName: "stop.fill")
-                        Text("Stop Navigation")
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .tint(Color.red)
-            } else {
-                Button {
-                    onNavigate()
-                } label: {
-                    HStack {
-                        Image(systemName: "location.fill")
-                        Text("Navigate to Waypoint")
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!canNavigate)
-            }
-            
             if isSpotLockActive {
                 Button {
                     onDisengageSpotLock()
@@ -175,20 +144,7 @@ struct SelectedWaypointCard: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
-                .tint(Color.orange)
-            } else {
-                Button {
-                    onEngageSpotLock()
-                } label: {
-                    HStack {
-                        Image(systemName: "pin.fill")
-                        Text("Engage Spot Lock")
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .tint(Color.orange)
-                .disabled(!canNavigate)
+                .tint(Color.red)
             }
         }
     }
