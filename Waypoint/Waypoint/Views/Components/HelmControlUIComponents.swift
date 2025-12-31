@@ -214,7 +214,6 @@ struct SpotLockControls: View {
                 .buttonStyle(.borderedProminent)
                 .tint(.blue)
                 .disabled(!canNavigate)
-                
             }
         }
     }
@@ -368,26 +367,30 @@ struct CompassView: View {
             Circle()
                 .stroke(Color.gray.opacity(0.3), lineWidth: 2)
             
-            ForEach(["N", "E", "S", "W"], id: \.self) { direction in
-                Text(direction)
-                    .font(.caption.bold())
-                    .offset(y: directionOffset(for: direction))
-            }
+            // North
+            Text("N")
+                .font(.caption.bold())
+                .offset(x: 0, y: -60)
+            
+            // East
+            Text("E")
+                .font(.caption.bold())
+                .offset(x: 60, y: 0)
+            
+            // South
+            Text("S")
+                .font(.caption.bold())
+                .offset(x: 0, y: 60)
+            
+            // West
+            Text("W")
+                .font(.caption.bold())
+                .offset(x: -60, y: 0)
             
             Image(systemName: "location.north.fill")
                 .font(.title)
                 .foregroundColor(.red)
-                .rotationEffect(.degrees(-heading))
-        }
-    }
-    
-    private func directionOffset(for direction: String) -> CGFloat {
-        switch direction {
-        case "N": return -60
-        case "E": return 0
-        case "S": return 60
-        case "W": return 0
-        default: return 0
+                .rotationEffect(.degrees(heading))
         }
     }
 }

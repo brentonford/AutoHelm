@@ -53,16 +53,16 @@ struct MapView: View {
                 showingWaypointList = true
             }
         }
-        .overlay(alignment: .bottom) {
-            if waypoints.isEmpty && selectedWaypoint == nil && !spotLockController.isActive {
-                Text("Long press on map to create a waypoint")
-                    .font(.caption)
-                    .padding(8)
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(8)
-                    .padding(.bottom, 16)
-            }
-        }
+        // .overlay(alignment: .bottom) {
+        //     if waypoints.isEmpty && selectedWaypoint == nil && !spotLockController.isActive {
+        //         Text("Long press on map to create a waypoint")
+        //             .font(.caption)
+        //             .padding(8)
+        //             .background(.ultraThinMaterial)
+        //             .cornerRadius(8)
+        //             .padding(.bottom, 16)
+        //     }
+        // }
         .sheet(isPresented: $showingWaypointSheet) {
             AddWaypointSheet(
                 coordinate: pendingCoordinate,
@@ -91,12 +91,21 @@ struct MapView: View {
                     let helmLocation = sensors.currentLocation
                     Annotation("Helm", coordinate: helmLocation) {
                         ZStack {
+                            // Background circle
                             Circle()
                                 .fill(Color.blue)
-                                .frame(width: 20, height: 20)
+                                .frame(width: 30, height: 30)
+                            
+                            // White border
                             Circle()
                                 .stroke(Color.white, lineWidth: 3)
-                                .frame(width: 20, height: 20)
+                                .frame(width: 30, height: 30)
+                            
+                            // Arrow pointing in heading direction
+                            Image(systemName: "location.north.fill")
+                                .font(.system(size: 20))
+                                .foregroundColor(.white)
+                                .rotationEffect(.degrees(sensors.heading))
                         }
                     }
                 }
@@ -255,64 +264,64 @@ struct MapView: View {
         HStack() {
             Spacer()
 
-            VStack(spacing: 8) {
-                Text("Jog Position (1.5m)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+        VStack(spacing: 8) {
+            Text("Jog Position (1.5m)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            
+            HStack(spacing: 16) {
+                Button {
+                    spotLockController.jog(direction: .left)
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: "arrow.left")
+                        Text("W")
+                            .font(.caption2)
+                    }
+                    .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.bordered)
                 
-                HStack(spacing: 16) {
+                VStack(spacing: 8) {
                     Button {
-                        spotLockController.jog(direction: .left)
+                        spotLockController.jog(direction: .forward)
                     } label: {
                         VStack(spacing: 4) {
-                            Image(systemName: "arrow.left")
-                            Text("W")
+                            Image(systemName: "arrow.up")
+                            Text("N")
                                 .font(.caption2)
                         }
                         .frame(width: 44, height: 44)
                     }
                     .buttonStyle(.bordered)
                     
-                    VStack(spacing: 8) {
-                        Button {
-                            spotLockController.jog(direction: .forward)
-                        } label: {
-                            VStack(spacing: 4) {
-                                Image(systemName: "arrow.up")
-                                Text("N")
-                                    .font(.caption2)
-                            }
-                            .frame(width: 44, height: 44)
-                        }
-                        .buttonStyle(.bordered)
-                        
-                        Button {
-                            spotLockController.jog(direction: .back)
-                        } label: {
-                            VStack(spacing: 4) {
-                                Image(systemName: "arrow.down")
-                                Text("S")
-                                    .font(.caption2)
-                            }
-                            .frame(width: 44, height: 44)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    
                     Button {
-                        spotLockController.jog(direction: .right)
+                        spotLockController.jog(direction: .back)
                     } label: {
                         VStack(spacing: 4) {
-                            Image(systemName: "arrow.right")
-                            Text("E")
+                            Image(systemName: "arrow.down")
+                            Text("S")
                                 .font(.caption2)
                         }
                         .frame(width: 44, height: 44)
                     }
                     .buttonStyle(.bordered)
                 }
+                
+                Button {
+                    spotLockController.jog(direction: .right)
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: "arrow.right")
+                        Text("E")
+                            .font(.caption2)
+                    }
+                    .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.bordered)
             }
-            .padding()
+        }
+        .padding()
 
             Spacer()
         }
