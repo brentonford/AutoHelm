@@ -9,10 +9,12 @@ class SpotLockController: ObservableObject {
     
     @Published var lockPosition: CLLocationCoordinate2D?
     @Published var isActive: Bool = false
+    @Published private(set) var isDisengaging: Bool = false
     @Published private(set) var distanceFromLock: Double = 0
     @Published private(set) var isApplyingThrust: Bool = false
     @Published private(set) var currentCorrectionBearing: Double = 0
     @Published private(set) var currentSpeedLevel: Int = 0
+    @Published private(set) var isJogging: Bool = false
     
     // MARK: - Configuration Constants
     
@@ -37,6 +39,7 @@ class SpotLockController: ObservableObject {
         static let mediumSteeringDuration: Int = 1000
         static let largeSteeringDuration: Int = 2000
         static let alignmentOnlyThreshold: Double = 90.0
+        static let alignmentStableThreshold: Double = 60.0
         
         // Timing intervals
         static let correctionInterval: Double = 2.0
@@ -61,6 +64,10 @@ class SpotLockController: ObservableObject {
     private var lastAlignmentCorrectionTime: Date?
     private var lastSteeringDirection: SteeringDirection = .none
     private var committedAlignmentDirection: SteeringDirection = .none
+    private var jogHoldTimer: Timer?
+    private var currentJogDirection: JogDirection?
+    private var isSpeedChangeInProgress: Bool = false
+    private var targetSpeedLevel: Int = 0
     
     // Position tracking
     private var positionHistory: [PositionSample] = []
@@ -124,6 +131,7 @@ class SpotLockController: ObservableObject {
         log("   Activation: \(Config.activationThreshold)m")
         log("   Speed range: \(Config.minSpeed)-\(Config.maxSpeed)")
         log("   Heading tolerance: \(Config.headingTolerance)° (target: <10°)")
+        log("   Alignment stable threshold: \(Config.alignmentStableThreshold)°")
         log("   Steering durations: <30°=100ms, 30-90°=1000ms, >90°=2000ms")
         
         await ensureSpeedIsZero()
@@ -133,7 +141,10 @@ class SpotLockController: ObservableObject {
     func disengage() async {
         guard isActive else { return }
         
+        isDisengaging = true
         log("ℹ️  DISENGAGING...")
+        
+        stopJogHold()
         
         if lastSteeringDirection != .none {
             await releaseSteering()
@@ -147,11 +158,47 @@ class SpotLockController: ObservableObject {
         lockPosition = nil
         resetState()
         
+        isDisengaging = false
         log("✅ DISENGAGED")
     }
     
-    /// Moves the lock position by a small amount in the specified direction
-    func jog(direction: JogDirection) {
+    /// Starts jogging in the specified direction (call when button pressed)
+    func jogStart(direction: JogDirection) {
+        guard lockPosition != nil else { return }
+        
+        stopJogHold()
+        
+        currentJogDirection = direction
+        isJogging = true
+        
+        performJog(direction: direction)
+        
+        jogHoldTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self = self, let dir = self.currentJogDirection else { return }
+                self.performJog(direction: dir)
+            }
+        }
+        
+        log("🎮 JOG START \(direction.compassName)")
+    }
+    
+    /// Stops jogging (call when button released)
+    func jogStop() {
+        guard isJogging else { return }
+        
+        stopJogHold()
+        log("🎮 JOG STOP")
+    }
+    
+    private func stopJogHold() {
+        jogHoldTimer?.invalidate()
+        jogHoldTimer = nil
+        currentJogDirection = nil
+        isJogging = false
+    }
+    
+    private func performJog(direction: JogDirection) {
         guard let currentLock = lockPosition else { return }
         
         let newPosition = calculateDestination(
@@ -163,8 +210,6 @@ class SpotLockController: ObservableObject {
         lockPosition = newPosition
         positionHistory.removeAll()
         lastProgressCheck = nil
-        
-        log("🎮 JOGGED \(direction.compassName) → \(formatCoordinate(newPosition))")
     }
     
     /// Main update loop - call this repeatedly to maintain position
@@ -201,34 +246,44 @@ class SpotLockController: ObservableObject {
             guard shouldApplyAlignmentCorrection() else { return }
             
             if isApplyingThrust {
-                await stopThrust()
+                Task {
+                    await stopThrust()
+                }
             }
             
-            await performAlignmentCorrection(
-                relativeAngle: relativeAngle,
-                currentHeading: sensors.heading
-            )
+            Task {
+                await performAlignmentCorrection(
+                    relativeAngle: relativeAngle,
+                    currentHeading: sensors.heading
+                )
+            }
         } else {
             guard shouldApplyCorrection() else { return }
             
             if isApplyingThrust {
                 if distanceFromLock < (Config.activationThreshold * Config.hysteresisRatio) {
-                    await stopThrust()
+                    Task {
+                        await stopThrust()
+                    }
                 } else {
-                    await performCorrection(
-                        from: filteredLocation,
-                        to: lockPos,
-                        heading: sensors.heading
-                    )
+                    Task {
+                        await performCorrection(
+                            from: filteredLocation,
+                            to: lockPos,
+                            heading: sensors.heading
+                        )
+                    }
                 }
             } else {
                 if distanceFromLock > Config.activationThreshold {
-                    await startThrust()
-                    await performCorrection(
-                        from: filteredLocation,
-                        to: lockPos,
-                        heading: sensors.heading
-                    )
+                    Task {
+                        await startThrust()
+                        await performCorrection(
+                            from: filteredLocation,
+                            to: lockPos,
+                            heading: sensors.heading
+                        )
+                    }
                 }
             }
         }
@@ -242,12 +297,17 @@ class SpotLockController: ObservableObject {
     private func ensureSpeedIsZero() async {
         log("🔧 Ensuring speed is 0...")
         
+        // Force clear any pending operations
+        isSpeedChangeInProgress = false
+        targetSpeedLevel = 0
+        currentSpeedLevel = 0
+        
+        // Send 10 DOWN commands to guarantee speed is 0
         for _ in 1...10 {
             bluetooth.sendCommand("RF_DOWN")
             try? await Task.sleep(for: .milliseconds(500))
         }
         
-        currentSpeedLevel = 0
         log("✅ Speed set to 0")
     }
     
@@ -255,23 +315,28 @@ class SpotLockController: ObservableObject {
     private func setSpeed(_ targetLevel: Int) async {
         let clampedTarget = max(0, min(targetLevel, Config.maxSpeed))
         guard clampedTarget != currentSpeedLevel else { return }
+        guard !isSpeedChangeInProgress else {
+            targetSpeedLevel = clampedTarget
+            return
+        }
+        
+        isSpeedChangeInProgress = true
+        targetSpeedLevel = clampedTarget
         
         log("📼 Speed change: \(currentSpeedLevel) → \(clampedTarget)")
         
-        if clampedTarget > currentSpeedLevel {
-            for _ in currentSpeedLevel..<clampedTarget {
+        while currentSpeedLevel != targetSpeedLevel && isSpeedChangeInProgress {
+            if targetSpeedLevel > currentSpeedLevel {
                 bluetooth.sendCommand("RF_UP")
                 currentSpeedLevel = min(currentSpeedLevel + 1, Config.maxSpeed)
-                try? await Task.sleep(for: .seconds(Config.speedChangeDelay))
-            }
-        } else {
-            for _ in clampedTarget..<currentSpeedLevel {
+            } else {
                 bluetooth.sendCommand("RF_DOWN")
                 currentSpeedLevel = max(currentSpeedLevel - 1, 0)
-                try? await Task.sleep(for: .seconds(Config.speedChangeDelay))
             }
+            try? await Task.sleep(for: .seconds(Config.speedChangeDelay))
         }
         
+        isSpeedChangeInProgress = false
         log("✅ Speed set to \(currentSpeedLevel)")
     }
     
@@ -284,7 +349,9 @@ class SpotLockController: ObservableObject {
         isApplyingThrust = true
         
         if currentSpeedLevel < Config.minSpeed {
-            await setSpeed(Config.minSpeed)
+            Task {
+                await setSpeed(Config.minSpeed)
+            }
         }
         
         log("🚀 THRUST START (distance: \(formatDistance(distanceFromLock)), speed: \(currentSpeedLevel))")
@@ -299,8 +366,13 @@ class SpotLockController: ObservableObject {
         if lastSteeringDirection != .none {
             await releaseSteering()
         }
+
+        isSpeedChangeInProgress = false
+        targetSpeedLevel = 0    
         
-        await setSpeed(0)
+        Task {
+            await setSpeed(0)
+        }
         
         isApplyingThrust = false
     }
@@ -368,6 +440,9 @@ class SpotLockController: ObservableObject {
         to targetLocation: CLLocationCoordinate2D,
         heading currentHeading: Double
     ) async {
+        // Mark correction time BEFORE operation to prevent concurrent corrections
+        lastCorrectionTime = Date()
+        
         currentCorrectionBearing = currentLocation.bearing(to: targetLocation)
         
         let relativeAngle = calculateRelativeAngle(
@@ -375,10 +450,10 @@ class SpotLockController: ObservableObject {
             targetBearing: currentCorrectionBearing
         )
         
-        // Clear committed alignment direction when in normal correction mode
-        if committedAlignmentDirection != .none {
+        // Only clear committed alignment direction if heading is stable enough
+        if committedAlignmentDirection != .none && abs(relativeAngle) < Config.alignmentStableThreshold {
             committedAlignmentDirection = .none
-            log("✅ Exited alignment mode - entering normal corrections")
+            log("✅ Exited alignment mode - entering normal corrections (angle: \(formatAngle(relativeAngle)))")
         }
         
         let needsSteering = abs(relativeAngle) > Config.headingTolerance
@@ -400,19 +475,17 @@ class SpotLockController: ObservableObject {
             let distanceBeyondDeadZone = max(0, distanceFromLock - Config.deadZoneRadius)
             let targetSpeed = calculateProportionalSpeed(for: distanceBeyondDeadZone)
             
-            if targetSpeed != currentSpeedLevel {
+            if targetSpeed != targetSpeedLevel {
                 await setSpeed(targetSpeed)
             }
         }
-        
-        lastCorrectionTime = Date()
         
         log("🧭 CORRECTION: " +
             "dist=\(formatDistance(distanceFromLock)), " +
             "bearing=\(formatAngle(currentCorrectionBearing)), " +
             "heading=\(formatAngle(currentHeading)), " +
             "relative=\(formatAngle(relativeAngle)), " +
-            "speed=\(currentSpeedLevel), " +
+            "speed=\(currentSpeedLevel)/\(targetSpeedLevel), " +
             "steering=\(needsSteering ? (relativeAngle > 0 ? "RIGHT" : "LEFT") + " \(calculateSteeringDuration(for: abs(relativeAngle)))ms" : "NONE")")
     }
     
@@ -544,12 +617,15 @@ class SpotLockController: ObservableObject {
         distanceFromLock = 0
         isApplyingThrust = false
         currentSpeedLevel = 0
+        targetSpeedLevel = 0
+        isSpeedChangeInProgress = false
         positionHistory.removeAll()
         lastCorrectionTime = nil
         lastAlignmentCorrectionTime = nil
         lastSteeringDirection = .none
         committedAlignmentDirection = .none
         lastProgressCheck = nil
+        stopJogHold()
     }
     
     /// Calculates relative angle from current heading to target bearing

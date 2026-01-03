@@ -3,9 +3,6 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var bluetooth: BluetoothManager
     @ObservedObject var dataStore = DataStore.shared
-    @AppStorage("autoEnableNavigation") private var autoEnableNavigation = true
-    @AppStorage("showCoordinatesOnMap") private var showCoordinatesOnMap = true
-    @AppStorage("useMetricUnits") private var useMetricUnits = true
     
     @State private var showingCalibrationSheet = false
     
@@ -13,8 +10,6 @@ struct SettingsView: View {
         List {
             calibrationSection
             northCalibrationSection
-            navigationSettingsSection
-            displaySettingsSection
             deviceSection
             dataSection
             aboutSection
@@ -168,31 +163,6 @@ struct SettingsView: View {
         }
     }
     
-    // MARK: - Navigation Settings
-    
-    private var navigationSettingsSection: some View {
-        Section {
-            Toggle("Auto-enable navigation when sending waypoint", isOn: $autoEnableNavigation)
-        } header: {
-            Text("Navigation")
-        } footer: {
-            Text("When enabled, sending a waypoint to Helm will automatically enable autonomous navigation.")
-        }
-    }
-    
-    // MARK: - Display Settings
-    
-    private var displaySettingsSection: some View {
-        Section {
-            Toggle("Show coordinates on map markers", isOn: $showCoordinatesOnMap)
-            Toggle("Use metric units", isOn: $useMetricUnits)
-        } header: {
-            Text("Display")
-        } footer: {
-            Text("Metric: meters and kilometers • Imperial: feet and miles")
-        }
-    }
-    
     // MARK: - Device Section
     
     private var deviceSection: some View {
@@ -223,25 +193,6 @@ struct SettingsView: View {
     
     private var dataSection: some View {
         Section {
-            HStack {
-                Text("Saved Waypoints")
-                Spacer()
-                Text("\(dataStore.waypoints.count)")
-                    .foregroundColor(.secondary)
-            }
-            
-            if !dataStore.waypoints.isEmpty {
-                Button(role: .destructive) {
-                    dataStore.waypoints.removeAll()
-                    dataStore.saveWaypoints()
-                } label: {
-                    HStack {
-                        Image(systemName: "trash")
-                        Text("Delete All Waypoints")
-                    }
-                }
-            }
-            
             if dataStore.calibration.isCalibrated {
                 Button(role: .destructive) {
                     dataStore.clearCalibration()
@@ -255,7 +206,7 @@ struct SettingsView: View {
         } header: {
             Text("Data")
         } footer: {
-            Text("Waypoints and calibration data are saved automatically and persist across app updates.")
+            Text("Calibration data is saved automatically and persists across app updates.")
         }
     }
     
@@ -277,9 +228,8 @@ struct SettingsView: View {
                     .font(.headline)
                 
                 VStack(alignment: .leading, spacing: 8) {
-                    FeatureRow(icon: "location.fill", text: "Autonomous GPS navigation")
+                    FeatureRow(icon: "pin.fill", text: "Spot Lock position holding")
                     FeatureRow(icon: "safari.fill", text: "Compass-guided steering")
-                    FeatureRow(icon: "map.fill", text: "Waypoint management")
                     FeatureRow(icon: "antenna.radiowaves.left.and.right", text: "Wireless motor control")
                 }
                 
@@ -325,7 +275,7 @@ struct SettingsView: View {
                     Text("Version")
                         .foregroundColor(.secondary)
                     Spacer()
-                    Text("1.1.0")
+                    Text("2.0.0")
                         .foregroundColor(.secondary)
                 }
                 
@@ -353,9 +303,6 @@ struct SettingsView: View {
         }
         
         print("[Settings] Current heading: \(currentHeading)°, setting as north offset")
-        
-        // The offset is what we subtract from readings to get true north
-        // If device shows 104° when pointing north, offset = 104
         bluetooth.setHeadingOffset(currentHeading)
     }
 }

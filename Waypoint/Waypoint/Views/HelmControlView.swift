@@ -5,11 +5,6 @@ struct HelmControlView: View {
     @EnvironmentObject var bluetooth: BluetoothManager
     @EnvironmentObject var spotLockController: SpotLockController
     
-    @Binding var waypoints: [Waypoint]
-    @Binding var selectedWaypoint: Waypoint?
-    
-    @State private var showingWaypointList = false
-    
     private var canNavigate: Bool {
         bluetooth.connectionState == .connected &&
         bluetooth.sensorData?.isNavigationReady == true
@@ -31,15 +26,7 @@ struct HelmControlView: View {
         }
         .navigationTitle("Helm Control")
         .toolbar {
-            StatusToolbar(bluetooth: bluetooth) {
-                showingWaypointList = true
-            }
-        }
-        .sheet(isPresented: $showingWaypointList) {
-            WaypointListView(
-                waypoints: $waypoints,
-                selectedWaypoint: $selectedWaypoint
-            )
+            StatusToolbar(bluetooth: bluetooth)
         }
     }
     
@@ -69,18 +56,18 @@ struct HelmControlView: View {
                     }
                 },
                 onEngageAtWaypoint: {
-                    Task {
-                        guard let waypoint = selectedWaypoint else { return }
-                        await spotLockController.engage(at: waypoint.coordinate)
-                    }
+                    // Waypoint functionality removed
                 },
                 onDisengage: {
                     Task {
                         await spotLockController.disengage()
                     }
                 },
-                onJog: { direction in
-                    spotLockController.jog(direction: direction)
+                onJogStart: { direction in
+                    spotLockController.jogStart(direction: direction)
+                },
+                onJogStop: {
+                    spotLockController.jogStop()
                 }
             )
             
@@ -185,10 +172,7 @@ struct HelmControlView: View {
 }
 
 #Preview {
-    HelmControlView(
-        waypoints: .constant([]),
-        selectedWaypoint: .constant(nil)
-    )
-    .environmentObject(BluetoothManager())
-    .environmentObject(SpotLockController(bluetooth: BluetoothManager()))
+    HelmControlView()
+        .environmentObject(BluetoothManager())
+        .environmentObject(SpotLockController(bluetooth: BluetoothManager()))
 }

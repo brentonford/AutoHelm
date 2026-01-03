@@ -8,56 +8,12 @@ class DataStore: ObservableObject {
     
     static let shared = DataStore()
     
-    @Published var waypoints: [Waypoint] = []
     @Published var calibration: CompassCalibration = CompassCalibration()
     
-    private let waypointsKey = "savedWaypoints"
     private let calibrationKey = "compassCalibration"
     
     private init() {
-        loadWaypoints()
         loadCalibration()
-    }
-    
-    // MARK: - Waypoints
-    
-    func saveWaypoints() {
-        do {
-            let data = try JSONEncoder().encode(waypoints)
-            UserDefaults.standard.set(data, forKey: waypointsKey)
-        } catch {
-            print("Failed to save waypoints: \(error)")
-        }
-    }
-    
-    func loadWaypoints() {
-        guard let data = UserDefaults.standard.data(forKey: waypointsKey) else { return }
-        do {
-            waypoints = try JSONDecoder().decode([Waypoint].self, from: data)
-        } catch {
-            print("Failed to load waypoints: \(error)")
-        }
-    }
-    
-    func addWaypoint(_ waypoint: Waypoint) {
-        waypoints.append(waypoint)
-        saveWaypoints()
-    }
-    
-    func updateWaypoint(_ waypoint: Waypoint) {
-        guard let index = waypoints.firstIndex(where: { $0.id == waypoint.id }) else { return }
-        waypoints[index] = waypoint
-        saveWaypoints()
-    }
-    
-    func deleteWaypoint(_ waypoint: Waypoint) {
-        waypoints.removeAll { $0.id == waypoint.id }
-        saveWaypoints()
-    }
-    
-    func deleteWaypoint(at offsets: IndexSet) {
-        waypoints.remove(atOffsets: offsets)
-        saveWaypoints()
     }
     
     // MARK: - Calibration
@@ -181,7 +137,7 @@ struct CalibrationData: Codable {
             scaleX: scaleX,
             scaleY: scaleY,
             scaleZ: scaleZ,
-            headingOffset: 0.0,  // Don't set headingOffset from magnetometer calibration
+            headingOffset: 0.0,
             dateCalibrated: Date(),
             sampleCount: samples ?? 0
         )

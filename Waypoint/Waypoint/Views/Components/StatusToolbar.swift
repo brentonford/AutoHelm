@@ -58,7 +58,6 @@ struct StatusIndicator: View {
 
 struct StatusToolbar: ToolbarContent {
     @ObservedObject var bluetooth: BluetoothManager
-    let showWaypointList: () -> Void
     
     private var compassColor: Color {
         guard bluetooth.connectionState == .connected else { return .red }
@@ -96,13 +95,5 @@ struct StatusToolbar: ToolbarContent {
                 StatusIndicator(label: "Navigation:", color: navigationColor)
             }
         }
-        
-        // ToolbarItem(placement: .topBarTrailing) {
-        //     Button {
-        //         showWaypointList()
-        //     } label: {
-        //         Label("Waypoints", systemImage: "list.bullet")
-        //     }
-        // }
     }
 }

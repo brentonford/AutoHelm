@@ -2,42 +2,6 @@ import Foundation
 import CoreLocation
 import SwiftUI
 
-struct Waypoint: Identifiable, Codable, Equatable, Hashable {
-    let id: UUID
-    var coordinate: CLLocationCoordinate2D
-    var name: String
-    var dateCreated: Date
-    var dateModified: Date
-    var spotLockEnabled: Bool
-    var approachSpeed: Double
-    var arrivalRadius: Double
-
-    init(
-        id: UUID = UUID(),
-        coordinate: CLLocationCoordinate2D,
-        name: String = "",
-        dateCreated: Date = Date(),
-        dateModified: Date = Date(),
-        spotLockEnabled: Bool = false,
-        approachSpeed: Double = 0,
-        arrivalRadius: Double = 5.0
-    ) {
-        self.id = id
-        self.coordinate = coordinate
-        self.name = name
-        self.dateCreated = dateCreated
-        self.dateModified = dateModified
-        self.spotLockEnabled = spotLockEnabled
-        self.approachSpeed = approachSpeed
-        self.arrivalRadius = arrivalRadius
-    }
-
-    mutating func updateName(_ newName: String) {
-        name = newName
-        dateModified = Date()
-    }
-}
-
 enum GPSQuality {
     case noFix
     case poor
@@ -138,13 +102,6 @@ enum ConnectionState: String {
     case scanning = "Scanning..."
     case connecting = "Connecting..."
     case connected = "Connected"
-}
-
-enum JogDirection {
-    case forward
-    case back
-    case left
-    case right
 }
 
 class LocationWithSpeed {

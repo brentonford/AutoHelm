@@ -3,9 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var bluetooth = BluetoothManager()
     @StateObject private var spotLockController: SpotLockController
-    @ObservedObject private var dataStore = DataStore.shared
     
-    @State private var selectedWaypoint: Waypoint?
     @State private var selectedTab = 0
     
     init() {
@@ -17,10 +15,7 @@ struct ContentView: View {
     var body: some View {
         TabView(selection: $selectedTab) {
             NavigationStack {
-                MapView(
-                    selectedWaypoint: $selectedWaypoint,
-                    waypoints: $dataStore.waypoints
-                )
+                MapView()
             }
             .tabItem {
                 Label("Map", systemImage: "map")
@@ -29,10 +24,7 @@ struct ContentView: View {
             .tag(0)
             
             NavigationStack {
-                HelmControlView(
-                    waypoints: $dataStore.waypoints,
-                    selectedWaypoint: $selectedWaypoint
-                )
+                HelmControlView()
             }
             .tabItem {
                 Label("Helm", systemImage: "helm")
@@ -53,9 +45,6 @@ struct ContentView: View {
         .environmentObject(spotLockController)
         .task {
             bluetooth.initialize()
-        }
-        .onChange(of: dataStore.waypoints) { _, _ in
-            dataStore.saveWaypoints()
         }
         .onChange(of: spotLockController.isActive) { _, isActive in
             if isActive {

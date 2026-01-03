@@ -135,153 +135,174 @@ struct SpotLockControls: View {
     let onEngageHere: () -> Void
     let onEngageAtWaypoint: () -> Void
     let onDisengage: () -> Void
-    let onJog: (SpotLockController.JogDirection) -> Void
+    let onJogStart: (SpotLockController.JogDirection) -> Void
+    let onJogStop: () -> Void
     
     @State private var showingInitWarning = false
     
     var body: some View {
         VStack(spacing: 12) {
-            HStack {
-                Text("Status")
-                Spacer()
-                if spotLockController.isActive {
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(Color.green)
-                            .frame(width: 10, height: 10)
-                        Text("Active")
-                            .foregroundColor(.green)
-                    }
-                } else {
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(Color.gray)
-                            .frame(width: 10, height: 10)
-                        Text("Inactive")
-                            .foregroundColor(.secondary)
-                    }
-                }
-            }
-            
-            if spotLockController.isActive {
-                Divider()
-                
-                LabeledContent("Distance from Lock") {
-                    Text(String(format: "%.2f m", spotLockController.distanceFromLock))
-                }
-                
-                LabeledContent("Speed Level") {
-                    Text("\(spotLockController.currentSpeedLevel)")
-                }
-                
-                LabeledContent("Thrust") {
-                    Text(spotLockController.isApplyingThrust ? "Active" : "Inactive")
-                        .foregroundColor(spotLockController.isApplyingThrust ? .green : .secondary)
-                }
-                
-                Divider()
-                
-                jogControls
-                
-                Divider()
-                
-                Button {
-                    onDisengage()
-                } label: {
-                    HStack {
-                        Image(systemName: "pin.slash.fill")
-                        Text("Disengage Spot Lock")
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .tint(.red)
+            if spotLockController.isDisengaging {
+                disengagingIndicator
             } else {
-                Divider()
-                
-                Button {
-                    showingInitWarning = true
-                } label: {
-                    HStack {
-                        Image(systemName: "pin.circle.fill")
-                        Text("Engage at Current Position")
+                HStack {
+                    Text("Status")
+                    Spacer()
+                    if spotLockController.isActive {
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 10, height: 10)
+                            Text("Active")
+                                .foregroundColor(.green)
+                        }
+                    } else {
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(Color.gray)
+                                .frame(width: 10, height: 10)
+                            Text("Inactive")
+                                .foregroundColor(.secondary)
+                        }
                     }
-                    .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.blue)
-                .disabled(!canNavigate)
-                .alert("Motor Initialization Required", isPresented: $showingInitWarning) {
-                    Button("Cancel", role: .cancel) { }
-                    Button("Continue") {
-                        onEngageHere()
+                
+                if spotLockController.isActive {
+                    Divider()
+                    
+                    LabeledContent("Distance from Lock") {
+                        Text(String(format: "%.2f m", spotLockController.distanceFromLock))
                     }
-                } message: {
-                    Text("Before engaging Spot Lock, ensure the electric motor is:\n\n• Motor is ON\n• Speed is set to 0\n\nSpot Lock will only control speed levels.")
+                    
+                    LabeledContent("Speed Level") {
+                        Text("\(spotLockController.currentSpeedLevel)")
+                    }
+                    
+                    LabeledContent("Thrust") {
+                        Text(spotLockController.isApplyingThrust ? "Active" : "Inactive")
+                            .foregroundColor(spotLockController.isApplyingThrust ? .green : .secondary)
+                    }
+                    
+                    Divider()
+                    
+                    jogControls
+                    
+                    Divider()
+                    
+                    Button {
+                        onDisengage()
+                    } label: {
+                        HStack {
+                            Image(systemName: "pin.slash.fill")
+                            Text("Disengage Spot Lock")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                } else {
+                    Divider()
+                    
+                    Button {
+                        showingInitWarning = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "pin.circle.fill")
+                            Text("Engage at Current Position")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.blue)
+                    .disabled(!canNavigate)
+                    .alert("Motor Initialization Required", isPresented: $showingInitWarning) {
+                        Button("Cancel", role: .cancel) { }
+                        Button("Continue") {
+                            onEngageHere()
+                        }
+                    } message: {
+                        Text("Before engaging Spot Lock, ensure the electric motor is:\n\n• Motor is ON\n• Speed is set to 0\n\nSpot Lock will only control speed levels.")
+                    }
                 }
             }
         }
     }
     
+    private var disengagingIndicator: some View {
+        VStack(spacing: 12) {
+            HStack {
+                ProgressView()
+                    .scaleEffect(0.8)
+                Text("Disengaging...")
+                    .font(.headline)
+                    .foregroundColor(.orange)
+                Spacer()
+            }
+            
+            Text("Please wait while Spot Lock safely disengages")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding()
+        .background(Color.orange.opacity(0.1))
+        .cornerRadius(8)
+    }
+    
     private var jogControls: some View {
         VStack(spacing: 8) {
-            Text("Jog Position (1.5m)")
+            Text("Jog Position (Hold to move continuously)")
                 .font(.caption)
                 .foregroundColor(.secondary)
             
             HStack(spacing: 16) {
-                Button {
-                    onJog(.left)
-                } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: "arrow.left")
-                        Text("W")
-                            .font(.caption2)
-                    }
-                    .frame(width: 44, height: 44)
-                }
-                .buttonStyle(.bordered)
+                JogButton(direction: .left, icon: "arrow.left", label: "W", onPress: onJogStart, onRelease: onJogStop)
                 
                 VStack(spacing: 8) {
-                    Button {
-                        onJog(.forward)
-                    } label: {
-                        VStack(spacing: 4) {
-                            Image(systemName: "arrow.up")
-                            Text("N")
-                                .font(.caption2)
-                        }
-                        .frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(.bordered)
-                    
-                    Button {
-                        onJog(.back)
-                    } label: {
-                        VStack(spacing: 4) {
-                            Image(systemName: "arrow.down")
-                            Text("S")
-                                .font(.caption2)
-                        }
-                        .frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(.bordered)
+                    JogButton(direction: .forward, icon: "arrow.up", label: "N", onPress: onJogStart, onRelease: onJogStop)
+                    JogButton(direction: .back, icon: "arrow.down", label: "S", onPress: onJogStart, onRelease: onJogStop)
                 }
                 
-                Button {
-                    onJog(.right)
-                } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: "arrow.right")
-                        Text("E")
-                            .font(.caption2)
-                    }
-                    .frame(width: 44, height: 44)
-                }
-                .buttonStyle(.bordered)
+                JogButton(direction: .right, icon: "arrow.right", label: "E", onPress: onJogStart, onRelease: onJogStop)
             }
         }
         .padding(.vertical, 8)
+        .disabled(spotLockController.isDisengaging)
+    }
+}
+
+struct JogButton: View {
+    let direction: SpotLockController.JogDirection
+    let icon: String
+    let label: String
+    let onPress: (SpotLockController.JogDirection) -> Void
+    let onRelease: () -> Void
+    
+    @State private var isPressed: Bool = false
+    
+    var body: some View {
+        Button(action: {}) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                Text(label)
+                    .font(.caption2)
+            }
+            .frame(width: 44, height: 44)
+        }
+        .buttonStyle(.bordered)
+        .tint(isPressed ? .blue : .gray)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    if !isPressed {
+                        isPressed = true
+                        onPress(direction)
+                    }
+                }
+                .onEnded { _ in
+                    isPressed = false
+                    onRelease()
+                }
+        )
     }
 }
 
