@@ -14,6 +14,12 @@ struct HelmControlView: View {
         bluetooth.connectionState == .connected &&
         bluetooth.sensorData?.isNavigationReady == true
     }
+    
+    private var bearing: Double? {
+        guard let sensors = bluetooth.sensorData,
+              let lockPos = spotLockController.lockPosition else { return nil }
+        return sensors.currentLocation.bearing(to: lockPos)
+    }
 
     var body: some View {
         List {
@@ -77,6 +83,31 @@ struct HelmControlView: View {
                     spotLockController.jog(direction: direction)
                 }
             )
+            
+            if spotLockController.isActive, let sensors = bluetooth.sensorData {
+                Divider()
+                
+                LabeledContent("Current Heading") {
+                    Text(String(format: "%.1f°", sensors.heading))
+                        .foregroundColor(.blue)
+                }
+                
+                if let bearing = bearing {
+                    LabeledContent("Bearing to Lock") {
+                        Text(String(format: "%.1f° %@", bearing, cardinalDirection(for: bearing)))
+                            .foregroundColor(.green)
+                    }
+                    
+                    LabeledContent("Relative Angle") {
+                        let relativeAngle = calculateRelativeAngle(
+                            currentHeading: sensors.heading,
+                            targetBearing: bearing
+                        )
+                        Text(String(format: "%.1f°", relativeAngle))
+                            .foregroundColor(abs(relativeAngle) > 15 ? .orange : .green)
+                    }
+                }
+            }
         } header: {
             Text("Spot Lock")
         } footer: {
@@ -87,6 +118,29 @@ struct HelmControlView: View {
     private var connectionSection: some View {
         Section("Helm Device") {
             ConnectionStatus(bluetooth: bluetooth)
+            
+            if !bluetooth.commandHistory.isEmpty {
+                Divider()
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Recent Commands")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    ForEach(bluetooth.commandHistory) { entry in
+                        HStack {
+                            Text(entry.command)
+                                .font(.caption.monospaced())
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Text(entry.timestamp, style: .time)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
         }
     }
     
@@ -110,6 +164,23 @@ struct HelmControlView: View {
                     .foregroundColor(.secondary)
             }
         }
+    }
+    
+    private func cardinalDirection(for bearing: Double) -> String {
+        let directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+        let index = Int((bearing + 22.5) / 45.0) % 8
+        return directions[index]
+    }
+    
+    private func calculateRelativeAngle(currentHeading: Double, targetBearing: Double) -> Double {
+        var angle = targetBearing - currentHeading
+        while angle > 180 {
+            angle -= 360
+        }
+        while angle < -180 {
+            angle += 360
+        }
+        return angle
     }
 }
 

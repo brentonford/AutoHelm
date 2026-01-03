@@ -137,6 +137,8 @@ struct SpotLockControls: View {
     let onDisengage: () -> Void
     let onJog: (SpotLockController.JogDirection) -> Void
     
+    @State private var showingInitWarning = false
+    
     var body: some View {
         VStack(spacing: 12) {
             HStack {
@@ -177,11 +179,6 @@ struct SpotLockControls: View {
                         .foregroundColor(spotLockController.isApplyingThrust ? .green : .secondary)
                 }
                 
-                LabeledContent("Motor State") {
-                    Text(spotLockController.motorState == .on ? "On" : "Off")
-                        .foregroundColor(spotLockController.motorState == .on ? .green : .secondary)
-                }
-                
                 Divider()
                 
                 jogControls
@@ -203,7 +200,7 @@ struct SpotLockControls: View {
                 Divider()
                 
                 Button {
-                    onEngageHere()
+                    showingInitWarning = true
                 } label: {
                     HStack {
                         Image(systemName: "pin.circle.fill")
@@ -214,6 +211,14 @@ struct SpotLockControls: View {
                 .buttonStyle(.borderedProminent)
                 .tint(.blue)
                 .disabled(!canNavigate)
+                .alert("Motor Initialization Required", isPresented: $showingInitWarning) {
+                    Button("Cancel", role: .cancel) { }
+                    Button("Continue") {
+                        onEngageHere()
+                    }
+                } message: {
+                    Text("Before engaging Spot Lock, ensure the electric motor is:\n\n• Motor is ON\n• Speed is set to 0\n\nSpot Lock will only control speed levels.")
+                }
             }
         }
     }
@@ -367,22 +372,18 @@ struct CompassView: View {
             Circle()
                 .stroke(Color.gray.opacity(0.3), lineWidth: 2)
             
-            // North
             Text("N")
                 .font(.caption.bold())
                 .offset(x: 0, y: -60)
             
-            // East
             Text("E")
                 .font(.caption.bold())
                 .offset(x: 60, y: 0)
             
-            // South
             Text("S")
                 .font(.caption.bold())
                 .offset(x: 0, y: 60)
             
-            // West
             Text("W")
                 .font(.caption.bold())
                 .offset(x: -60, y: 0)

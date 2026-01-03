@@ -27,6 +27,8 @@ struct SelectedWaypointCard: View {
     let onEngageSpotLock: () -> Void
     let onDisengageSpotLock: () -> Void
     
+    @State private var showingInitWarning = false
+    
     private var distance: Double? {
         guard let sensors = sensorData else { return nil }
         let currentLocation = sensors.currentLocation
@@ -170,6 +172,37 @@ struct SelectedWaypointCard: View {
         let directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
         let index = Int((bearing + 22.5) / 45.0) % 8
         return directions[index]
+    }
+}
+
+struct QuickSpotLockButton: View {
+    let canNavigate: Bool
+    let onEngage: () -> Void
+    
+    @State private var showingInitWarning = false
+    
+    var body: some View {
+        Button {
+            showingInitWarning = true
+        } label: {
+            HStack {
+                Image(systemName: "pin.circle.fill")
+                Text("Engage Spot Lock Here")
+            }
+            .frame(maxWidth: .infinity)
+            .padding()
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.blue)
+        .disabled(!canNavigate)
+        .alert("Motor Initialization Required", isPresented: $showingInitWarning) {
+            Button("Cancel", role: .cancel) { }
+            Button("Continue") {
+                onEngage()
+            }
+        } message: {
+            Text("Before engaging Spot Lock, ensure the electric motor is:\n\n• Motor is ON\n• Speed is set to 0\n\nSpot Lock will only control speed levels.")
+        }
     }
 }
 

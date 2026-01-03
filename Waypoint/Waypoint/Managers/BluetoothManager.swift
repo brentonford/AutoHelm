@@ -27,6 +27,12 @@ private struct FinalCalibrationResponse: Codable {
     let headingOffset: Double?
 }
 
+struct BLECommandHistory: Identifiable {
+    let id = UUID()
+    let command: String
+    let timestamp: Date
+}
+
 @MainActor
 class BluetoothManager: NSObject, ObservableObject {
 
@@ -38,6 +44,7 @@ class BluetoothManager: NSObject, ObservableObject {
     @Published private(set) var signalStrength: BLESignalStrength = .disconnected
     @Published private(set) var calibrationData: CalibrationData?
     @Published private(set) var isCalibrating: Bool = false
+    @Published private(set) var commandHistory: [BLECommandHistory] = []
 
     private var centralManager: CBCentralManager?
     private var peripheral: CBPeripheral?
@@ -51,6 +58,8 @@ class BluetoothManager: NSObject, ObservableObject {
     
     private var locationTracker: LocationWithSpeed?
     private var lastLocationUpdate: Date?
+    
+    private let maxCommandHistory = 5
 
     override init() {
         super.init()
@@ -92,6 +101,15 @@ class BluetoothManager: NSObject, ObservableObject {
     func sendCommand(_ command: String) {
         guard let data = command.data(using: .utf8) else { return }
         writeToCharacteristic(commandChar, data: data)
+        
+        // Add to command history
+        let historyEntry = BLECommandHistory(command: command, timestamp: Date())
+        commandHistory.insert(historyEntry, at: 0)
+        
+        // Keep only last 5 commands
+        if commandHistory.count > maxCommandHistory {
+            commandHistory = Array(commandHistory.prefix(maxCommandHistory))
+        }
     }
 
     func sendMotorCommand(_ command: String) {

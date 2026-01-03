@@ -53,16 +53,6 @@ struct MapView: View {
                 showingWaypointList = true
             }
         }
-        // .overlay(alignment: .bottom) {
-        //     if waypoints.isEmpty && selectedWaypoint == nil && !spotLockController.isActive {
-        //         Text("Long press on map to create a waypoint")
-        //             .font(.caption)
-        //             .padding(8)
-        //             .background(.ultraThinMaterial)
-        //             .cornerRadius(8)
-        //             .padding(.bottom, 16)
-        //     }
-        // }
         .sheet(isPresented: $showingWaypointSheet) {
             AddWaypointSheet(
                 coordinate: pendingCoordinate,
@@ -91,17 +81,14 @@ struct MapView: View {
                     let helmLocation = sensors.currentLocation
                     Annotation("Helm", coordinate: helmLocation) {
                         ZStack {
-                            // Background circle
                             Circle()
                                 .fill(Color.blue)
                                 .frame(width: 30, height: 30)
                             
-                            // White border
                             Circle()
                                 .stroke(Color.white, lineWidth: 3)
                                 .frame(width: 30, height: 30)
                             
-                            // Arrow pointing in heading direction
                             Image(systemName: "location.north.fill")
                                 .font(.system(size: 20))
                                 .foregroundColor(.white)
@@ -253,6 +240,40 @@ struct MapView: View {
             }
             .frame(maxWidth: .infinity)
             
+            if let sensors = bluetooth.sensorData {
+                Divider()
+                
+                HStack(spacing: 40) {
+                    VStack(spacing: 4) {
+                        Image(systemName: "location.north.fill")
+                            .font(.title3)
+                            .foregroundColor(.blue)
+                        Text(String(format: "%.1f°", sensors.heading))
+                            .font(.subheadline.bold())
+                        Text("Heading")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    if let bearing = bearing {
+                        VStack(spacing: 4) {
+                            Image(systemName: "arrow.triangle.turn.up.right.circle.fill")
+                                .font(.title3)
+                                .foregroundColor(.orange)
+                            Text(String(format: "%.1f°", calculateRelativeAngle(
+                                currentHeading: sensors.heading,
+                                targetBearing: bearing
+                            )))
+                                .font(.subheadline.bold())
+                            Text("Relative")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            
             jogControls
         }
         .padding()
@@ -328,22 +349,23 @@ struct MapView: View {
     }
     
     private var quickSpotLockButton: some View {
-        Button {
+        QuickSpotLockButton(canNavigate: canNavigate) {
             Task {
                 guard let sensors = bluetooth.sensorData else { return }
                 await spotLockController.engage(at: sensors.currentLocation)
             }
-        } label: {
-            HStack {
-                Image(systemName: "pin.circle.fill")
-                Text("Engage Spot Lock Here")
-            }
-            .frame(maxWidth: .infinity)
-            .padding()
         }
-        .buttonStyle(.borderedProminent)
-        .tint(.blue)
-        .disabled(!canNavigate)
+    }
+    
+    private func calculateRelativeAngle(currentHeading: Double, targetBearing: Double) -> Double {
+        var angle = targetBearing - currentHeading
+        while angle > 180 {
+            angle -= 360
+        }
+        while angle < -180 {
+            angle += 360
+        }
+        return angle
     }
     
     private func handleMapLongPress(value: SequenceGesture<LongPressGesture, DragGesture>.Value, proxy: MapProxy) {

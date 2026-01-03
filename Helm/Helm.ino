@@ -211,9 +211,27 @@ void streamCalibrationData() {
     compass.markCalibrationDataSent();
 }
 
+void emergencyStopMotor() {
+    if (!remoteAvailable) {
+        Serial.println("[Safety] Cannot perform emergency stop - RF not available");
+        return;
+    }
+    
+    Serial.println("[Safety] 🚨 EMERGENCY STOP - BLE Disconnected");
+    Serial.println("[Safety] Sending 10 RF_DOWN commands to reduce speed to 0");
+    
+    for (int i = 1; i <= 10; i++) {
+        remote.transmitHold(Button::Down, 1000);
+        Serial.printf("[Safety] Emergency stop %d/10\n", i);
+        delay(500);
+    }
+    
+    Serial.println("[Safety] ✅ Emergency stop complete - speed should be 0");
+}
+
 void checkBleDisconnect() {
     if (ble.wasJustDisconnected()) {
-        Serial.println("[Safety] BLE disconnected");
+        Serial.println("[Safety] BLE disconnected - initiating safety procedures");
         
         if (isHoldActive) {
             Serial.println("[Safety] Stopping hold transmission");
@@ -222,6 +240,8 @@ void checkBleDisconnect() {
                 remote.transmitSingle(Button::Release);
             }
         }
+        
+        emergencyStopMotor();
         
         ble.clearDisconnectFlag();
     }
