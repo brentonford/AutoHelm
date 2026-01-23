@@ -69,12 +69,12 @@ struct ContentView: View {
     
     private func startSpotLockTimer() {
         stopSpotLockTimer()
-        spotLockTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-            Task { @MainActor in
-                await spotLockController.update()
-            }
+        spotLockTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+        Task { @MainActor in
+            await spotLockController.update()
         }
     }
+}
     
     private func stopSpotLockTimer() {
         spotLockTimer?.invalidate()
