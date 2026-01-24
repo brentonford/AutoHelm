@@ -6,9 +6,9 @@ struct ContentView: View {
     
     @State private var selectedTab = 0
     @State private var spotLockTimer: Timer?
-    @State private var disconnectGraceTimer: Timer?  // Add this
+    @State private var disconnectGraceTimer: Timer?
     
-    private let disconnectGracePeriodSeconds: TimeInterval = 5.0  // Add this
+    private let disconnectGracePeriodSeconds: TimeInterval = 5.0
     
     init() {
         let bluetooth = BluetoothManager()

@@ -15,6 +15,8 @@ class SpotLockController: ObservableObject {
     @Published private(set) var currentCorrectionBearing: Double = 0
     @Published private(set) var currentSpeedLevel: Int = 0
     @Published private(set) var isJogging: Bool = false
+    @Published private(set) var cableRotation: Double = 0  // For UI display
+    @Published private(set) var isCableTangled: Bool = false
     
     // MARK: - Configuration Constants
     
@@ -37,6 +39,10 @@ class SpotLockController: ObservableObject {
         static let smallSteeringDuration: Int = 200
         static let mediumSteeringDuration: Int = 600
         static let largeSteeringDuration: Int = 1000
+        
+        // Cable tangle prevention
+        static let maxRotationBeforeUntangle: Double = 720.0  // 2 full rotations
+        static let rotationPerMs: Double = 0.1  // Estimated degrees per ms of steering
         
         // Timing intervals
         static let correctionInterval: Double = 1.0
@@ -66,6 +72,10 @@ class SpotLockController: ObservableObject {
     // Position tracking
     private var positionHistory: [PositionSample] = []
     private var lastProgressCheck: ProgressCheck?
+    
+    // Cable tangle prevention
+    private var cumulativeRotation: Double = 0  // Positive = right, negative = left
+    private var isUntangling: Bool = false
     
     // MARK: - Supporting Types
     
@@ -126,6 +136,7 @@ class SpotLockController: ObservableObject {
         log("   Speed range: \(Config.minSpeed)-\(Config.maxSpeed)")
         log("   Heading tolerance: \(Config.headingTolerance)°")
         log("   Steering durations: <30°=\(Config.smallSteeringDuration)ms, 30-90°=\(Config.mediumSteeringDuration)ms, >90°=\(Config.largeSteeringDuration)ms")
+        log("   Max rotation before untangle: \(Config.maxRotationBeforeUntangle)°")
         
         await ensureSpeedIsZero()
     }
@@ -244,9 +255,35 @@ class SpotLockController: ObservableObject {
         // Mark correction time to prevent concurrent corrections
         lastCorrectionTime = Date()
         
+        // Check if we need to untangle the cable
+        let needsUntangle = abs(cumulativeRotation) > Config.maxRotationBeforeUntangle
+        
         // Apply steering correction BEFORE thrust (align first)
         let needsSteering = abs(relativeAngle) > Config.headingTolerance
-        if needsSteering {
+        
+        if needsUntangle {
+            // Force steering in opposite direction to untangle
+            let untangleDirection: SteeringDirection = cumulativeRotation > 0 ? .left : .right
+            
+            if !isUntangling {
+                isUntangling = true
+                isCableTangled = true
+                log("⚠️ CABLE TANGLE DETECTED - Rotation: \(formatAngle(cumulativeRotation)) - Forcing \(untangleDirection == .left ? "LEFT" : "RIGHT") to untangle")
+            }
+            
+            if lastSteeringDirection != .none && lastSteeringDirection != untangleDirection {
+                await releaseSteering()
+            }
+            
+            await applySteering(direction: untangleDirection, angle: 90.0)  // Use medium duration
+            
+        } else if needsSteering {
+            if isUntangling {
+                isUntangling = false
+                isCableTangled = false
+                log("✅ CABLE UNTANGLED - Resuming normal steering")
+            }
+            
             let direction: SteeringDirection = relativeAngle > 0 ? .right : .left
             
             if lastSteeringDirection != .none && lastSteeringDirection != direction {
@@ -287,7 +324,8 @@ class SpotLockController: ObservableObject {
             "heading=\(formatAngle(sensors.heading)), " +
             "relative=\(formatAngle(relativeAngle)), " +
             "speed=\(currentSpeedLevel)/\(targetSpeedLevel), " +
-            "steering=\(needsSteering ? (relativeAngle > 0 ? "RIGHT" : "LEFT") : "NONE")")
+            "steering=\(needsSteering || needsUntangle ? (isUntangling ? "UNTANGLE-" : "") + (cumulativeRotation > 0 || relativeAngle > 0 ? "RIGHT" : "LEFT") : "NONE"), " +
+            "rotation=\(formatAngle(cumulativeRotation))")
     }
     
     // MARK: - Motor Control
@@ -398,6 +436,18 @@ class SpotLockController: ObservableObject {
         bluetooth.sendCommand(command)
         lastSteeringDirection = direction
         
+        // Track cumulative rotation for cable tangle prevention
+        let rotationAmount = Double(duration) * Config.rotationPerMs
+        if direction == .right {
+            cumulativeRotation += rotationAmount
+        } else {
+            cumulativeRotation -= rotationAmount
+        }
+        
+        // Update published properties for UI
+        cableRotation = cumulativeRotation
+        isCableTangled = abs(cumulativeRotation) > Config.maxRotationBeforeUntangle
+        
         try? await Task.sleep(for: .milliseconds(duration))
         
         await releaseSteering()
@@ -498,6 +548,10 @@ class SpotLockController: ObservableObject {
         lastCorrectionTime = nil
         lastSteeringDirection = .none
         lastProgressCheck = nil
+        cumulativeRotation = 0
+        cableRotation = 0
+        isUntangling = false
+        isCableTangled = false
         stopJogHold()
     }
     
