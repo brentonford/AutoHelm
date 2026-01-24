@@ -5,6 +5,10 @@ struct ContentView: View {
     @StateObject private var spotLockController: SpotLockController
     
     @State private var selectedTab = 0
+    @State private var spotLockTimer: Timer?
+    @State private var disconnectGraceTimer: Timer?  // Add this
+    
+    private let disconnectGracePeriodSeconds: TimeInterval = 5.0  // Add this
     
     init() {
         let bluetooth = BluetoothManager()
@@ -54,34 +58,45 @@ struct ContentView: View {
             }
         }
         .onChange(of: bluetooth.connectionState) { _, newState in
-            if newState != .connected {
-                Task {
-                    await spotLockController.disengage()
-                }
+            if newState == .connected {
+                // Reconnected - cancel grace period timer
+                disconnectGraceTimer?.invalidate()
+                disconnectGraceTimer = nil
+            } else if newState == .disconnected && spotLockController.isActive {
+                // Start grace period before disengaging
+                startDisconnectGraceTimer()
             }
         }
         .onDisappear {
             stopSpotLockTimer()
+            disconnectGraceTimer?.invalidate()
         }
     }
-    
-    @State private var spotLockTimer: Timer?
     
     private func startSpotLockTimer() {
         stopSpotLockTimer()
         spotLockTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-        Task { @MainActor in
-            await spotLockController.update()
+            Task { @MainActor in
+                await spotLockController.update()
+            }
         }
     }
-}
     
     private func stopSpotLockTimer() {
         spotLockTimer?.invalidate()
         spotLockTimer = nil
     }
-}
-
-#Preview {
-    ContentView()
-}
+    
+    private func startDisconnectGraceTimer() {
+        disconnectGraceTimer?.invalidate()
+        disconnectGraceTimer = Timer.scheduledTimer(withTimeInterval: disconnectGracePeriodSeconds, repeats: false) { _ in
+            Task { @MainActor in
+                if bluetooth.connectionState != .connected {
+                    print("[SpotLock] Grace period expired - disengaging")
+                    await spotLockController.disengage()
+                }
+            }
+        }
+        print("[SpotLock] BLE disconnected - \(Int(disconnectGracePeriodSeconds))s grace period started")
+    }
+}   

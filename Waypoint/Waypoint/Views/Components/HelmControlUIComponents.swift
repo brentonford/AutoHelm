@@ -307,7 +307,7 @@ struct JogButton: View {
 }
 
 struct ConnectionStatus: View {
-    let bluetooth: BluetoothManager
+    @ObservedObject var bluetooth: BluetoothManager
     
     var body: some View {
         HStack {
