@@ -140,7 +140,7 @@ class SpotLockController: ObservableObject {
         log("   Speed range: \(Config.minSpeed)-\(Config.maxSpeed)")
         log("   Heading tolerance: \(Config.headingTolerance)°")
         log("   Steering durations: <30°=\(Config.smallSteeringDuration)ms, 30-90°=\(Config.mediumSteeringDuration)ms, >90°=\(Config.largeSteeringDuration)ms")
-        log("   Max rotation before untangle: \(Config.maxRotationBeforeUntangle)°")
+        log("   Cable untangle: starts >\(Config.maxRotationBeforeUntangle)°, stops <\(Config.safeRotationLevel)°")
         
         await ensureSpeedIsZero()
     }
@@ -241,8 +241,20 @@ class SpotLockController: ObservableObject {
         
         if !isGPSQualityAcceptable(sensors) {
             consecutiveGpsFailures += 1
-            log("⚠️ GPS quality check failed (failure \(consecutiveGpsFailures)/\(Config.maxConsecutiveGpsFailures)): " +
-                "hasFix=\(sensors.hasFix), satellites=\(sensors.satellites), hdop=\(sensors.hdop)")
+            
+            // Determine the specific failure reason for logging
+            var failureReason = ""
+            if !sensors.hasFix {
+                failureReason = "no fix"
+            } else if sensors.satellites < Config.minSatellites {
+                failureReason = "low satellites (\(sensors.satellites))"
+            } else if sensors.hdop >= Config.invalidHDOP {
+                failureReason = "invalid HDOP (\(sensors.hdop))"
+            } else if sensors.hdop >= Config.maxHDOP {
+                failureReason = "high HDOP (\(sensors.hdop))"
+            }
+            
+            log("⚠️ GPS quality check failed (failure \(consecutiveGpsFailures)/\(Config.maxConsecutiveGpsFailures)): \(failureReason)")
             
             if consecutiveGpsFailures >= Config.maxConsecutiveGpsFailures {
                 log("⚠️ GPS quality insufficient - disengaging")
@@ -279,20 +291,29 @@ class SpotLockController: ObservableObject {
         lastCorrectionTime = Date()
         
         // Check if we need to untangle the cable
-        let needsUntangle = abs(cumulativeRotation) > Config.maxRotationBeforeUntangle
+        // Start untangling at maxRotation, continue until we reach safeRotation level
+        let absRotation = abs(cumulativeRotation)
+        let shouldStartUntangle = absRotation > Config.maxRotationBeforeUntangle
+        let shouldContinueUntangle = isUntangling && absRotation > Config.safeRotationLevel
+        let needsUntangle = shouldStartUntangle || shouldContinueUntangle
+        
+        // Determine untangle direction (opposite of cumulative rotation)
+        let untangleDirection: SteeringDirection = cumulativeRotation > 0 ? .left : .right
         
         // Apply steering correction BEFORE thrust (align first)
         let needsSteering = abs(relativeAngle) > Config.headingTolerance
         
+        // Determine actual steering direction for logging
+        let actualSteeringDirection: String
+        
         if needsUntangle {
-            // Force steering in opposite direction to untangle
-            let untangleDirection: SteeringDirection = cumulativeRotation > 0 ? .left : .right
-            
             if !isUntangling {
                 isUntangling = true
                 isCableTangled = true
-                log("⚠️ CABLE TANGLE DETECTED - Rotation: \(formatAngle(cumulativeRotation)) - Forcing \(untangleDirection == .left ? "LEFT" : "RIGHT") to untangle")
+                log("⚠️ CABLE TANGLE DETECTED - Rotation: \(formatAngle(cumulativeRotation)) - Forcing \(untangleDirection == .left ? "LEFT" : "RIGHT") to untangle until \(formatAngle(Config.safeRotationLevel))")
             }
+            
+            actualSteeringDirection = "UNTANGLE-\(untangleDirection == .left ? "LEFT" : "RIGHT")"
             
             if lastSteeringDirection != .none && lastSteeringDirection != untangleDirection {
                 await releaseSteering()
@@ -304,18 +325,29 @@ class SpotLockController: ObservableObject {
             if isUntangling {
                 isUntangling = false
                 isCableTangled = false
-                log("✅ CABLE UNTANGLED - Resuming normal steering")
+                log("✅ CABLE UNTANGLED - Rotation: \(formatAngle(cumulativeRotation)) - Resuming normal steering")
             }
             
             let direction: SteeringDirection = relativeAngle > 0 ? .right : .left
+            actualSteeringDirection = direction == .right ? "RIGHT" : "LEFT"
             
             if lastSteeringDirection != .none && lastSteeringDirection != direction {
                 await releaseSteering()
             }
             
             await applySteering(direction: direction, angle: relativeAngle)
-        } else if lastSteeringDirection != .none {
-            await releaseSteering()
+        } else {
+            if isUntangling {
+                isUntangling = false
+                isCableTangled = false
+                log("✅ CABLE UNTANGLED - Rotation: \(formatAngle(cumulativeRotation)) - Resuming normal steering")
+            }
+            
+            actualSteeringDirection = "NONE"
+            
+            if lastSteeringDirection != .none {
+                await releaseSteering()
+            }
         }
         
         // Start or stop thrust based on distance
@@ -347,7 +379,7 @@ class SpotLockController: ObservableObject {
             "heading=\(formatAngle(sensors.heading)), " +
             "relative=\(formatAngle(relativeAngle)), " +
             "speed=\(currentSpeedLevel)/\(targetSpeedLevel), " +
-            "steering=\(needsSteering || needsUntangle ? (isUntangling ? "UNTANGLE-" : "") + (cumulativeRotation > 0 || relativeAngle > 0 ? "RIGHT" : "LEFT") : "NONE"), " +
+            "steering=\(actualSteeringDirection), " +
             "rotation=\(formatAngle(cumulativeRotation))")
     }
     
@@ -547,9 +579,19 @@ class SpotLockController: ObservableObject {
     
     /// Checks if GPS quality is acceptable
     private func isGPSQualityAcceptable(_ sensors: SensorData) -> Bool {
-        return sensors.hasFix && 
-               sensors.satellites >= Config.minSatellites && 
-               sensors.hdop < Config.maxHDOP
+        // Must have fix
+        guard sensors.hasFix else { return false }
+        
+        // Must have minimum satellites
+        guard sensors.satellites >= Config.minSatellites else { return false }
+        
+        // HDOP check - ignore obviously invalid values (GPS error returns high values like 99 or 100)
+        // If HDOP is invalid, assume GPS quality is acceptable based on satellite count
+        if sensors.hdop < Config.invalidHDOP && sensors.hdop >= Config.maxHDOP {
+            return false
+        }
+        
+        return true
     }
     
     /// Checks if enough time has passed since last correction
