@@ -46,20 +46,8 @@ struct MapView: View {
             if let sensors = bluetooth.sensorData {
                 let helmLocation = sensors.currentLocation
                 Annotation("Helm", coordinate: helmLocation) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.blue)
-                            .frame(width: 30, height: 30)
-                        
-                        Circle()
-                            .stroke(Color.white, lineWidth: 3)
-                            .frame(width: 30, height: 30)
-                        
-                        Image(systemName: "location.north.fill")
-                            .font(.system(size: 20))
-                            .foregroundColor(.white)
-                            .rotationEffect(.degrees(sensors.heading))
-                    }
+                    HelmDirectionIndicator(heading: sensors.heading)
+                        .frame(width: 36, height: 36)
                 }
             }
             
@@ -314,5 +302,41 @@ struct MapView: View {
             angle += 360
         }
         return angle
+    }
+}
+
+struct HelmDirectionIndicator: View {
+    let heading: Double
+    
+    var body: some View {
+        Canvas { context, size in
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            let radius = min(size.width, size.height) / 2
+            
+            // Draw blue circle background
+            let circlePath = Path(ellipseIn: CGRect(
+                x: center.x - radius,
+                y: center.y - radius,
+                width: radius * 2,
+                height: radius * 2
+            ))
+            context.fill(circlePath, with: .color(.blue))
+            context.stroke(circlePath, with: .color(.white), lineWidth: 3)
+            
+            // Apply rotation for heading
+            context.translateBy(x: center.x, y: center.y)
+            context.rotate(by: .degrees(heading))
+            context.translateBy(x: -center.x, y: -center.y)
+            
+            // Draw arrow pointing up (north) - rotation transforms it to heading
+            let arrowSize = radius * 0.6
+            var arrow = Path()
+            arrow.move(to: CGPoint(x: center.x, y: center.y - arrowSize))  // Top point
+            arrow.addLine(to: CGPoint(x: center.x - arrowSize * 0.5, y: center.y + arrowSize * 0.3))
+            arrow.addLine(to: CGPoint(x: center.x, y: center.y))
+            arrow.addLine(to: CGPoint(x: center.x + arrowSize * 0.5, y: center.y + arrowSize * 0.3))
+            arrow.closeSubpath()
+            context.fill(arrow, with: .color(.white))
+        }
     }
 }
