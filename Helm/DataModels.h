@@ -21,6 +21,11 @@ namespace Config {
     constexpr uint32_t gpsBaud    = 9600;
 }
 
+namespace NavigationConfig {
+    constexpr uint8_t minSatellites = 4;
+    constexpr float maxDop = 5.0f;
+}
+
 struct GpsData {
     float latitude;
     float longitude;

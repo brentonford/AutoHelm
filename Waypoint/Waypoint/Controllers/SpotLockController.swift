@@ -241,31 +241,53 @@ class SpotLockController: ObservableObject {
         
         guard shouldApplyCorrection() else { return }
         
+        // Mark correction time to prevent concurrent corrections
+        lastCorrectionTime = Date()
+        
+        // Apply steering correction BEFORE thrust (align first)
+        let needsSteering = abs(relativeAngle) > Config.headingTolerance
+        if needsSteering {
+            let direction: SteeringDirection = relativeAngle > 0 ? .right : .left
+            
+            if lastSteeringDirection != .none && lastSteeringDirection != direction {
+                await releaseSteering()
+            }
+            
+            await applySteering(direction: direction, angle: relativeAngle)
+        } else if lastSteeringDirection != .none {
+            await releaseSteering()
+        }
+        
         // Start or stop thrust based on distance
         if distanceFromLock > Config.activationThreshold {
             if !isApplyingThrust {
-                Task {
-                    await startThrust()
-                }
+                await startThrust()
             }
         } else if distanceFromLock < Config.deadZoneRadius {
             if isApplyingThrust {
+                await stopThrust()
+            }
+        }
+        
+        // Adjust speed if thrusting
+        if isApplyingThrust {
+            let distanceBeyondDeadZone = max(0, distanceFromLock - Config.deadZoneRadius)
+            let targetSpeed = calculateProportionalSpeed(for: distanceBeyondDeadZone)
+            
+            if targetSpeed != targetSpeedLevel {
                 Task {
-                    await stopThrust()
+                    await setSpeed(targetSpeed)
                 }
             }
         }
         
-        // Perform correction (steering + speed)
-        if isApplyingThrust {
-            Task {
-                await performCorrection(
-                    from: filteredLocation,
-                    to: lockPos,
-                    heading: sensors.heading
-                )
-            }
-        }
+        log("🧭 CORRECTION: " +
+            "dist=\(formatDistance(distanceFromLock)), " +
+            "bearing=\(formatAngle(currentCorrectionBearing)), " +
+            "heading=\(formatAngle(sensors.heading)), " +
+            "relative=\(formatAngle(relativeAngle)), " +
+            "speed=\(currentSpeedLevel)/\(targetSpeedLevel), " +
+            "steering=\(needsSteering ? (relativeAngle > 0 ? "RIGHT" : "LEFT") : "NONE")")
     }
     
     // MARK: - Motor Control
@@ -352,64 +374,7 @@ class SpotLockController: ObservableObject {
         isApplyingThrust = false
     }
     
-    // MARK: - Correction Logic
-    
-    /// Performs position correction with steering and speed adjustment
-    private func performCorrection(
-        from currentLocation: CLLocationCoordinate2D,
-        to targetLocation: CLLocationCoordinate2D,
-        heading currentHeading: Double
-    ) async {
-        // Mark correction time BEFORE operation to prevent concurrent corrections
-        lastCorrectionTime = Date()
-        
-        // Calculate bearing FROM current position TO target position
-        // This is the heading we need to travel to reach the lock position
-        // For a bow-mounted motor, we point the motor in this direction
-        currentCorrectionBearing = currentLocation.bearing(to: targetLocation)
-        
-        let relativeAngle = calculateRelativeAngle(
-            currentHeading: currentHeading,
-            targetBearing: currentCorrectionBearing
-        )
-        
-        // Always adjust speed based on distance
-        let distanceBeyondDeadZone = max(0, distanceFromLock - Config.deadZoneRadius)
-        let targetSpeed = calculateProportionalSpeed(for: distanceBeyondDeadZone)
-        
-        if targetSpeed != targetSpeedLevel {
-            Task {
-                await setSpeed(targetSpeed)
-            }
-        }
-        
-        // Apply steering correction if needed
-        let needsSteering = abs(relativeAngle) > Config.headingTolerance
-        
-        if needsSteering {
-            // Positive relative angle = target is to our right = steer right
-            // Negative relative angle = target is to our left = steer left
-            let direction: SteeringDirection = relativeAngle > 0 ? .right : .left
-            
-            if lastSteeringDirection != .none && lastSteeringDirection != direction {
-                await releaseSteering()
-            }
-            
-            await applySteering(direction: direction, angle: relativeAngle)
-        } else {
-            if lastSteeringDirection != .none {
-                await releaseSteering()
-            }
-        }
-        
-        log("🧭 CORRECTION: " +
-            "dist=\(formatDistance(distanceFromLock)), " +
-            "bearing=\(formatAngle(currentCorrectionBearing)), " +
-            "heading=\(formatAngle(currentHeading)), " +
-            "relative=\(formatAngle(relativeAngle)), " +
-            "speed=\(currentSpeedLevel)/\(targetSpeedLevel), " +
-            "steering=\(needsSteering ? (relativeAngle > 0 ? "RIGHT" : "LEFT") + " \(calculateSteeringDuration(for: abs(relativeAngle)))ms" : "NONE")")
-    }
+    // MARK: - Speed Calculation
     
     /// Calculates proportional speed based on distance from dead zone
     private func calculateProportionalSpeed(for distanceBeyondDeadZone: Double) -> Int {

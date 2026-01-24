@@ -72,7 +72,7 @@ struct StatusToolbar: ToolbarContent {
     }
     
     var body: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
+        ToolbarItem(placement: .automatic) {
             HStack(spacing: 16) {
                 SignalStrengthIndicator(
                     label: "BLE:",
