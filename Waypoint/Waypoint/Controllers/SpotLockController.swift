@@ -53,6 +53,7 @@ class SpotLockController: ObservableObject {
         // GPS quality requirements
         static let minSatellites: Int = 4
         static let maxHDOP: Double = 5.0
+        static let maxConsecutiveGpsFailures: Int = 5  // Allow 5 consecutive failures before disengaging
         
         // Position filtering
         static let filterWindowSize: Int = 5
@@ -76,6 +77,9 @@ class SpotLockController: ObservableObject {
     // Cable tangle prevention
     private var cumulativeRotation: Double = 0  // Positive = right, negative = left
     private var isUntangling: Bool = false
+    
+    // GPS quality tracking
+    private var consecutiveGpsFailures: Int = 0
     
     // MARK: - Supporting Types
     
@@ -223,13 +227,32 @@ class SpotLockController: ObservableObject {
     func update() async {
         guard isActive else { return }
         guard let lockPos = lockPosition else { return }
-        guard let sensors = bluetooth.sensorData else { return }
         
-        guard isGPSQualityAcceptable(sensors) else {
-            log("⚠️ GPS quality insufficient - disengaging")
-            await disengage()
+        guard let sensors = bluetooth.sensorData else {
+            consecutiveGpsFailures += 1
+            log("⚠️ No sensor data (failure \(consecutiveGpsFailures)/\(Config.maxConsecutiveGpsFailures))")
+            
+            if consecutiveGpsFailures >= Config.maxConsecutiveGpsFailures {
+                log("⚠️ GPS data unavailable - disengaging")
+                await disengage()
+            }
             return
         }
+        
+        if !isGPSQualityAcceptable(sensors) {
+            consecutiveGpsFailures += 1
+            log("⚠️ GPS quality check failed (failure \(consecutiveGpsFailures)/\(Config.maxConsecutiveGpsFailures)): " +
+                "hasFix=\(sensors.hasFix), satellites=\(sensors.satellites), hdop=\(sensors.hdop)")
+            
+            if consecutiveGpsFailures >= Config.maxConsecutiveGpsFailures {
+                log("⚠️ GPS quality insufficient - disengaging")
+                await disengage()
+            }
+            return
+        }
+        
+        // GPS quality is good - reset failure counter
+        consecutiveGpsFailures = 0
         
         let currentLocation = sensors.currentLocation
         let filteredLocation = addToPositionHistory(currentLocation)
@@ -552,6 +575,7 @@ class SpotLockController: ObservableObject {
         cableRotation = 0
         isUntangling = false
         isCableTangled = false
+        consecutiveGpsFailures = 0
         stopJogHold()
     }
     
