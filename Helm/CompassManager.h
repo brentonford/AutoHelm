@@ -9,6 +9,9 @@ namespace CompassConfig {
     constexpr uint8_t i2cAddress = 0x30;
     constexpr uint8_t sampleCount = 5;
     constexpr uint32_t calibrationStreamIntervalMs = 50;
+    constexpr uint32_t minCalibrationDurationMs = 5000;  // Minimum 5 seconds of calibration
+    constexpr uint32_t minCalibrationSamples = 50;       // Minimum 50 samples for valid calibration
+    constexpr float outlierThresholdMicroTesla = 200.0f; // Valid magnetometer range (typically -150 to +150 uT)
 }
 
 struct RawMagData {
@@ -45,12 +48,13 @@ private:
     bool _initialized;
     bool _calibrating;
     uint32_t _lastCalibrationStreamTime;
-    
+    uint32_t _calibrationStartTime;  // Track when calibration started
+
     float _calMinX, _calMaxX;
     float _calMinY, _calMaxY;
     float _calMinZ, _calMaxZ;
     uint32_t _calSampleCount;
-    
+
     bool _debugEnabled;
     uint32_t _lastDebugTime;
 

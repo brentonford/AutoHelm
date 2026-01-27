@@ -115,17 +115,21 @@ namespace CC1101Config {
     constexpr uint8_t statusBit = 0xC0;
 }
 
+namespace CC1101Timing {
+    constexpr uint32_t misoTimeoutUs = 100000;  // 100ms timeout for MISO wait
+}
+
 class CC1101 {
 public:
     CC1101(uint8_t csPin, uint8_t sckPin, uint8_t misoPin, uint8_t mosiPin);
 
     bool begin();
-    void configure();
+    bool configure();
     void startTx();
     void stopTx();
-    void writeReg(uint8_t addr, uint8_t value);
+    bool writeReg(uint8_t addr, uint8_t value);
     uint8_t readStatusReg(uint8_t addr) const;
-    void strobe(uint8_t cmd);
+    bool strobe(uint8_t cmd);
 
 private:
     uint8_t _csPin;
@@ -136,6 +140,6 @@ private:
 
     void select();
     void deselect();
-    void waitMiso() const;
-    void reset();
+    bool waitMiso(uint32_t timeoutUs = CC1101Timing::misoTimeoutUs) const;
+    bool reset();
 };

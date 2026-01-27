@@ -6,6 +6,7 @@ BleManager::BleManager()
     , _sensorStatusChar(nullptr)
     , _commandChar(nullptr)
     , _calibrationChar(nullptr)
+    , _responseChar(nullptr)
     , _lastStatusTime(0)
     , _justDisconnected(false) {
 }
@@ -35,6 +36,13 @@ bool BleManager::begin() {
         BLECharacteristic::PROPERTY_NOTIFY
     );
     _calibrationChar->addDescriptor(new BLE2902());
+
+    // Dedicated response characteristic for command acknowledgments
+    _responseChar = _service->createCharacteristic(
+        BleConfig::responseCharUuid,
+        BLECharacteristic::PROPERTY_NOTIFY
+    );
+    _responseChar->addDescriptor(new BLE2902());
 
     _service->start();
     Serial.println("[BLE] Service started");
@@ -225,8 +233,8 @@ void BleManager::parseCommand(const char* data) {
 }
 
 String BleManager::buildSensorStatusJson(const GpsData& gpsData, float heading) {
-    static char json[256];
-    snprintf(json, sizeof(json),
+    static char json[BleConfig::jsonBufferSize];
+    int written = snprintf(json, sizeof(json),
         "{\"has_fix\":%s,\"satellites\":%d,\"currentLat\":%.6f,\"currentLon\":%.6f,\"altitude\":%.1f,\"hdop\":%.1f,\"heading\":%.1f}",
         gpsData.hasFix ? "true" : "false",
         gpsData.satellites,
@@ -236,6 +244,9 @@ String BleManager::buildSensorStatusJson(const GpsData& gpsData, float heading) 
         gpsData.hdop,
         heading
     );
+    if (written < 0 || static_cast<size_t>(written) >= sizeof(json)) {
+        Serial.println("[BLE] WARNING: JSON buffer truncated in buildSensorStatusJson");
+    }
     return String(json);
 }
 
@@ -249,8 +260,8 @@ void BleManager::sendSensorStatus(const GpsData& gpsData, float heading) {
 
     _lastStatusTime = now;
 
-    static char json[256];
-    snprintf(json, sizeof(json),
+    static char json[BleConfig::jsonBufferSize];
+    int written = snprintf(json, sizeof(json),
         "{\"has_fix\":%s,\"satellites\":%d,\"currentLat\":%.6f,\"currentLon\":%.6f,\"altitude\":%.1f,\"hdop\":%.1f,\"heading\":%.1f}",
         gpsData.hasFix ? "true" : "false",
         gpsData.satellites,
@@ -260,6 +271,10 @@ void BleManager::sendSensorStatus(const GpsData& gpsData, float heading) {
         gpsData.hdop,
         heading
     );
+    if (written < 0 || static_cast<size_t>(written) >= sizeof(json)) {
+        Serial.println("[BLE] WARNING: JSON buffer truncated in sendSensorStatus");
+        return;
+    }
 
     _sensorStatusChar->setValue((uint8_t*)json, strlen(json));
     _sensorStatusChar->notify();
@@ -279,30 +294,30 @@ void BleManager::sendCalibrationData(const String& data) {
 }
 
 void BleManager::sendResponse(const String& response) {
-    if (!_status.connected || !_calibrationChar)
+    if (!_status.connected || !_responseChar)
         return;
 
-    if (response.length() > 256) {
+    if (response.length() > BleConfig::jsonBufferSize) {
         Serial.println("[BLE] ERROR: Response too large");
         return;
     }
 
-    _calibrationChar->setValue((uint8_t*)response.c_str(), response.length());
-    _calibrationChar->notify();
+    _responseChar->setValue((uint8_t*)response.c_str(), response.length());
+    _responseChar->notify();
 }
 
 void BleManager::sendResponse(const char* response) {
-    if (!_status.connected || !_calibrationChar)
+    if (!_status.connected || !_responseChar)
         return;
 
     size_t len = strlen(response);
-    if (len > 256) {
+    if (len > BleConfig::jsonBufferSize) {
         Serial.println("[BLE] ERROR: Response too large");
         return;
     }
 
-    _calibrationChar->setValue((uint8_t*)response, len);
-    _calibrationChar->notify();
+    _responseChar->setValue((uint8_t*)response, len);
+    _responseChar->notify();
 }
 
 bool BleManager::isConnected() const {

@@ -27,8 +27,9 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Compass Calibration")
                         .font(.headline)
-                    if dataStore.calibration.isCalibrated {
-                        Text("Last calibrated: \(dataStore.calibration.dateCalibrated!, style: .date)")
+                    if dataStore.calibration.isCalibrated,
+                       let dateCalibrated = dataStore.calibration.dateCalibrated {
+                        Text("Last calibrated: \(dateCalibrated, style: .date)")
                             .font(.caption)
                             .foregroundColor(.secondary)
                         Text("\(dataStore.calibration.sampleCount) samples")
@@ -255,17 +256,19 @@ struct SettingsView: View {
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                     
-                    Link(destination: URL(string: "https://github.com/brentonford/AutoHelm")!) {
-                        HStack {
-                            Image(systemName: "link")
-                            Text("Report on GitHub")
-                            Spacer()
-                            Image(systemName: "arrow.up.forward")
+                    if let githubUrl = URL(string: "https://github.com/brentonford/AutoHelm") {
+                        Link(destination: githubUrl) {
+                            HStack {
+                                Image(systemName: "link")
+                                Text("Report on GitHub")
+                                Spacer()
+                                Image(systemName: "arrow.up.forward")
+                            }
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 12)
+                            .background(Color.blue.opacity(0.1))
+                            .cornerRadius(8)
                         }
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 12)
-                        .background(Color.blue.opacity(0.1))
-                        .cornerRadius(8)
                     }
                 }
                 

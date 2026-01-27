@@ -75,9 +75,9 @@ struct ContentView: View {
     
     private func startSpotLockTimer() {
         stopSpotLockTimer()
-        spotLockTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+        spotLockTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak spotLockController] _ in
             Task { @MainActor in
-                await spotLockController.update()
+                await spotLockController?.update()
             }
         }
     }
@@ -89,8 +89,9 @@ struct ContentView: View {
     
     private func startDisconnectGraceTimer() {
         disconnectGraceTimer?.invalidate()
-        disconnectGraceTimer = Timer.scheduledTimer(withTimeInterval: disconnectGracePeriodSeconds, repeats: false) { _ in
+        disconnectGraceTimer = Timer.scheduledTimer(withTimeInterval: disconnectGracePeriodSeconds, repeats: false) { [weak bluetooth, weak spotLockController] _ in
             Task { @MainActor in
+                guard let bluetooth = bluetooth, let spotLockController = spotLockController else { return }
                 if bluetooth.connectionState != .connected {
                     print("[SpotLock] Grace period expired - disengaging")
                     await spotLockController.disengage()

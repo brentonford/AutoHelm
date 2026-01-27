@@ -108,30 +108,35 @@ class LocationWithSpeed {
     var coordinate: CLLocationCoordinate2D
     var speed: Double
     var timestamp: Date
-    
+
     private var lastCoordinate: CLLocationCoordinate2D?
     private var lastTimestamp: Date?
-    
+
     init(coordinate: CLLocationCoordinate2D) {
         self.coordinate = coordinate
         self.speed = 0
         self.timestamp = Date()
     }
-    
+
     func updateLocation(_ newCoordinate: CLLocationCoordinate2D) {
         let now = Date()
-        
-        if let _ = lastCoordinate, let lastTime = lastTimestamp {
-            let timeDiff = now.timeIntervalSince(lastTime)
-            
+
+        // Calculate speed from OLD coordinate to NEW coordinate
+        if let previousCoordinate = lastCoordinate, let previousTime = lastTimestamp {
+            let timeDiff = now.timeIntervalSince(previousTime)
+
             if timeDiff > 0 {
-                let distance = coordinate.distance(to: newCoordinate)
+                // Distance from previous position to new position
+                let distance = previousCoordinate.distance(to: newCoordinate)
                 speed = distance / timeDiff
             }
         }
-        
+
+        // Store current values as "last" for next update
         lastCoordinate = coordinate
         lastTimestamp = timestamp
+
+        // Update current values
         coordinate = newCoordinate
         timestamp = now
     }

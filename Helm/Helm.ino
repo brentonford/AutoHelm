@@ -27,12 +27,26 @@ float currentHeading = 0.0f;
 uint32_t lastStatusBroadcastTime = 0;
 constexpr uint32_t statusBroadcastIntervalMs = 500;
 
-Button activeHoldButton = Button::Count;
-bool isHoldActive = false;
-uint32_t lastHoldTransmitTime = 0;
-uint32_t holdStartTime = 0;
+// Hold button state - protected by mutex for thread safety between BLE callback and main loop
+portMUX_TYPE holdStateMux = portMUX_INITIALIZER_UNLOCKED;
+volatile Button activeHoldButton = Button::Count;
+volatile bool isHoldActive = false;
+volatile uint32_t lastHoldTransmitTime = 0;
+volatile uint32_t holdStartTime = 0;
 constexpr uint32_t holdTransmitIntervalMs = 68;
 constexpr uint32_t holdTransmitTimeoutMs = 30000;
+
+// Emergency stop state machine (non-blocking)
+enum class EmergencyStopState : uint8_t {
+    Idle,
+    InProgress,
+    Complete
+};
+volatile EmergencyStopState emergencyStopState = EmergencyStopState::Idle;
+volatile uint8_t emergencyStopCount = 0;
+volatile uint32_t lastEmergencyStopTime = 0;
+constexpr uint32_t emergencyStopIntervalMs = 500;
+constexpr uint8_t emergencyStopMaxCount = 10;
 
 void printGpsStatus() {
     GpsData data = gps.getData();
@@ -85,10 +99,12 @@ void processBleRfCommand() {
 
     if (cmd == "LEFT") {
         if (isHold) {
+            portENTER_CRITICAL(&holdStateMux);
             activeHoldButton = Button::Left;
             isHoldActive = true;
             holdStartTime = millis();
             lastHoldTransmitTime = millis();
+            portEXIT_CRITICAL(&holdStateMux);
             Serial.println("[BLE] Starting LEFT hold transmission");
             remote.transmitSingle(Button::Left);
         } else {
@@ -96,10 +112,12 @@ void processBleRfCommand() {
         }
     } else if (cmd == "RIGHT") {
         if (isHold) {
+            portENTER_CRITICAL(&holdStateMux);
             activeHoldButton = Button::Right;
             isHoldActive = true;
             holdStartTime = millis();
             lastHoldTransmitTime = millis();
+            portEXIT_CRITICAL(&holdStateMux);
             Serial.println("[BLE] Starting RIGHT hold transmission");
             remote.transmitSingle(Button::Right);
         } else {
@@ -114,28 +132,42 @@ void processBleRfCommand() {
     } else if (cmd == "MOMENTARY") {
         remote.transmitHold(Button::Momentary, 1000);
     } else if (cmd == "RELEASE") {
+        portENTER_CRITICAL(&holdStateMux);
         isHoldActive = false;
+        portEXIT_CRITICAL(&holdStateMux);
         remote.transmitSingle(Button::Release);
         Serial.println("[BLE] Stopping hold transmission");
     }
 }
 
 void processHoldTransmission() {
-    if (!isHoldActive || !remoteAvailable)
+    // Read state atomically
+    portENTER_CRITICAL(&holdStateMux);
+    bool holdActive = isHoldActive;
+    Button holdButton = activeHoldButton;
+    uint32_t startTime = holdStartTime;
+    uint32_t lastTransmit = lastHoldTransmitTime;
+    portEXIT_CRITICAL(&holdStateMux);
+
+    if (!holdActive || !remoteAvailable)
         return;
 
     uint32_t now = millis();
 
-    if ((now - holdStartTime) >= holdTransmitTimeoutMs) {
+    if ((now - startTime) >= holdTransmitTimeoutMs) {
         Serial.println("[Safety] Hold transmission timeout - releasing");
+        portENTER_CRITICAL(&holdStateMux);
         isHoldActive = false;
+        portEXIT_CRITICAL(&holdStateMux);
         remote.transmitSingle(Button::Release);
         return;
     }
 
-    if (lastHoldTransmitTime == 0 || (now - lastHoldTransmitTime) >= holdTransmitIntervalMs) {
-        remote.transmitSingle(activeHoldButton);
+    if (lastTransmit == 0 || (now - lastTransmit) >= holdTransmitIntervalMs) {
+        remote.transmitSingle(holdButton);
+        portENTER_CRITICAL(&holdStateMux);
         lastHoldTransmitTime = now;
+        portEXIT_CRITICAL(&holdStateMux);
     }
 }
 
@@ -211,38 +243,68 @@ void streamCalibrationData() {
     compass.markCalibrationDataSent();
 }
 
-void emergencyStopMotor() {
+// Initiates the non-blocking emergency stop sequence
+void startEmergencyStop() {
     if (!remoteAvailable) {
         Serial.println("[Safety] Cannot perform emergency stop - RF not available");
         return;
     }
-    
-    Serial.println("[Safety] 🚨 EMERGENCY STOP - BLE Disconnected");
-    Serial.println("[Safety] Sending 10 RF_DOWN commands to reduce speed to 0");
-    
-    for (int i = 1; i <= 10; i++) {
-        remote.transmitHold(Button::Down, 1000);
-        Serial.printf("[Safety] Emergency stop %d/10\n", i);
-        delay(500);
+
+    if (emergencyStopState != EmergencyStopState::Idle) {
+        return;  // Already in progress
     }
-    
-    Serial.println("[Safety] ✅ Emergency stop complete - speed should be 0");
+
+    Serial.println("[Safety] EMERGENCY STOP - BLE Disconnected");
+    Serial.println("[Safety] Sending 10 RF_DOWN commands to reduce speed to 0");
+
+    emergencyStopState = EmergencyStopState::InProgress;
+    emergencyStopCount = 0;
+    lastEmergencyStopTime = 0;
+}
+
+// Processes emergency stop state machine (non-blocking)
+void processEmergencyStop() {
+    if (emergencyStopState != EmergencyStopState::InProgress)
+        return;
+
+    if (!remoteAvailable) {
+        emergencyStopState = EmergencyStopState::Idle;
+        return;
+    }
+
+    uint32_t now = millis();
+
+    if (lastEmergencyStopTime == 0 || (now - lastEmergencyStopTime) >= emergencyStopIntervalMs) {
+        emergencyStopCount++;
+        remote.transmitHold(Button::Down, 1000);
+        Serial.printf("[Safety] Emergency stop %d/%d\n", emergencyStopCount, emergencyStopMaxCount);
+        lastEmergencyStopTime = now;
+
+        if (emergencyStopCount >= emergencyStopMaxCount) {
+            emergencyStopState = EmergencyStopState::Complete;
+            Serial.println("[Safety] Emergency stop complete - speed should be 0");
+        }
+    }
 }
 
 void checkBleDisconnect() {
     if (ble.wasJustDisconnected()) {
         Serial.println("[Safety] BLE disconnected - initiating safety procedures");
-        
-        if (isHoldActive) {
+
+        portENTER_CRITICAL(&holdStateMux);
+        bool wasHoldActive = isHoldActive;
+        isHoldActive = false;
+        portEXIT_CRITICAL(&holdStateMux);
+
+        if (wasHoldActive) {
             Serial.println("[Safety] Stopping hold transmission");
-            isHoldActive = false;
             if (remoteAvailable) {
                 remote.transmitSingle(Button::Release);
             }
         }
-        
-        emergencyStopMotor();
-        
+
+        startEmergencyStop();
+
         ble.clearDisconnectFlag();
     }
 }
@@ -308,6 +370,7 @@ void loop() {
     }
 
     checkBleDisconnect();
+    processEmergencyStop();
     broadcastSensorStatus();
 
     if (!Serial.available())

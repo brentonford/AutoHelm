@@ -5,42 +5,62 @@ import CoreLocation
 
 @MainActor
 class DataStore: ObservableObject {
-    
+
     static let shared = DataStore()
-    
+
     @Published var calibration: CompassCalibration = CompassCalibration()
-    
+    @Published private(set) var lastError: String?
+
     private let calibrationKey = "compassCalibration"
-    
+
     private init() {
         loadCalibration()
     }
-    
+
     // MARK: - Calibration
-    
-    func saveCalibration() {
+
+    @discardableResult
+    func saveCalibration() -> Bool {
         do {
             let data = try JSONEncoder().encode(calibration)
             UserDefaults.standard.set(data, forKey: calibrationKey)
+            lastError = nil
+            print("[DataStore] Calibration saved successfully")
+            return true
         } catch {
-            print("Failed to save calibration: \(error)")
+            let errorMessage = "Failed to save calibration: \(error.localizedDescription)"
+            print("[DataStore] \(errorMessage)")
+            lastError = errorMessage
+            return false
         }
     }
-    
-    func loadCalibration() {
-        guard let data = UserDefaults.standard.data(forKey: calibrationKey) else { return }
+
+    @discardableResult
+    func loadCalibration() -> Bool {
+        guard let data = UserDefaults.standard.data(forKey: calibrationKey) else {
+            print("[DataStore] No calibration data found in UserDefaults")
+            return false
+        }
         do {
             calibration = try JSONDecoder().decode(CompassCalibration.self, from: data)
+            lastError = nil
+            print("[DataStore] Calibration loaded successfully: \(calibration.sampleCount) samples")
+            return true
         } catch {
-            print("Failed to load calibration: \(error)")
+            let errorMessage = "Failed to load calibration: \(error.localizedDescription)"
+            print("[DataStore] \(errorMessage)")
+            lastError = errorMessage
+            // Reset to default calibration on load failure
+            calibration = CompassCalibration()
+            return false
         }
     }
-    
+
     func updateCalibration(_ cal: CompassCalibration) {
         calibration = cal
         saveCalibration()
     }
-    
+
     func clearCalibration() {
         calibration = CompassCalibration()
         saveCalibration()

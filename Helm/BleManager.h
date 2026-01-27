@@ -14,7 +14,9 @@ namespace BleConfig {
     constexpr const char* sensorStatusCharUuid = "0000FFE2-0000-1000-8000-00805F9B34FB";
     constexpr const char* commandCharUuid = "0000FFE3-0000-1000-8000-00805F9B34FB";
     constexpr const char* calibrationCharUuid = "0000FFE4-0000-1000-8000-00805F9B34FB";
+    constexpr const char* responseCharUuid = "0000FFE5-0000-1000-8000-00805F9B34FB";  // Dedicated response characteristic
     constexpr uint32_t statusIntervalMs = 500;
+    constexpr size_t jsonBufferSize = 384;  // Increased buffer size for JSON with high precision floats
 }
 
 enum class BleCommand : uint8_t {
@@ -72,6 +74,7 @@ private:
     BLECharacteristic* _sensorStatusChar;
     BLECharacteristic* _commandChar;
     BLECharacteristic* _calibrationChar;
+    BLECharacteristic* _responseChar;  // Dedicated response characteristic
     BleStatus _status;
     uint32_t _lastStatusTime;
     bool _justDisconnected;

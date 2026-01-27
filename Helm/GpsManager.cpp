@@ -164,11 +164,13 @@ int GpsManager::parseInt(const char* str) const {
 
 float GpsManager::parseCoordinate(const char* coord, char direction) const {
     if (!coord || !*coord || direction == '\0')
-        return 0.0f;
+        return NAN;  // Return NAN to indicate invalid input
 
     float raw = parseFloat(coord);
-    if (raw == 0.0f)
-        return 0.0f;
+    // Use epsilon comparison instead of == 0.0f to allow valid equatorial coordinates
+    // An empty or invalid coordinate string will still return 0.0 from atof
+    if (strlen(coord) == 0)
+        return NAN;
 
     int degrees = static_cast<int>(raw / 100);
     float minutes = raw - (degrees * 100);
@@ -219,7 +221,8 @@ void GpsManager::parseGga(const char* sentence) {
     float lat = parseCoordinate(latStr, latDir[0]);
     float lon = parseCoordinate(lonStr, lonDir[0]);
 
-    if (lat == 0.0f || lon == 0.0f)
+    // Use isnan() to check for invalid coordinates (allows valid 0.0 equatorial coordinates)
+    if (isnan(lat) || isnan(lon))
         return;
 
     _data.latitude = lat;
@@ -245,12 +248,27 @@ void GpsManager::parseGsa(const char* sentence) {
     extractField(sentence, 16, hdop, sizeof(hdop));
     extractField(sentence, 17, vdop, sizeof(vdop));
 
-    if (*pdop)
-        _data.pdop = parseFloat(pdop);
-    if (*hdop)
-        _data.hdop = parseFloat(hdop);
-    if (*vdop)
-        _data.vdop = parseFloat(vdop);
+    // Validate DOP values - reject obviously invalid readings (> 50 is poor, > 99 indicates error)
+    constexpr float maxValidDop = 50.0f;
+
+    if (*pdop) {
+        float val = parseFloat(pdop);
+        if (val > 0.0f && val < maxValidDop) {
+            _data.pdop = val;
+        }
+    }
+    if (*hdop) {
+        float val = parseFloat(hdop);
+        if (val > 0.0f && val < maxValidDop) {
+            _data.hdop = val;
+        }
+    }
+    if (*vdop) {
+        float val = parseFloat(vdop);
+        if (val > 0.0f && val < maxValidDop) {
+            _data.vdop = val;
+        }
+    }
 }
 
 void GpsManager::parseRmc(const char* sentence) {
@@ -291,7 +309,8 @@ void GpsManager::parseRmc(const char* sentence) {
         Serial.printf("[GPS] Parsed - Lat: %.6f, Lon: %.6f\n", lat, lon);
     }
 
-    if (lat == 0.0f || lon == 0.0f)
+    // Use isnan() to check for invalid coordinates (allows valid 0.0 equatorial coordinates)
+    if (isnan(lat) || isnan(lon))
         return;
 
     _data.latitude = lat;

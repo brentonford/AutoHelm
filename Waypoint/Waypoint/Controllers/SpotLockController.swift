@@ -26,12 +26,12 @@ class SpotLockController: ObservableObject {
         static let activationThreshold: Double = 4.0
         static let jogDistance: Double = 1.5
         static let maxAcceptableDrift: Double = 6.0
-        
+
         // Speed control
         static let minSpeed: Int = 3
         static let maxSpeed: Int = 10
         static let proportionalGain: Double = 1.0
-        
+
         // Steering control
         static let headingTolerance: Double = 10.0
         static let smallAngleThreshold: Double = 30.0
@@ -39,22 +39,24 @@ class SpotLockController: ObservableObject {
         static let smallSteeringDuration: Int = 200
         static let mediumSteeringDuration: Int = 600
         static let largeSteeringDuration: Int = 1000
-        
+
         // Cable tangle prevention
         static let maxRotationBeforeUntangle: Double = 720.0  // 2 full rotations
-        static let rotationPerMs: Double = 0.1  // Estimated degrees per ms of steering
-        
+        static let safeRotationLevel: Double = 360.0          // Safe level to untangle to (1 rotation)
+        static let rotationPerMs: Double = 0.1                // Estimated degrees per ms of steering
+
         // Timing intervals
         static let correctionInterval: Double = 1.0
         static let progressCheckInterval: Double = 5.0
         static let speedChangeDelay: Double = 2.0
         static let steeringReleaseDelay: Int = 200
-        
+
         // GPS quality requirements
         static let minSatellites: Int = 4
         static let maxHDOP: Double = 5.0
+        static let invalidHDOP: Double = 99.0  // GPS devices return high values (99+) for invalid HDOP
         static let maxConsecutiveGpsFailures: Int = 5  // Allow 5 consecutive failures before disengaging
-        
+
         // Position filtering
         static let filterWindowSize: Int = 5
         static let minSamplesForFiltering: Int = 3

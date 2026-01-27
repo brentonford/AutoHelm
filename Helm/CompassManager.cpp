@@ -6,6 +6,7 @@ CompassManager::CompassManager(uint8_t sdaPin, uint8_t sclPin)
     , _initialized(false)
     , _calibrating(false)
     , _lastCalibrationStreamTime(0)
+    , _calibrationStartTime(0)
     , _calMinX(9999.0f), _calMaxX(-9999.0f)
     , _calMinY(9999.0f), _calMaxY(-9999.0f)
     , _calMinZ(9999.0f), _calMaxZ(-9999.0f)
@@ -146,31 +147,44 @@ void CompassManager::startCalibration() {
     _calMaxZ = -9999.0f;
     _calSampleCount = 0;
     _lastCalibrationStreamTime = 0;
+    _calibrationStartTime = millis();
     Serial.println("[Compass] Calibration started - rotate device slowly");
+    Serial.printf("[Compass] Minimum requirements: %lu samples, %lu ms duration\n",
+        CompassConfig::minCalibrationSamples, CompassConfig::minCalibrationDurationMs);
 }
 
 void CompassManager::stopCalibration() {
     _calibrating = false;
-    
-    if (_calSampleCount < 10) {
-        Serial.println("[Compass] Calibration stopped - insufficient samples");
+
+    uint32_t calibrationDuration = millis() - _calibrationStartTime;
+
+    // Validate both sample count AND duration for quality calibration
+    if (_calSampleCount < CompassConfig::minCalibrationSamples) {
+        Serial.printf("[Compass] Calibration stopped - insufficient samples (%lu < %lu required)\n",
+            _calSampleCount, CompassConfig::minCalibrationSamples);
         return;
     }
-    
+
+    if (calibrationDuration < CompassConfig::minCalibrationDurationMs) {
+        Serial.printf("[Compass] Calibration stopped - insufficient duration (%lu ms < %lu ms required)\n",
+            calibrationDuration, CompassConfig::minCalibrationDurationMs);
+        return;
+    }
+
     float offsetX = (_calMaxX + _calMinX) / 2.0f;
     float offsetY = (_calMaxY + _calMinY) / 2.0f;
     float offsetZ = (_calMaxZ + _calMinZ) / 2.0f;
-    
+
     float avgDeltaX = (_calMaxX - _calMinX) / 2.0f;
     float avgDeltaY = (_calMaxY - _calMinY) / 2.0f;
     float avgDeltaZ = (_calMaxZ - _calMinZ) / 2.0f;
-    
+
     float avgDelta = (avgDeltaX + avgDeltaY + avgDeltaZ) / 3.0f;
-    
+
     float scaleX = (avgDeltaX != 0.0f) ? avgDelta / avgDeltaX : 1.0f;
     float scaleY = (avgDeltaY != 0.0f) ? avgDelta / avgDeltaY : 1.0f;
     float scaleZ = (avgDeltaZ != 0.0f) ? avgDelta / avgDeltaZ : 1.0f;
-    
+
     _calibration.offsetX = offsetX;
     _calibration.offsetY = offsetY;
     _calibration.offsetZ = offsetZ;
@@ -178,8 +192,8 @@ void CompassManager::stopCalibration() {
     _calibration.scaleY = scaleY;
     _calibration.scaleZ = scaleZ;
     // Note: headingOffset is NOT changed during magnetometer calibration
-    
-    Serial.printf("[Compass] Calibration complete - %d samples\n", _calSampleCount);
+
+    Serial.printf("[Compass] Calibration complete - %lu samples in %lu ms\n", _calSampleCount, calibrationDuration);
     Serial.printf("[Compass] Min: %.2f, %.2f, %.2f  Max: %.2f, %.2f, %.2f\n",
         _calMinX, _calMinY, _calMinZ, _calMaxX, _calMaxY, _calMaxZ);
     Serial.printf("[Compass] Offsets: %.2f, %.2f, %.2f  Scales: %.3f, %.3f, %.3f\n",
@@ -202,13 +216,16 @@ void CompassManager::markCalibrationDataSent() {
 
 void CompassManager::updateCalibrationMinMax(float x, float y, float z) {
     // Reject obvious outliers (valid magnetometer readings are typically -150 to +150 µT)
-    bool validReading = (abs(x) < 500 && abs(y) < 500 && abs(z) < 500);
-    
+    // Using configurable threshold for flexibility
+    const float threshold = CompassConfig::outlierThresholdMicroTesla;
+    bool validReading = (abs(x) < threshold && abs(y) < threshold && abs(z) < threshold);
+
     if (!validReading) {
-        Serial.printf("[Compass] REJECTED outlier: X=%.2f Y=%.2f Z=%.2f\n", x, y, z);
+        Serial.printf("[Compass] REJECTED outlier: X=%.2f Y=%.2f Z=%.2f (threshold: %.1f uT)\n",
+            x, y, z, threshold);
         return;
     }
-    
+
     if (x < _calMinX) _calMinX = x;
     if (x > _calMaxX) _calMaxX = x;
     if (y < _calMinY) _calMinY = y;

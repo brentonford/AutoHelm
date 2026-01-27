@@ -8,6 +8,7 @@ private enum BleUuids {
     nonisolated static let sensorStatus = CBUUID(string: "FFE2")
     nonisolated static let command = CBUUID(string: "FFE3")
     nonisolated static let calibration = CBUUID(string: "FFE4")
+    nonisolated static let response = CBUUID(string: "FFE5")  // Dedicated response characteristic
 }
 
 private enum BleConstants {
@@ -51,10 +52,12 @@ class BluetoothManager: NSObject, ObservableObject {
     private var sensorStatusChar: CBCharacteristic?
     private var commandChar: CBCharacteristic?
     private var calibrationChar: CBCharacteristic?
+    private var responseChar: CBCharacteristic?
 
     private var reconnectTimer: Timer?
     private var rssiTimer: Timer?
     private var shouldReconnect = true
+    private var characteristicsReady = false  // Track when all characteristics are discovered
     
     private var locationTracker: LocationWithSpeed?
     private var lastLocationUpdate: Date?
@@ -200,6 +203,8 @@ class BluetoothManager: NSObject, ObservableObject {
         sensorStatusChar = nil
         commandChar = nil
         calibrationChar = nil
+        responseChar = nil
+        characteristicsReady = false
     }
     
     private func clearDeviceData() {
@@ -209,6 +214,8 @@ class BluetoothManager: NSObject, ObservableObject {
         lastLocationUpdate = nil
         isCalibrating = false
         calibrationData = nil
+        rssi = -100
+        signalStrength = .disconnected
     }
     
     @MainActor
@@ -232,24 +239,47 @@ class BluetoothManager: NSObject, ObservableObject {
     private func parseSensorStatus(_ data: Data) {
         do {
             var status = try JSONDecoder().decode(SensorData.self, from: data)
-            
+
             let coordinate = CLLocationCoordinate2D(
                 latitude: status.currentLat,
                 longitude: status.currentLon
             )
-            
+
             if locationTracker == nil {
                 locationTracker = LocationWithSpeed(coordinate: coordinate)
             } else {
                 locationTracker?.updateLocation(coordinate)
             }
-            
+
             status.calculatedSpeed = locationTracker?.speed ?? 0
-            
+
             self.sensorData = status
             lastLocationUpdate = Date()
+            lastError = nil  // Clear any previous error on success
         } catch {
-            print("Sensor status parse error: \(error)")
+            let dataString = String(data: data, encoding: .utf8) ?? "non-UTF8 data"
+            print("[BLE] Sensor status parse error: \(error)")
+            print("[BLE] Raw data: \(dataString)")
+            lastError = "Sensor parse error: \(error.localizedDescription)"
+        }
+    }
+
+    private func parseResponseCharacteristic(_ data: Data) {
+        // Handle command acknowledgments from the dedicated response characteristic
+        if let response = try? JSONDecoder().decode(BleResponse.self, from: data) {
+            self.lastResponse = response
+
+            if let ack = response.ack {
+                print("[BLE] Response ACK: \(ack)")
+            }
+
+            if let error = response.error {
+                print("[BLE] Response error: \(error)")
+                self.lastError = error
+            }
+        } else {
+            let dataString = String(data: data, encoding: .utf8) ?? "non-UTF8 data"
+            print("[BLE] Failed to parse response: \(dataString)")
         }
     }
 
@@ -371,12 +401,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
             shouldReconnect = true
             peripheral.discoverServices([BleUuids.service])
             startRSSIMonitoring()
-            
-            // AUTO-UPLOAD: Wait for characteristics to be discovered, then send calibration
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(2))
-                autoUploadCalibration()
-            }
+            // Note: Auto-upload will be triggered when characteristics are discovered
         }
     }
 
@@ -418,7 +443,8 @@ extension BluetoothManager: CBPeripheralDelegate {
         peripheral.discoverCharacteristics([
             BleUuids.sensorStatus,
             BleUuids.command,
-            BleUuids.calibration
+            BleUuids.calibration,
+            BleUuids.response
         ], for: service)
     }
 
@@ -440,9 +466,19 @@ extension BluetoothManager: CBPeripheralDelegate {
                 case BleUuids.calibration:
                     calibrationChar = char
                     peripheral.setNotifyValue(true, for: char)
+                case BleUuids.response:
+                    responseChar = char
+                    peripheral.setNotifyValue(true, for: char)
                 default:
                     break
                 }
+            }
+
+            // Check if all required characteristics are ready
+            if commandChar != nil {
+                characteristicsReady = true
+                print("[BLE] All characteristics discovered - triggering auto-upload")
+                autoUploadCalibration()
             }
         }
     }
@@ -460,6 +496,8 @@ extension BluetoothManager: CBPeripheralDelegate {
                 parseSensorStatus(data)
             case BleUuids.calibration:
                 parseCalibrationCharacteristic(data)
+            case BleUuids.response:
+                parseResponseCharacteristic(data)
             default:
                 break
             }

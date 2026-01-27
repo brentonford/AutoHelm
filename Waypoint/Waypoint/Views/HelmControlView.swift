@@ -24,7 +24,6 @@ struct HelmControlView: View {
             gpsStatusSection
             compassSection
         }
-        .navigationTitle("Helm Control")
         .toolbar {
             StatusToolbar(bluetooth: bluetooth)
         }
