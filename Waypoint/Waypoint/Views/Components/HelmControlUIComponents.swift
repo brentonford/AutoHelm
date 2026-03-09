@@ -412,7 +412,7 @@ struct CompassView: View {
             Image(systemName: "location.north.fill")
                 .font(.title)
                 .foregroundColor(.red)
-                .rotationEffect(.degrees(heading))
+                .rotationEffect(.degrees(heading.isFinite ? heading : 0))
         }
     }
 }

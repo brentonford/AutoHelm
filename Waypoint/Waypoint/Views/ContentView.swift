@@ -8,7 +8,9 @@ struct ContentView: View {
     @State private var spotLockTimer: Timer?
     @State private var disconnectGraceTimer: Timer?
     
-    private let disconnectGracePeriodSeconds: TimeInterval = 5.0
+    private var disconnectGracePeriodSeconds: TimeInterval {
+        DataStore.shared.spotLockSettings.disconnectGracePeriodSeconds
+    }
     
     init() {
         let bluetooth = BluetoothManager()

@@ -11,6 +11,7 @@ struct SettingsView: View {
             calibrationSection
             northCalibrationSection
             deviceSection
+            spotLockSection
             dataSection
             aboutSection
         }
@@ -164,6 +165,36 @@ struct SettingsView: View {
         }
     }
     
+    // MARK: - Spot Lock Section
+
+    private var spotLockSection: some View {
+        Section {
+            NavigationLink {
+                SpotLockSettingsView()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "pin.circle.fill")
+                        .foregroundColor(.blue)
+                        .frame(width: 28)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Spot Lock")
+                        Text("Position holding parameters")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    if !dataStore.spotLockSettings.isAllDefault {
+                        Text("Modified")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+                }
+            }
+        } header: {
+            Text("Navigation")
+        }
+    }
+
     // MARK: - Device Section
     
     private var deviceSection: some View {

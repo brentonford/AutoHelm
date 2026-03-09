@@ -9,12 +9,15 @@ class DataStore: ObservableObject {
     static let shared = DataStore()
 
     @Published var calibration: CompassCalibration = CompassCalibration()
+    @Published var spotLockSettings: SpotLockSettings = SpotLockSettings()
     @Published private(set) var lastError: String?
 
     private let calibrationKey = "compassCalibration"
+    private let spotLockSettingsKey = "spotLockSettings"
 
     private init() {
         loadCalibration()
+        loadSpotLockSettings()
     }
 
     // MARK: - Calibration
@@ -64,6 +67,42 @@ class DataStore: ObservableObject {
     func clearCalibration() {
         calibration = CompassCalibration()
         saveCalibration()
+    }
+
+    // MARK: - Spot Lock Settings
+
+    func updateSpotLockSettings(_ settings: SpotLockSettings) {
+        spotLockSettings = settings
+        saveSpotLockSettings()
+    }
+
+    @discardableResult
+    func saveSpotLockSettings() -> Bool {
+        do {
+            let data = try JSONEncoder().encode(spotLockSettings)
+            UserDefaults.standard.set(data, forKey: spotLockSettingsKey)
+            print("[DataStore] Spot Lock settings saved")
+            return true
+        } catch {
+            print("[DataStore] Failed to save spot lock settings: \(error)")
+            return false
+        }
+    }
+
+    @discardableResult
+    func loadSpotLockSettings() -> Bool {
+        guard let data = UserDefaults.standard.data(forKey: spotLockSettingsKey) else {
+            return false
+        }
+        do {
+            spotLockSettings = try JSONDecoder().decode(SpotLockSettings.self, from: data)
+            print("[DataStore] Spot Lock settings loaded")
+            return true
+        } catch {
+            print("[DataStore] Failed to load spot lock settings: \(error)")
+            spotLockSettings = SpotLockSettings()
+            return false
+        }
     }
 }
 

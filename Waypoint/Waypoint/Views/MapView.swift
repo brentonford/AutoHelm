@@ -43,7 +43,7 @@ struct MapView: View {
 
     private var mapContent: some View {
         Map(position: $cameraPosition) {
-            if let sensors = bluetooth.sensorData {
+            if let sensors = bluetooth.sensorData, sensors.hasFix {
                 let helmLocation = sensors.currentLocation
                 Annotation("Helm", coordinate: helmLocation) {
                     HelmDirectionIndicator(heading: sensors.heading)
@@ -325,7 +325,7 @@ struct HelmDirectionIndicator: View {
             
             // Apply rotation for heading
             context.translateBy(x: center.x, y: center.y)
-            context.rotate(by: .degrees(heading))
+            context.rotate(by: .degrees(heading.isFinite ? heading : 0))
             context.translateBy(x: -center.x, y: -center.y)
             
             // Draw arrow pointing up (north) - rotation transforms it to heading

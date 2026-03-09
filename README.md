@@ -157,7 +157,8 @@ graph TB
 |------|------------|---------|--------|
 | FFE2 | Notify | Sensor status | JSON |
 | FFE3 | Write | Commands | String |
-| FFE4 | Notify | Calibration/responses | JSON |
+| FFE4 | Notify | Calibration data streaming | JSON |
+| FFE5 | Notify | Command responses / ACKs | JSON |
 
 ### Commands (FFE3)
 
@@ -199,7 +200,7 @@ RF_RELEASE     - Stop hold transmission
 1. **Power On System:**
    - ESP32 boots and initializes GPS/Compass sensors
    - GPS begins acquiring fix (30-60 seconds outdoors)
-   - Watch for "[GPS] *** FIRST FIX ACQUIRED ***" message
+   - Watch for "[GPS] *** FIRST FIX ACQUIRED (GGA) ***" or "[GPS] *** FIRST FIX ACQUIRED (RMC) ***" message
 
 2. **Connect iOS App:**
    - Open Waypoint app
@@ -250,20 +251,20 @@ Time   | Speed Level | Action
 ### Spot Lock
 
 1. **Engage Spot Lock:**
-   - Tap "Engage Spot Lock" button
+   - Tap "Engage at Current Position" button
    - App captures current GPS position as lock point
    - **App autonomously:**
      - Calculates distance from lock position
-     - Sends MOMENTARY_HOLD when >2m from lock
-     - Sends RELEASE when <2m from lock
-     - Sends LEFT/RIGHT corrections when off-course >15°
+     - Sends RF_UP/RF_DOWN to apply thrust when >4m from lock
+     - Stops thrust when within 2m dead zone
+     - Sends RF_LEFT_HOLD/RF_RIGHT_HOLD corrections when off-course >10°
 
 2. **Jog Controls:**
    - Move lock position 1.5m in selected direction
-   - Forward: current heading
-   - Back: current heading + 180°
-   - Left: current heading - 90°
-   - Right: current heading + 90°
+   - Forward: North (0°)
+   - Right: East (90°)
+   - Back: South (180°)
+   - Left: West (270°)
 
 ### Manual Control
 
