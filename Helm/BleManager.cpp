@@ -199,6 +199,65 @@ void BleManager::parseCommand(const char* data) {
             Serial.println("[BLE] ERROR: Failed to parse calibration values");
             sendResponse("{\"error\":\"Invalid CAL_VALUES format\"}");
         }
+    } else if (strcmp(cmd, "SPOTLOCK_DISENGAGE") == 0) {
+        _status.pendingSlCommand = SpotLockCommand::Disengage;
+        sendResponse("{\"ack\":\"SPOTLOCK_DISENGAGE\"}");
+
+    } else if (strncmp(cmd, "SPOTLOCK_ENGAGE:", 16) == 0) {
+        float lat = 0.0f, lon = 0.0f;
+        if (sscanf(cmd + 16, "%f,%f", &lat, &lon) == 2) {
+            _status.slEngageLat      = lat;
+            _status.slEngageLon      = lon;
+            _status.pendingSlCommand = SpotLockCommand::Engage;
+            sendResponse("{\"ack\":\"SPOTLOCK_ENGAGE\"}");
+        } else {
+            sendResponse("{\"error\":\"Invalid SPOTLOCK_ENGAGE format\"}");
+        }
+
+    } else if (strncmp(cmd, "SPOTLOCK_JOG:", 13) == 0) {
+        const char* dirStr = cmd + 13;
+        if      (strcmp(dirStr, "FORWARD") == 0) _status.slJogDir = SpotLockJogDir::Forward;
+        else if (strcmp(dirStr, "BACK")    == 0) _status.slJogDir = SpotLockJogDir::Back;
+        else if (strcmp(dirStr, "LEFT")    == 0) _status.slJogDir = SpotLockJogDir::Left;
+        else                                      _status.slJogDir = SpotLockJogDir::Right;
+        _status.pendingSlCommand = SpotLockCommand::Jog;
+
+    } else if (strncmp(cmd, "SPOTLOCK_SETTINGS:", 18) == 0) {
+        // CSV: deadZone,activation,jog,minSpd,maxSpd,gain,spdDelayS,hdgTol,corrIntervalS,
+        //      smallAng,largeAng,smallDur,medDur,largeDur,maxRot,rotPerMs,minSat,maxHDOP,maxFail,filterWin
+        SpotLockSettings s;
+        float spdDelaySec = 2.0f, corrIntervalSec = 1.0f;
+        int minSpd = 3, maxSpd = 10, smallDur = 200, medDur = 600, largeDur = 1000;
+        int minSat = 4, maxFail = 5, filterWin = 5;
+        int parsed = sscanf(cmd + 18,
+            "%f,%f,%f,%d,%d,%f,%f,%f,%f,%f,%f,%d,%d,%d,%f,%f,%d,%f,%d,%d",
+            &s.deadZoneRadius, &s.activationThreshold, &s.jogDistance,
+            &minSpd, &maxSpd, &s.proportionalGain,
+            &spdDelaySec, &s.headingTolerance, &corrIntervalSec,
+            &s.smallAngleThreshold, &s.largeAngleThreshold,
+            &smallDur, &medDur, &largeDur,
+            &s.maxRotationBeforeUntangle, &s.rotationPerMs,
+            &minSat, &s.maxHDOP, &maxFail, &filterWin);
+
+        if (parsed == 20) {
+            s.minSpeed             = (uint8_t)minSpd;
+            s.maxSpeed             = (uint8_t)maxSpd;
+            s.speedChangeDelayMs   = spdDelaySec * 1000.0f;
+            s.correctionIntervalMs = corrIntervalSec * 1000.0f;
+            s.smallSteeringDuration= (uint16_t)smallDur;
+            s.mediumSteeringDuration=(uint16_t)medDur;
+            s.largeSteeringDuration= (uint16_t)largeDur;
+            s.minSatellites        = (uint8_t)minSat;
+            s.maxConsecutiveGpsFail= (uint8_t)maxFail;
+            s.filterWindowSize     = (uint8_t)filterWin;
+            _status.slPendingSettings  = s;
+            _status.hasSlSettingsPending = true;
+            sendResponse("{\"ack\":\"SPOTLOCK_SETTINGS\"}");
+        } else {
+            Serial.printf("[BLE] SPOTLOCK_SETTINGS parse failed – got %d/20 fields\n", parsed);
+            sendResponse("{\"error\":\"Invalid SPOTLOCK_SETTINGS format\"}");
+        }
+
     } else if (strncmp(cmd, "RF_", 3) == 0) {
         if (len < 4 || len > 32) {
             Serial.println("[BLE] ERROR: Invalid RF command length");
@@ -232,25 +291,47 @@ void BleManager::parseCommand(const char* data) {
     }
 }
 
-String BleManager::buildSensorStatusJson(const GpsData& gpsData, float heading) {
+String BleManager::buildSensorStatusJson(const GpsData& gpsData, float heading,
+                                          const SpotLockState& sl) {
     static char json[BleConfig::jsonBufferSize];
-    int written = snprintf(json, sizeof(json),
-        "{\"has_fix\":%s,\"satellites\":%d,\"currentLat\":%.6f,\"currentLon\":%.6f,\"altitude\":%.1f,\"hdop\":%.1f,\"heading\":%.1f}",
-        gpsData.hasFix ? "true" : "false",
-        gpsData.satellites,
-        gpsData.latitude,
-        gpsData.longitude,
-        gpsData.altitude,
-        gpsData.hdop,
-        heading
-    );
+    int written;
+
+    if (sl.active) {
+        written = snprintf(json, sizeof(json),
+            "{\"has_fix\":%s,\"satellites\":%d,\"currentLat\":%.6f,\"currentLon\":%.6f"
+            ",\"altitude\":%.1f,\"hdop\":%.1f,\"heading\":%.1f"
+            ",\"sl_active\":true,\"sl_lat\":%.6f,\"sl_lon\":%.6f"
+            ",\"sl_dist\":%.2f,\"sl_bearing\":%.1f,\"sl_speed\":%d"
+            ",\"sl_rotation\":%.1f,\"sl_tangled\":%s,\"sl_thrust\":%s}",
+            gpsData.hasFix ? "true" : "false",
+            gpsData.satellites,
+            gpsData.latitude, gpsData.longitude,
+            gpsData.altitude, gpsData.hdop, heading,
+            sl.lockLat, sl.lockLon,
+            sl.distanceM, sl.bearingDeg, sl.speedLevel,
+            sl.cableRotation,
+            sl.cableTangled  ? "true" : "false",
+            sl.applyingThrust? "true" : "false"
+        );
+    } else {
+        written = snprintf(json, sizeof(json),
+            "{\"has_fix\":%s,\"satellites\":%d,\"currentLat\":%.6f,\"currentLon\":%.6f"
+            ",\"altitude\":%.1f,\"hdop\":%.1f,\"heading\":%.1f,\"sl_active\":false}",
+            gpsData.hasFix ? "true" : "false",
+            gpsData.satellites,
+            gpsData.latitude, gpsData.longitude,
+            gpsData.altitude, gpsData.hdop, heading
+        );
+    }
+
     if (written < 0 || static_cast<size_t>(written) >= sizeof(json)) {
         Serial.println("[BLE] WARNING: JSON buffer truncated in buildSensorStatusJson");
     }
     return String(json);
 }
 
-void BleManager::sendSensorStatus(const GpsData& gpsData, float heading) {
+void BleManager::sendSensorStatus(const GpsData& gpsData, float heading,
+                                   const SpotLockState& slState) {
     if (!_status.connected || !_sensorStatusChar)
         return;
 
@@ -260,23 +341,13 @@ void BleManager::sendSensorStatus(const GpsData& gpsData, float heading) {
 
     _lastStatusTime = now;
 
-    static char json[BleConfig::jsonBufferSize];
-    int written = snprintf(json, sizeof(json),
-        "{\"has_fix\":%s,\"satellites\":%d,\"currentLat\":%.6f,\"currentLon\":%.6f,\"altitude\":%.1f,\"hdop\":%.1f,\"heading\":%.1f}",
-        gpsData.hasFix ? "true" : "false",
-        gpsData.satellites,
-        gpsData.latitude,
-        gpsData.longitude,
-        gpsData.altitude,
-        gpsData.hdop,
-        heading
-    );
-    if (written < 0 || static_cast<size_t>(written) >= sizeof(json)) {
-        Serial.println("[BLE] WARNING: JSON buffer truncated in sendSensorStatus");
+    String json = buildSensorStatusJson(gpsData, heading, slState);
+    if (json.length() == 0 || json.length() >= BleConfig::jsonBufferSize) {
+        Serial.println("[BLE] WARNING: JSON invalid in sendSensorStatus");
         return;
     }
 
-    _sensorStatusChar->setValue((uint8_t*)json, strlen(json));
+    _sensorStatusChar->setValue((uint8_t*)json.c_str(), json.length());
     _sensorStatusChar->notify();
 }
 
@@ -352,4 +423,27 @@ bool BleManager::hasCalibrationPending() const {
 CompassCalibration BleManager::consumeCalibration() {
     _status.hasCalibrationPending = false;
     return _status.pendingCalibration;
+}
+
+bool BleManager::hasSpotLockCommandPending() const {
+    return _status.pendingSlCommand != SpotLockCommand::None;
+}
+
+SpotLockCommand BleManager::consumeSpotLockCommand() {
+    SpotLockCommand cmd = _status.pendingSlCommand;
+    _status.pendingSlCommand = SpotLockCommand::None;
+    return cmd;
+}
+
+float BleManager::getSlEngageLat() const  { return _status.slEngageLat; }
+float BleManager::getSlEngageLon() const  { return _status.slEngageLon; }
+SpotLockJogDir BleManager::getSlJogDir() const { return _status.slJogDir; }
+
+bool BleManager::hasSlSettingsPending() const {
+    return _status.hasSlSettingsPending;
+}
+
+SpotLockSettings BleManager::consumeSlSettings() {
+    _status.hasSlSettingsPending = false;
+    return _status.slPendingSettings;
 }

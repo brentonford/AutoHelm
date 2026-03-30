@@ -43,6 +43,18 @@ struct SpotLockSettings: Codable, Equatable {
 
     var isAllDefault: Bool { self == SpotLockSettings.defaults }
 
+    /// Encodes settings as a CSV command string for the Helm device.
+    /// Field order matches the device-side SPOTLOCK_SETTINGS parser exactly.
+    func toSettingsCommand() -> String {
+        "SPOTLOCK_SETTINGS:\(deadZoneRadius),\(activationThreshold),\(jogDistance)" +
+        ",\(minSpeed),\(maxSpeed),\(proportionalGain)" +
+        ",\(speedChangeDelay),\(headingTolerance),\(correctionInterval)" +
+        ",\(smallAngleThreshold),\(largeAngleThreshold)" +
+        ",\(smallSteeringDuration),\(mediumSteeringDuration),\(largeSteeringDuration)" +
+        ",\(maxRotationBeforeUntangle),\(rotationPerMs)" +
+        ",\(minSatellites),\(maxHDOP),\(maxConsecutiveGpsFailures),\(filterWindowSize)"
+    }
+
     // MARK: - Validation
 
     /// Clamps all fields to valid ranges and auto-corrects interdependent values.

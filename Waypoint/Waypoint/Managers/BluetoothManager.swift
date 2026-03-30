@@ -119,6 +119,21 @@ class BluetoothManager: NSObject, ObservableObject {
         sendCommand(command)
     }
 
+    // MARK: - SpotLock Commands
+
+    func engageSpotLock(at position: CLLocationCoordinate2D) {
+        let cmd = String(format: "SPOTLOCK_ENGAGE:%.6f,%.6f", position.latitude, position.longitude)
+        sendCommand(cmd)
+    }
+
+    func disengageSpotLock() {
+        sendCommand("SPOTLOCK_DISENGAGE")
+    }
+
+    func sendSpotLockSettings(_ settings: SpotLockSettings) {
+        sendCommand(settings.toSettingsCommand())
+    }
+
     func startCalibration() {
         sendCommand("START_CAL")
         isCalibrating = true
@@ -218,6 +233,13 @@ class BluetoothManager: NSObject, ObservableObject {
         signalStrength = .disconnected
     }
     
+    @MainActor
+    private func autoUploadSpotLockSettings() {
+        guard commandChar != nil else { return }
+        print("[BLE] Auto-uploading SpotLock settings on connect...")
+        sendSpotLockSettings(DataStore.shared.spotLockSettings)
+    }
+
     @MainActor
     private func autoUploadCalibration() {
         let calibration = DataStore.shared.calibration
@@ -479,6 +501,7 @@ extension BluetoothManager: CBPeripheralDelegate {
                 characteristicsReady = true
                 print("[BLE] All characteristics discovered - triggering auto-upload")
                 autoUploadCalibration()
+                autoUploadSpotLockSettings()
             }
         }
     }

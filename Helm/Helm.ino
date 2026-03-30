@@ -4,6 +4,7 @@
 #include "GpsManager.h"
 #include "CompassManager.h"
 #include "BleManager.h"
+#include "SpotLockController.h"
 
 CC1101 cc1101(
     Pins::cc1101Cs,
@@ -16,6 +17,7 @@ Remote remote(cc1101, Pins::cc1101Gdo0);
 GpsManager gps(Pins::gpsRx, Pins::gpsTx);
 CompassManager compass(Pins::i2cSda, Pins::i2cScl);
 BleManager ble;
+SpotLockController spotLock(remote);
 
 bool cc1101Available = false;
 bool remoteAvailable = false;
@@ -86,7 +88,51 @@ void printSensorStatus() {
     Serial.printf("  BLE Connected:     %s\n", ble.isConnected() ? "YES" : "NO");
 }
 
+void processSpotLockCommand() {
+    if (!ble.hasSpotLockCommandPending() && !ble.hasSlSettingsPending())
+        return;
+
+    // Apply settings before engage so they take effect
+    if (ble.hasSlSettingsPending()) {
+        spotLock.applySettings(ble.consumeSlSettings());
+    }
+
+    if (!ble.hasSpotLockCommandPending())
+        return;
+
+    SpotLockCommand cmd = ble.consumeSpotLockCommand();
+    switch (cmd) {
+        case SpotLockCommand::Engage:
+            if (remoteAvailable) {
+                spotLock.engage(ble.getSlEngageLat(), ble.getSlEngageLon());
+                ble.sendResponse("{\"ack\":\"SPOTLOCK_ENGAGED\"}");
+            } else {
+                ble.sendResponse("{\"error\":\"RF not available\"}");
+            }
+            break;
+
+        case SpotLockCommand::Disengage:
+            spotLock.disengage();
+            ble.sendResponse("{\"ack\":\"SPOTLOCK_DISENGAGED\"}");
+            break;
+
+        case SpotLockCommand::Jog:
+            spotLock.jog(ble.getSlJogDir());
+            break;
+
+        case SpotLockCommand::None:
+            break;
+
+        default:
+            break;
+    }
+}
+
 void processBleRfCommand() {
+    // Manual RF commands are blocked while SpotLock is active
+    if (spotLock.isActive())
+        return;
+
     if (!ble.hasRfCommandPending())
         return;
 
@@ -222,7 +268,7 @@ void broadcastSensorStatus() {
     lastStatusBroadcastTime = now;
 
     GpsData gpsData = gps.getData();
-    ble.sendSensorStatus(gpsData, currentHeading);
+    ble.sendSensorStatus(gpsData, currentHeading, spotLock.getState());
 }
 
 void streamCalibrationData() {
@@ -289,21 +335,27 @@ void processEmergencyStop() {
 
 void checkBleDisconnect() {
     if (ble.wasJustDisconnected()) {
-        Serial.println("[Safety] BLE disconnected - initiating safety procedures");
+        Serial.println("[Safety] BLE disconnected");
 
-        portENTER_CRITICAL(&holdStateMux);
-        bool wasHoldActive = isHoldActive;
-        isHoldActive = false;
-        portEXIT_CRITICAL(&holdStateMux);
+        if (spotLock.isActive()) {
+            // SpotLock is running autonomously – keep it active, no emergency stop
+            Serial.println("[Safety] SpotLock active – continuing autonomous operation");
+        } else {
+            // No autonomous control – apply safety stop for any manual hold
+            portENTER_CRITICAL(&holdStateMux);
+            bool wasHoldActive = isHoldActive;
+            isHoldActive = false;
+            portEXIT_CRITICAL(&holdStateMux);
 
-        if (wasHoldActive) {
-            Serial.println("[Safety] Stopping hold transmission");
-            if (remoteAvailable) {
-                remote.transmitSingle(Button::Release);
+            if (wasHoldActive) {
+                Serial.println("[Safety] Stopping manual hold transmission");
+                if (remoteAvailable) {
+                    remote.transmitSingle(Button::Release);
+                }
             }
-        }
 
-        startEmergencyStop();
+            startEmergencyStop();
+        }
 
         ble.clearDisconnectFlag();
     }
@@ -361,11 +413,16 @@ void loop() {
     if (compassAvailable)
         currentHeading = compass.readHeading();
 
+    // SpotLock runs every loop iteration for precise hold timing
+    if (remoteAvailable)
+        spotLock.update(gps.getData(), currentHeading);
+
     if (bleAvailable) {
         ble.update();
         processBleCommand();
-        processBleRfCommand();
-        processHoldTransmission();
+        processSpotLockCommand();
+        processBleRfCommand();        // blocked internally when SpotLock active
+        processHoldTransmission();    // manual BLE holds (only when SpotLock inactive)
         streamCalibrationData();
     }
 

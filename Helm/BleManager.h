@@ -7,6 +7,7 @@
 #include <BLE2902.h>
 
 #include "DataModels.h"
+#include "SpotLockController.h"
 
 namespace BleConfig {
     constexpr const char* deviceName = "Helm";
@@ -16,13 +17,21 @@ namespace BleConfig {
     constexpr const char* calibrationCharUuid = "0000FFE4-0000-1000-8000-00805F9B34FB";
     constexpr const char* responseCharUuid = "0000FFE5-0000-1000-8000-00805F9B34FB";  // Dedicated response characteristic
     constexpr uint32_t statusIntervalMs = 500;
-    constexpr size_t jsonBufferSize = 384;  // Increased buffer size for JSON with high precision floats
+    constexpr size_t jsonBufferSize = 512;  // Enlarged for SpotLock telemetry fields
 }
 
 enum class BleCommand : uint8_t {
     None,
     StartCalibration,
     StopCalibration
+};
+
+enum class SpotLockCommand : uint8_t {
+    None,
+    Engage,
+    Disengage,
+    Jog,
+    ApplySettings
 };
 
 struct BleStatus {
@@ -33,12 +42,25 @@ struct BleStatus {
     CompassCalibration pendingCalibration;
     bool hasCalibrationPending;
 
+    // SpotLock commands
+    SpotLockCommand pendingSlCommand;
+    float           slEngageLat;
+    float           slEngageLon;
+    SpotLockJogDir  slJogDir;
+    SpotLockSettings slPendingSettings;
+    bool            hasSlSettingsPending;
+
     BleStatus()
         : connected(false)
         , pendingCommand(BleCommand::None)
         , pendingRfCommand("")
         , isHoldCommand(false)
-        , hasCalibrationPending(false) {
+        , hasCalibrationPending(false)
+        , pendingSlCommand(SpotLockCommand::None)
+        , slEngageLat(0.0f)
+        , slEngageLon(0.0f)
+        , slJogDir(SpotLockJogDir::Forward)
+        , hasSlSettingsPending(false) {
     }
 };
 
@@ -48,7 +70,7 @@ public:
 
     bool begin();
     void update();
-    void sendSensorStatus(const GpsData& gpsData, float heading);
+    void sendSensorStatus(const GpsData& gpsData, float heading, const SpotLockState& slState);
     void sendCalibrationData(const String& data);
     void sendResponse(const String& response);
     void sendResponse(const char* response);
@@ -60,7 +82,16 @@ public:
     bool isRfHoldCommand() const;
     bool hasCalibrationPending() const;
     CompassCalibration consumeCalibration();
-    
+
+    // SpotLock command accessors
+    bool            hasSpotLockCommandPending() const;
+    SpotLockCommand consumeSpotLockCommand();
+    float           getSlEngageLat() const;
+    float           getSlEngageLon() const;
+    SpotLockJogDir  getSlJogDir() const;
+    bool            hasSlSettingsPending() const;
+    SpotLockSettings consumeSlSettings();
+
     bool wasJustDisconnected() const;
     void clearDisconnectFlag();
 
@@ -80,5 +111,5 @@ private:
     bool _justDisconnected;
 
     void parseCommand(const char* data);
-    String buildSensorStatusJson(const GpsData& gpsData, float heading);
+    String buildSensorStatusJson(const GpsData& gpsData, float heading, const SpotLockState& slState);
 };

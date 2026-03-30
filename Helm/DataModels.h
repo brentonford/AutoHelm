@@ -26,6 +26,30 @@ namespace NavigationConfig {
     constexpr float maxDop = 5.0f;
 }
 
+// SpotLock algorithm settings – mirrors iOS SpotLockSettings (Codable)
+struct SpotLockSettings {
+    float    deadZoneRadius            = 2.0f;
+    float    activationThreshold       = 4.0f;
+    float    jogDistance               = 1.5f;
+    uint8_t  minSpeed                  = 3;
+    uint8_t  maxSpeed                  = 10;
+    float    proportionalGain          = 1.0f;
+    float    speedChangeDelayMs        = 2000.0f;
+    float    headingTolerance          = 10.0f;
+    float    correctionIntervalMs      = 1000.0f;
+    float    smallAngleThreshold       = 30.0f;
+    float    largeAngleThreshold       = 90.0f;
+    uint16_t smallSteeringDuration     = 200;
+    uint16_t mediumSteeringDuration    = 600;
+    uint16_t largeSteeringDuration     = 1000;
+    float    maxRotationBeforeUntangle = 720.0f;
+    float    rotationPerMs             = 0.1f;
+    uint8_t  minSatellites             = 4;
+    float    maxHDOP                   = 5.0f;
+    uint8_t  maxConsecutiveGpsFail     = 5;
+    uint8_t  filterWindowSize          = 5;
+};
+
 struct GpsData {
     float latitude;
     float longitude;
