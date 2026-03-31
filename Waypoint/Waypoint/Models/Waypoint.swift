@@ -42,9 +42,14 @@ final class WaypointPhoto {
     // Optional back-reference required by CloudKit (non-optional inverses break cascade delete).
     var waypoint: Waypoint?
 
-    init(filename: String, thumbnailData: Data) {
+    // Full-resolution JPEG stored externally by SwiftData and synced as a CKAsset by CloudKit.
+    // Nil for photos added before this version — those fall back to the local disk cache.
+    @Attribute(.externalStorage) var imageData: Data?
+
+    init(filename: String, thumbnailData: Data, imageData: Data? = nil) {
         self.filename = filename
         self.thumbnailData = thumbnailData
+        self.imageData = imageData
         self.dateAdded = Date()
     }
 }

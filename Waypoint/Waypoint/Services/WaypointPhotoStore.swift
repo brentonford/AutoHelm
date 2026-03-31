@@ -15,8 +15,10 @@ final class WaypointPhotoStore {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     }
 
-    /// Saves a full-resolution image. Returns (filename, thumbnailData) or nil on failure.
-    func save(_ image: UIImage) -> (filename: String, thumbnail: Data)? {
+    /// Saves a full-resolution image to the local disk cache.
+    /// Returns (filename, thumbnailData, imageData) or nil on failure.
+    /// The caller stores imageData in the WaypointPhoto model so it syncs as a CloudKit Asset.
+    func save(_ image: UIImage) -> (filename: String, thumbnail: Data, imageData: Data)? {
         let filename = "\(UUID().uuidString).jpg"
         guard let jpeg = image.jpegData(compressionQuality: 0.85) else { return nil }
         do {
@@ -26,11 +28,23 @@ final class WaypointPhotoStore {
             return nil
         }
         guard let thumbData = makeThumbnail(image).jpegData(compressionQuality: 0.7) else { return nil }
-        return (filename, thumbData)
+        return (filename, thumbData, jpeg)
     }
 
-    func load(filename: String) -> UIImage? {
-        UIImage(contentsOfFile: folder.appendingPathComponent(filename).path)
+    /// Loads a full-resolution image. Checks the local disk cache first; if missing,
+    /// uses `fallback` data from the model (CloudKit Asset) and repopulates the cache.
+    func load(filename: String, fallback: Data? = nil) -> UIImage? {
+        let url = folder.appendingPathComponent(filename)
+        if let cached = UIImage(contentsOfFile: url.path) {
+            return cached
+        }
+        // Local file missing — photo was synced from CloudKit on another device.
+        // Materialise from model data and restore the disk cache.
+        if let data = fallback, let image = UIImage(data: data) {
+            try? data.write(to: url)
+            return image
+        }
+        return nil
     }
 
     func delete(filename: String) {

@@ -105,7 +105,7 @@ struct WaypointDetailView: View {
               let result = WaypointPhotoStore.shared.save(uiImg)
         else { pickerItem = nil; return }
 
-        let photo = WaypointPhoto(filename: result.filename, thumbnailData: result.thumbnail)
+        let photo = WaypointPhoto(filename: result.filename, thumbnailData: result.thumbnail, imageData: result.imageData)
         context.insert(photo)
         // Save before assigning the relationship — avoids the iOS 18 CloudKit reversion bug
         // where an unsaved child record causes the relationship to roll back after ~15 seconds.
@@ -160,7 +160,7 @@ private struct FullPhotoView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if let uiImg = WaypointPhotoStore.shared.load(filename: photo.filename) {
+                if let uiImg = WaypointPhotoStore.shared.load(filename: photo.filename, fallback: photo.imageData) {
                     Image(uiImage: uiImg)
                         .resizable()
                         .scaledToFit()
