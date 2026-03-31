@@ -105,13 +105,10 @@ class BluetoothManager: NSObject, ObservableObject {
         guard let data = command.data(using: .utf8) else { return }
         writeToCharacteristic(commandChar, data: data)
         
-        // Add to command history
-        let historyEntry = BLECommandHistory(command: command, timestamp: Date())
-        commandHistory.insert(historyEntry, at: 0)
-        
-        // Keep only last 5 commands
+        // Add to command history (newest first, max 5 entries)
+        commandHistory.insert(BLECommandHistory(command: command, timestamp: Date()), at: 0)
         if commandHistory.count > maxCommandHistory {
-            commandHistory = Array(commandHistory.prefix(maxCommandHistory))
+            commandHistory.removeLast()
         }
     }
 
@@ -132,6 +129,19 @@ class BluetoothManager: NSObject, ObservableObject {
 
     func sendSpotLockSettings(_ settings: SpotLockSettings) {
         sendCommand(settings.toSettingsCommand())
+    }
+
+    // MARK: - Navigation Commands
+
+    func startNavigation(to coordinate: CLLocationCoordinate2D, speedLevel: Int) {
+        let cmd = String(format: "NAV_START:%.6f,%.6f,%d",
+                         coordinate.latitude, coordinate.longitude,
+                         max(1, min(10, speedLevel)))
+        sendCommand(cmd)
+    }
+
+    func cancelNavigation() {
+        sendCommand("NAV_CANCEL")
     }
 
     func startCalibration() {
@@ -524,6 +534,18 @@ extension BluetoothManager: CBPeripheralDelegate {
             default:
                 break
             }
+        }
+    }
+
+    nonisolated func peripheral(
+        _ peripheral: CBPeripheral,
+        didWriteValueFor characteristic: CBCharacteristic,
+        error: Error?
+    ) {
+        guard let error else { return }
+        Task { @MainActor in
+            print("[BLE] Write failed for \(characteristic.uuid): \(error.localizedDescription)")
+            self.lastError = "Command failed: \(error.localizedDescription)"
         }
     }
 

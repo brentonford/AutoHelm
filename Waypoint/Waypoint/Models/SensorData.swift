@@ -22,6 +22,15 @@ struct SensorData: Codable, Equatable {
     var slTangled:  Bool?
     var slThrust:   Bool?
 
+    // Waypoint navigation telemetry (present when nav_active = true)
+    var navActive:   Bool?
+    var navLat:      Double?
+    var navLon:      Double?
+    var navDist:     Double?
+    var navBearing:  Double?
+    var navSpeed:    Int?
+    var navArriving: Bool?
+
     var currentLocation: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: currentLat, longitude: currentLon)
     }
@@ -71,5 +80,24 @@ struct SensorData: Codable, Equatable {
         case slRotation  = "sl_rotation"
         case slTangled   = "sl_tangled"
         case slThrust    = "sl_thrust"
+
+        case navActive   = "nav_active"
+        case navLat      = "nav_lat"
+        case navLon      = "nav_lon"
+        case navDist     = "nav_dist"
+        case navBearing  = "nav_bearing"
+        case navSpeed    = "nav_speed"
+        case navArriving = "nav_arriving"
     }
+
+    // Navigation convenience accessors
+    var isNavActive: Bool { navActive ?? false }
+    var navTargetLocation: CLLocationCoordinate2D? {
+        guard isNavActive, let lat = navLat, let lon = navLon else { return nil }
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+    var navDistanceMetres: Double { navDist     ?? 0 }
+    var navTargetBearing:  Double { navBearing  ?? 0 }
+    var navCurrentSpeed:   Int    { navSpeed    ?? 0 }
+    var isNavArriving:     Bool   { navArriving ?? false }
 }

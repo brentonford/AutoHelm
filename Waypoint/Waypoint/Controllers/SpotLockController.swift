@@ -76,21 +76,27 @@ class SpotLockController: ObservableObject {
             .sink { [weak self] data in
                 guard let self else { return }
                 let active = data?.isSpotLockActive ?? false
+
+                // Telemetry-driven disengage: clear the disengaging flag as soon as the
+                // device confirms sl_active = false, rather than relying on a fixed delay.
+                if self.isDisengaging && !active {
+                    self.isDisengaging = false
+                }
+
                 self.isActive = active
                 if active, let data {
                     if let loc = data.spotLockLocation {
                         self.lockPosition = loc
                     }
-                    self.distanceFromLock       = data.spotLockDistance
-                    self.isApplyingThrust       = data.spotLockThrust
+                    self.distanceFromLock         = data.spotLockDistance
+                    self.isApplyingThrust         = data.spotLockThrust
                     self.currentCorrectionBearing = data.spotLockBearing
-                    self.currentSpeedLevel      = data.spotLockSpeed
-                    self.cableRotation          = data.spotLockRotation
-                    self.isCableTangled         = data.spotLockTangled
+                    self.currentSpeedLevel        = data.spotLockSpeed
+                    self.cableRotation            = data.spotLockRotation
+                    self.isCableTangled           = data.spotLockTangled
                 } else if !active {
-                    // Clear stale state when device reports inactive
-                    self.distanceFromLock = 0
-                    self.isApplyingThrust = false
+                    self.distanceFromLock  = 0
+                    self.isApplyingThrust  = false
                     self.currentSpeedLevel = 0
                 }
             }
@@ -115,20 +121,14 @@ class SpotLockController: ObservableObject {
     }
 
     /// Sends disengage command to the device.
+    /// The `isDisengaging` flag is cleared when the device confirms `sl_active = false`
+    /// via telemetry, rather than after a hardcoded delay.
     func disengage() async {
         guard isActive else { return }
-
         isDisengaging = true
         stopJog()
         bluetooth.disengageSpotLock()
-
-        // Device ramps motor to zero asynchronously; wait briefly for UX continuity
-        try? await Task.sleep(for: .milliseconds(800))
-        isDisengaging = false
-
-        // State will be confirmed false by the next sl_active=false telemetry packet
-        isActive = false
-        lockPosition = nil
+        // isDisengaging cleared by observeSensorData() when sl_active → false
     }
 
     /// Starts sending jog commands to the device (call on button press).

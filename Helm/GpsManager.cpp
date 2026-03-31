@@ -48,6 +48,9 @@ void GpsManager::update() {
         if (_bufferIndex < GpsConfig::bufferSize - 1) {
             _buffer[_bufferIndex++] = c;
             _buffer[_bufferIndex] = '\0';
+        } else {
+            // Sentence longer than buffer — discard and wait for next '$'.
+            _bufferIndex = 0;
         }
 
         if (c == '\n') {

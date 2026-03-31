@@ -1,133 +1,106 @@
-#include "SpotLockController.h"
+#include "WaypointNavController.h"
 #include "NavMath.h"
 #include <math.h>
 
 using namespace NavMath;
 
-static constexpr float    EARTH_RADIUS_M          = 6371000.0f;
-static constexpr uint32_t HOLD_RETRANSMIT_MS      = 68;
-static constexpr uint32_t SPEED_HOLD_DURATION_MS  = 1000;
-static constexpr uint32_t STEERING_RELEASE_DELAY  = 200;
-static constexpr float    SAFE_ROTATION_LEVEL     = 360.0f;
+static constexpr float    EARTH_RADIUS_M         = 6371000.0f;
+static constexpr uint32_t HOLD_RETRANSMIT_MS     = 68;
+static constexpr uint32_t SPEED_HOLD_DURATION_MS = 1000;
+static constexpr uint32_t STEERING_RELEASE_DELAY = 200;
+static constexpr float    SAFE_ROTATION_LEVEL    = 360.0f;
+static constexpr float    NAV_RAMP_ZONE_M        = 8.0f;  // start slowing within this distance of deadZone
 
-SpotLockController::SpotLockController(Remote& remote)
+WaypointNavController::WaypointNavController(Remote& remote)
     : _remote(remote) {}
 
 // ============================================================
-// engage()
+// start()
 // ============================================================
-void SpotLockController::engage(float lat, float lon) {
-    Serial.printf("[SpotLock] ENGAGE at %.6f, %.6f\n", lat, lon);
-    resetState();
-    _lockLat  = lat;
-    _lockLon  = lon;
-    _active   = true;
-    _state.active  = true;
-    _state.lockLat = lat;
-    _state.lockLon = lon;
+void WaypointNavController::start(float targetLat, float targetLon, uint8_t maxSpeedLevel) {
+    Serial.printf("[Nav] START target=%.6f,%.6f speed=%d\n", targetLat, targetLon, maxSpeedLevel);
+    resetMotion();
+
+    _navMaxSpeed        = constrain(maxSpeedLevel, (uint8_t)1, (uint8_t)10);
+    _state.active       = true;
+    _state.targetLat    = targetLat;
+    _state.targetLon    = targetLon;
+    _state.speedLevel   = 0;
+    _state.arriving     = false;
+    _cancelling         = false;
 
     // Zero motor speed: 10 x single Down packets, 100 ms apart
-    Serial.println("[SpotLock] Zeroing motor speed...");
+    Serial.println("[Nav] Zeroing motor speed...");
     for (uint8_t i = 0; i < 10; i++) {
         _remote.transmitSingle(Button::Down);
         delay(100);
     }
-    Serial.println("[SpotLock] Motor zeroed, algorithm active");
+    Serial.println("[Nav] Motor zeroed, navigation active");
 }
 
 // ============================================================
-// disengage()
+// cancel()
 // ============================================================
-void SpotLockController::disengage() {
-    if (!_active && !_disengaging) return;
-    Serial.println("[SpotLock] DISENGAGE");
+void WaypointNavController::cancel() {
+    if (!_state.active && !_cancelling) return;
+    Serial.println("[Nav] CANCEL");
 
     if (_holdActive) releaseSteeringHold();
 
-    _active = false;
-    _state.active = false;
+    _state.active   = false;
+    _state.arriving = false;
 
     if (_currentSpeed > 0 || _speedHoldActive) {
-        // Kick off first Down step immediately then let speed logic finish
-        startSpeedStep(false); // goUp = false
+        startSpeedStep(false);
         _targetSpeed  = 0;
-        _disengaging  = true;
+        _cancelling   = true;
     } else {
-        resetState();
-        _disengaging = false;
+        _cancelling = false;
+        resetMotion();
     }
-}
-
-// ============================================================
-// jog()
-// ============================================================
-void SpotLockController::jog(SpotLockJogDir dir) {
-    if (!_active) return;
-
-    float headingDeg;
-    switch (dir) {
-        case SpotLockJogDir::Forward: headingDeg =   0.0f; break;
-        case SpotLockJogDir::Back:    headingDeg = 180.0f; break;
-        case SpotLockJogDir::Left:    headingDeg = 270.0f; break;
-        default:                      headingDeg =  90.0f; break; // Right
-    }
-
-    float newLat, newLon;
-    calcDestination(_lockLat, _lockLon, headingDeg, _settings.jogDistance, newLat, newLon);
-    _lockLat = newLat;
-    _lockLon = newLon;
-    _histCount = 0;
-    _histHead  = 0;
-    _state.lockLat = _lockLat;
-    _state.lockLon = _lockLon;
-
-    Serial.printf("[SpotLock] JOG -> %.6f, %.6f\n", _lockLat, _lockLon);
 }
 
 // ============================================================
 // applySettings()
 // ============================================================
-void SpotLockController::applySettings(const SpotLockSettings& s) {
+void WaypointNavController::applySettings(const SpotLockSettings& s) {
     _settings = s;
     if (_settings.filterWindowSize > MAX_HIST) _settings.filterWindowSize = MAX_HIST;
-    Serial.printf("[SpotLock] Settings applied – deadZone=%.1fm activation=%.1fm\n",
-                  _settings.deadZoneRadius, _settings.activationThreshold);
+    Serial.printf("[Nav] Settings applied – deadZone=%.1fm rampStart=%.1fm\n",
+                  _settings.deadZoneRadius,
+                  _settings.deadZoneRadius + NAV_RAMP_ZONE_M);
 }
 
 // ============================================================
 // update() – call every loop iteration
 // ============================================================
-void SpotLockController::update(const GpsData& gps, float heading) {
+bool WaypointNavController::update(const GpsData& gps, float heading) {
     uint32_t now = millis();
 
-    // Graceful disengage: ramp speed to 0 before fully stopping
-    if (_disengaging) {
+    // Graceful stop after cancel()
+    if (_cancelling) {
         processSpeedStep(now);
         if (_currentSpeed == 0 && !_speedHoldActive && _targetSpeed == 0) {
-            _disengaging = false;
-            resetState();
+            _cancelling = false;
+            resetMotion();
         }
-        return;
+        return false;
     }
 
-    if (!_active) return;
+    if (!_state.active) return false;
 
     processSteeringHold(now);
     processSpeedStep(now);
-    runCorrectionLogic(gps, heading, now);
 
-    // Update telemetry
-    _state.active        = true;
-    _state.cableRotation = _cumulativeRotation;
-    _state.cableTangled  = (fabsf(_cumulativeRotation) > _settings.maxRotationBeforeUntangle);
-    _state.applyingThrust= _applyingThrust;
-    _state.speedLevel    = (uint8_t)max(0, (int)_currentSpeed);
+    _state.speedLevel = (uint8_t)max(0, (int)_currentSpeed);
+
+    return runCorrectionLogic(gps, heading, now);
 }
 
 // ============================================================
 // Steering hold – non-blocking, 68 ms retransmit
 // ============================================================
-void SpotLockController::processSteeringHold(uint32_t now) {
+void WaypointNavController::processSteeringHold(uint32_t now) {
     if (!_holdActive) return;
 
     if ((now - _holdStart) >= _holdDuration) {
@@ -143,14 +116,14 @@ void SpotLockController::processSteeringHold(uint32_t now) {
     }
 }
 
-void SpotLockController::startSteeringHold(SteerDir dir, uint16_t durationMs) {
+void WaypointNavController::startSteeringHold(SteerDir dir, uint16_t durationMs) {
     Button btn = (dir == SteerDir::Left) ? Button::Left : Button::Right;
     _remote.transmitSingle(btn);
 
-    _holdDir      = dir;
-    _holdActive   = true;
-    _holdStart    = millis();
-    _holdDuration = durationMs;
+    _holdDir        = dir;
+    _holdActive     = true;
+    _holdStart      = millis();
+    _holdDuration   = durationMs;
     _holdRetransmit = millis();
 
     float rotAmt = (float)durationMs * _settings.rotationPerMs;
@@ -158,7 +131,7 @@ void SpotLockController::startSteeringHold(SteerDir dir, uint16_t durationMs) {
     else                        _cumulativeRotation -= rotAmt;
 }
 
-void SpotLockController::releaseSteeringHold() {
+void WaypointNavController::releaseSteeringHold() {
     if (!_holdActive) return;
     _remote.transmitSingle(Button::Release);
     _holdActive = false;
@@ -168,8 +141,8 @@ void SpotLockController::releaseSteeringHold() {
 // ============================================================
 // Speed stepping – non-blocking, 1 s hold per step
 // ============================================================
-void SpotLockController::processSpeedStep(uint32_t now) {
-    if (_holdActive) return; // Don't step speed while steering
+void WaypointNavController::processSpeedStep(uint32_t now) {
+    if (_holdActive && !_cancelling) return;
 
     if (_speedHoldActive) {
         if ((now - _speedHoldStart) >= SPEED_HOLD_DURATION_MS) {
@@ -177,7 +150,7 @@ void SpotLockController::processSpeedStep(uint32_t now) {
             _speedHoldActive = false;
             if (_speedHoldUp) _currentSpeed = min((int8_t)(_currentSpeed + 1), (int8_t)_settings.maxSpeed);
             else              _currentSpeed = max((int8_t)(_currentSpeed - 1), (int8_t)0);
-            _state.speedLevel = (uint8_t)max(0, (int)_currentSpeed);
+            _state.speedLevel  = (uint8_t)max(0, (int)_currentSpeed);
             _lastSpeedStepTime = now;
         } else {
             if ((now - _speedHoldRetransmit) >= HOLD_RETRANSMIT_MS) {
@@ -194,7 +167,7 @@ void SpotLockController::processSpeedStep(uint32_t now) {
     startSpeedStep(_targetSpeed > _currentSpeed);
 }
 
-void SpotLockController::startSpeedStep(bool goUp) {
+void WaypointNavController::startSpeedStep(bool goUp) {
     Button btn = goUp ? Button::Up : Button::Down;
     _remote.transmitSingle(btn);
     _speedHoldActive     = true;
@@ -203,8 +176,8 @@ void SpotLockController::startSpeedStep(bool goUp) {
     _speedHoldRetransmit = millis();
 }
 
-void SpotLockController::setTargetSpeed(int8_t target) {
-    int8_t clamped = max((int8_t)0, min(target, (int8_t)_settings.maxSpeed));
+void WaypointNavController::setTargetSpeed(int8_t target) {
+    int8_t clamped = max((int8_t)0, min(target, (int8_t)_navMaxSpeed));
     if (clamped != 0 && clamped < (int8_t)_settings.minSpeed) clamped = (int8_t)_settings.minSpeed;
     _targetSpeed = clamped;
 }
@@ -212,22 +185,22 @@ void SpotLockController::setTargetSpeed(int8_t target) {
 // ============================================================
 // Core correction logic
 // ============================================================
-void SpotLockController::runCorrectionLogic(const GpsData& gps, float heading, uint32_t now) {
+bool WaypointNavController::runCorrectionLogic(const GpsData& gps, float heading, uint32_t now) {
     if (!isGpsAcceptable(gps)) {
         _consecutiveGpsFail++;
-        Serial.printf("[SpotLock] GPS quality fail %d/%d\n",
+        Serial.printf("[Nav] GPS quality fail %d/%d\n",
                       _consecutiveGpsFail, _settings.maxConsecutiveGpsFail);
         if (_consecutiveGpsFail >= _settings.maxConsecutiveGpsFail) {
-            Serial.println("[SpotLock] GPS insufficient – disengaging");
-            disengage();
+            Serial.println("[Nav] GPS insufficient – cancelling navigation");
+            cancel();
         }
-        return;
+        return false;
     }
     _consecutiveGpsFail = 0;
 
-    if ((now - _lastCorrectionTime) < (uint32_t)_settings.correctionIntervalMs) return;
-    if (_holdActive) return;
-    if (_holdReleaseTime > 0 && (now - _holdReleaseTime) < STEERING_RELEASE_DELAY) return;
+    if ((now - _lastCorrectionTime) < (uint32_t)_settings.correctionIntervalMs) return false;
+    if (_holdActive) return false;
+    if (_holdReleaseTime > 0 && (now - _holdReleaseTime) < STEERING_RELEASE_DELAY) return false;
 
     _lastCorrectionTime = now;
 
@@ -235,61 +208,82 @@ void SpotLockController::runCorrectionLogic(const GpsData& gps, float heading, u
     float filtLat, filtLon;
     getFilteredPos(filtLat, filtLon);
 
-    float dist    = haversineDistance(filtLat, filtLon, _lockLat, _lockLon);
-    float bearing = bearingTo(filtLat, filtLon, _lockLat, _lockLon);
+    float dist    = haversineDistance(filtLat, filtLon, _state.targetLat, _state.targetLon);
+    float bearing = bearingTo(filtLat, filtLon, _state.targetLat, _state.targetLon);
 
-    _state.distanceM  = dist;
+    _state.distMetres = dist;
     _state.bearingDeg = bearing;
 
+    // Arrival check
+    if (dist <= _settings.deadZoneRadius) {
+        _state.arriving = false;
+        Serial.printf("[Nav] ARRIVED – dist=%.2fm\n", dist);
+        return true;
+    }
+
+    _state.arriving = (dist <= (_settings.deadZoneRadius + NAV_RAMP_ZONE_M));
+
+    // Heading correction
     float relAngle = normalizeAngle180(bearing - heading);
     float absAngle = fabsf(relAngle);
 
-    // Cable tangle check
+    // Cable tangle check (prevents indefinite circular motion)
     float absRot           = fabsf(_cumulativeRotation);
     bool  startUntangle    = absRot > _settings.maxRotationBeforeUntangle;
     bool  continueUntangle = _isUntangling && (absRot > SAFE_ROTATION_LEVEL);
 
     if (startUntangle || continueUntangle) {
         if (!_isUntangling) {
-            _isUntangling       = true;
-            _state.cableTangled = true;
-            Serial.printf("[SpotLock] TANGLE %.1fdeg – untangling\n", _cumulativeRotation);
+            _isUntangling = true;
+            Serial.printf("[Nav] TANGLE %.1fdeg – untangling\n", _cumulativeRotation);
         }
         SteerDir dir = (_cumulativeRotation > 0) ? SteerDir::Left : SteerDir::Right;
         startSteeringHold(dir, steeringDuration(90.0f));
 
     } else if (absAngle > _settings.headingTolerance) {
         if (_isUntangling) {
-            _isUntangling       = false;
-            _state.cableTangled = false;
-            Serial.printf("[SpotLock] UNTANGLED %.1fdeg\n", _cumulativeRotation);
+            _isUntangling = false;
+            Serial.printf("[Nav] UNTANGLED %.1fdeg\n", _cumulativeRotation);
         }
         SteerDir dir = (relAngle > 0) ? SteerDir::Right : SteerDir::Left;
         startSteeringHold(dir, steeringDuration(absAngle));
 
     } else {
-        if (_isUntangling) {
-            _isUntangling       = false;
-            _state.cableTangled = false;
-        }
+        if (_isUntangling) _isUntangling = false;
     }
 
-    // Thrust control
-    if (dist > _settings.activationThreshold) {
-        if (!_applyingThrust) { _applyingThrust = true; _state.applyingThrust = true; }
-        setTargetSpeed((int8_t)proportionalSpeed(max(0.0f, dist - _settings.deadZoneRadius)));
-    } else if (dist < _settings.deadZoneRadius) {
-        if (_applyingThrust) { _applyingThrust = false; _state.applyingThrust = false; setTargetSpeed(0); }
-    }
+    // Speed – cruise or ramp
+    setTargetSpeed(targetSpeedForDist(dist));
 
-    Serial.printf("[SpotLock] dist=%.2fm bear=%.1f hdg=%.1f rel=%.1f spd=%d/%d\n",
-                  dist, bearing, heading, relAngle, _currentSpeed, _targetSpeed);
+    Serial.printf("[Nav] dist=%.2fm bear=%.1f hdg=%.1f rel=%.1f spd=%d/%d arriving=%s\n",
+                  dist, bearing, heading, relAngle,
+                  _currentSpeed, _targetSpeed,
+                  _state.arriving ? "YES" : "NO");
+
+    return false;
 }
 
 // ============================================================
-// GPS quality
+// Target speed for distance
+// Three zones:
+//   dist > deadZone + RAMP_ZONE → full cruise speed
+//   deadZone < dist <= deadZone + RAMP_ZONE → linear ramp to minSpeed
+//   dist <= deadZone → 0 (arrival, handled by caller)
 // ============================================================
-bool SpotLockController::isGpsAcceptable(const GpsData& gps) const {
+int8_t WaypointNavController::targetSpeedForDist(float dist) const {
+    float rampStart = _settings.deadZoneRadius + NAV_RAMP_ZONE_M;
+    if (dist >= rampStart) return (int8_t)_navMaxSpeed;
+
+    float t = (dist - _settings.deadZoneRadius) / NAV_RAMP_ZONE_M;  // 0..1
+    t = max(0.0f, t);
+    float spd = _settings.minSpeed + t * ((float)_navMaxSpeed - _settings.minSpeed);
+    return (int8_t)max((int)_settings.minSpeed, (int)roundf(spd));
+}
+
+// ============================================================
+// GPS quality (identical to SpotLockController)
+// ============================================================
+bool WaypointNavController::isGpsAcceptable(const GpsData& gps) const {
     if (!gps.hasFix)                                 return false;
     if (gps.satellites < _settings.minSatellites)    return false;
     const bool hdopValid = (gps.hdop < 99.0f);  // values >= 99.0 are the NMEA "unknown" sentinel
@@ -302,17 +296,16 @@ bool SpotLockController::isGpsAcceptable(const GpsData& gps) const {
 // ============================================================
 // Position history (circular buffer)
 // ============================================================
-void SpotLockController::addToHistory(float lat, float lon) {
-    uint8_t win = min(_settings.filterWindowSize, (uint8_t)MAX_HIST);
+void WaypointNavController::addToHistory(float lat, float lon) {
+    uint8_t win     = min(_settings.filterWindowSize, (uint8_t)MAX_HIST);
     _histLat[_histHead] = lat;
     _histLon[_histHead] = lon;
     _histHead = (_histHead + 1) % win;
     if (_histCount < win) _histCount++;
 }
 
-void SpotLockController::getFilteredPos(float& lat, float& lon) const {
+void WaypointNavController::getFilteredPos(float& lat, float& lon) const {
     if (_histCount < 3) {
-        // Return last sample
         uint8_t win  = min(_settings.filterWindowSize, (uint8_t)MAX_HIST);
         uint8_t last = (_histHead == 0) ? (win - 1) : (_histHead - 1);
         lat = _histLat[last];
@@ -329,33 +322,24 @@ void SpotLockController::getFilteredPos(float& lat, float& lon) const {
 }
 
 // ============================================================
-// Steering duration (mirrors Swift calculateSteeringDuration)
+// Steering duration (same thresholds as SpotLock)
 // ============================================================
-uint16_t SpotLockController::steeringDuration(float absAngle) const {
-    if (absAngle >= _settings.largeAngleThreshold)  return _settings.largeSteeringDuration;
-    if (absAngle >= _settings.smallAngleThreshold)  return _settings.mediumSteeringDuration;
+uint16_t WaypointNavController::steeringDuration(float absAngle) const {
+    if (absAngle >= _settings.largeAngleThreshold) return _settings.largeSteeringDuration;
+    if (absAngle >= _settings.smallAngleThreshold) return _settings.mediumSteeringDuration;
     return _settings.smallSteeringDuration;
 }
 
 // ============================================================
-// Proportional speed (mirrors Swift calculateProportionalSpeed)
+// resetMotion() – clear all motion state
 // ============================================================
-float SpotLockController::proportionalSpeed(float distBeyondDeadZone) const {
-    if (distBeyondDeadZone <= 0.0f) return (float)_settings.minSpeed;
-    float raw = distBeyondDeadZone * _settings.proportionalGain + (float)_settings.minSpeed;
-    return fminf(raw, (float)_settings.maxSpeed);
-}
-
-// ============================================================
-// resetState()
-// ============================================================
-void SpotLockController::resetState() {
-    _holdDir          = SteerDir::None;
-    _holdActive       = false;
-    _holdStart        = 0;
-    _holdDuration     = 0;
-    _holdRetransmit   = 0;
-    _holdReleaseTime  = 0;
+void WaypointNavController::resetMotion() {
+    _holdDir             = SteerDir::None;
+    _holdActive          = false;
+    _holdStart           = 0;
+    _holdDuration        = 0;
+    _holdRetransmit      = 0;
+    _holdReleaseTime     = 0;
 
     _currentSpeed        = 0;
     _targetSpeed         = 0;
@@ -364,19 +348,15 @@ void SpotLockController::resetState() {
     _speedHoldStart      = 0;
     _speedHoldRetransmit = 0;
     _lastSpeedStepTime   = 0;
-    _applyingThrust      = false;
 
-    _lastCorrectionTime = 0;
-    _cumulativeRotation = 0.0f;
-    _isUntangling       = false;
+    _lastCorrectionTime  = 0;
+    _cumulativeRotation  = 0.0f;
+    _isUntangling        = false;
+    _consecutiveGpsFail  = 0;
+    _histHead            = 0;
+    _histCount           = 0;
 
-    _consecutiveGpsFail = 0;
-    _histHead           = 0;
-    _histCount          = 0;
-
-    _state            = SpotLockState();
-    _state.lockLat    = _lockLat;
-    _state.lockLon    = _lockLon;
+    _state               = WaypointNavState();
 }
 
 // Math helpers are provided by NavMath.h (NavMath:: namespace, pulled in via `using namespace NavMath`)

@@ -105,10 +105,5 @@ private:
     uint16_t steeringDuration(float absAngle) const;
     float    proportionalSpeed(float distBeyondDeadZone) const;
 
-    static float haversineDistance(float lat1, float lon1, float lat2, float lon2);
-    static float bearingTo(float lat1, float lon1, float lat2, float lon2);
-    static float normalizeAngle180(float angle);
-    static void  calcDestination(float fromLat, float fromLon,
-                                  float headingDeg, float distM,
-                                  float& outLat, float& outLon);
+    // Math helpers — see NavMath.h
 };

@@ -258,6 +258,24 @@ void BleManager::parseCommand(const char* data) {
             sendResponse("{\"error\":\"Invalid SPOTLOCK_SETTINGS format\"}");
         }
 
+    } else if (strncmp(cmd, "NAV_START:", 10) == 0) {
+        float lat = 0.0f, lon = 0.0f;
+        int   spd = 5;
+        if (sscanf(cmd + 10, "%f,%f,%d", &lat, &lon, &spd) == 3) {
+            _status.navTargetLat    = lat;
+            _status.navTargetLon    = lon;
+            _status.navTargetSpeed  = (uint8_t)constrain(spd, 1, 10);
+            _status.pendingNavCommand = NavCommand::Start;
+            Serial.printf("[BLE] NAV_START target=%.6f,%.6f speed=%d\n", lat, lon, spd);
+            sendResponse("{\"ack\":\"NAV_START\"}");
+        } else {
+            sendResponse("{\"error\":\"Invalid NAV_START format\"}");
+        }
+
+    } else if (strcmp(cmd, "NAV_CANCEL") == 0) {
+        _status.pendingNavCommand = NavCommand::Cancel;
+        sendResponse("{\"ack\":\"NAV_CANCEL\"}");
+
     } else if (strncmp(cmd, "RF_", 3) == 0) {
         if (len < 4 || len > 32) {
             Serial.println("[BLE] ERROR: Invalid RF command length");
@@ -292,46 +310,60 @@ void BleManager::parseCommand(const char* data) {
 }
 
 String BleManager::buildSensorStatusJson(const GpsData& gpsData, float heading,
-                                          const SpotLockState& sl) {
+                                          const SpotLockState& sl,
+                                          const WaypointNavState& nav) {
     static char json[BleConfig::jsonBufferSize];
-    int written;
 
+    // Base fields
+    int n = snprintf(json, sizeof(json),
+        "{\"has_fix\":%s,\"satellites\":%d,\"currentLat\":%.6f,\"currentLon\":%.6f"
+        ",\"altitude\":%.1f,\"hdop\":%.1f,\"heading\":%.1f",
+        gpsData.hasFix ? "true" : "false",
+        gpsData.satellites,
+        gpsData.latitude, gpsData.longitude,
+        gpsData.altitude, gpsData.hdop, heading
+    );
+
+    // SpotLock telemetry
     if (sl.active) {
-        written = snprintf(json, sizeof(json),
-            "{\"has_fix\":%s,\"satellites\":%d,\"currentLat\":%.6f,\"currentLon\":%.6f"
-            ",\"altitude\":%.1f,\"hdop\":%.1f,\"heading\":%.1f"
+        n += snprintf(json + n, sizeof(json) - n,
             ",\"sl_active\":true,\"sl_lat\":%.6f,\"sl_lon\":%.6f"
             ",\"sl_dist\":%.2f,\"sl_bearing\":%.1f,\"sl_speed\":%d"
-            ",\"sl_rotation\":%.1f,\"sl_tangled\":%s,\"sl_thrust\":%s}",
-            gpsData.hasFix ? "true" : "false",
-            gpsData.satellites,
-            gpsData.latitude, gpsData.longitude,
-            gpsData.altitude, gpsData.hdop, heading,
+            ",\"sl_rotation\":%.1f,\"sl_tangled\":%s,\"sl_thrust\":%s",
             sl.lockLat, sl.lockLon,
             sl.distanceM, sl.bearingDeg, sl.speedLevel,
             sl.cableRotation,
-            sl.cableTangled  ? "true" : "false",
-            sl.applyingThrust? "true" : "false"
+            sl.cableTangled   ? "true" : "false",
+            sl.applyingThrust ? "true" : "false"
         );
     } else {
-        written = snprintf(json, sizeof(json),
-            "{\"has_fix\":%s,\"satellites\":%d,\"currentLat\":%.6f,\"currentLon\":%.6f"
-            ",\"altitude\":%.1f,\"hdop\":%.1f,\"heading\":%.1f,\"sl_active\":false}",
-            gpsData.hasFix ? "true" : "false",
-            gpsData.satellites,
-            gpsData.latitude, gpsData.longitude,
-            gpsData.altitude, gpsData.hdop, heading
-        );
+        n += snprintf(json + n, sizeof(json) - n, ",\"sl_active\":false");
     }
 
-    if (written < 0 || static_cast<size_t>(written) >= sizeof(json)) {
+    // Navigation telemetry
+    if (nav.active) {
+        n += snprintf(json + n, sizeof(json) - n,
+            ",\"nav_active\":true,\"nav_lat\":%.6f,\"nav_lon\":%.6f"
+            ",\"nav_dist\":%.2f,\"nav_bearing\":%.1f,\"nav_speed\":%d,\"nav_arriving\":%s",
+            nav.targetLat, nav.targetLon,
+            nav.distMetres, nav.bearingDeg, nav.speedLevel,
+            nav.arriving ? "true" : "false"
+        );
+    } else {
+        n += snprintf(json + n, sizeof(json) - n, ",\"nav_active\":false");
+    }
+
+    snprintf(json + n, sizeof(json) - n, "}");
+
+    if (n < 0 || static_cast<size_t>(n) >= sizeof(json) - 2) {
         Serial.println("[BLE] WARNING: JSON buffer truncated in buildSensorStatusJson");
     }
     return String(json);
 }
 
 void BleManager::sendSensorStatus(const GpsData& gpsData, float heading,
-                                   const SpotLockState& slState) {
+                                   const SpotLockState& slState,
+                                   const WaypointNavState& navState) {
     if (!_status.connected || !_sensorStatusChar)
         return;
 
@@ -341,7 +373,7 @@ void BleManager::sendSensorStatus(const GpsData& gpsData, float heading,
 
     _lastStatusTime = now;
 
-    String json = buildSensorStatusJson(gpsData, heading, slState);
+    String json = buildSensorStatusJson(gpsData, heading, slState, navState);
     if (json.length() == 0 || json.length() >= BleConfig::jsonBufferSize) {
         Serial.println("[BLE] WARNING: JSON invalid in sendSensorStatus");
         return;
@@ -447,3 +479,17 @@ SpotLockSettings BleManager::consumeSlSettings() {
     _status.hasSlSettingsPending = false;
     return _status.slPendingSettings;
 }
+
+bool BleManager::hasNavCommandPending() const {
+    return _status.pendingNavCommand != NavCommand::None;
+}
+
+NavCommand BleManager::consumeNavCommand() {
+    NavCommand cmd = _status.pendingNavCommand;
+    _status.pendingNavCommand = NavCommand::None;
+    return cmd;
+}
+
+float   BleManager::getNavTargetLat()   const { return _status.navTargetLat; }
+float   BleManager::getNavTargetLon()   const { return _status.navTargetLon; }
+uint8_t BleManager::getNavTargetSpeed() const { return _status.navTargetSpeed; }

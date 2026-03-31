@@ -5,6 +5,7 @@
 #include "CompassManager.h"
 #include "BleManager.h"
 #include "SpotLockController.h"
+#include "WaypointNavController.h"
 
 CC1101 cc1101(
     Pins::cc1101Cs,
@@ -18,6 +19,7 @@ GpsManager gps(Pins::gpsRx, Pins::gpsTx);
 CompassManager compass(Pins::i2cSda, Pins::i2cScl);
 BleManager ble;
 SpotLockController spotLock(remote);
+WaypointNavController waypointNav(remote);
 
 bool cc1101Available = false;
 bool remoteAvailable = false;
@@ -88,13 +90,41 @@ void printSensorStatus() {
     Serial.printf("  BLE Connected:     %s\n", ble.isConnected() ? "YES" : "NO");
 }
 
+void processNavCommand() {
+    if (!ble.hasNavCommandPending()) return;
+
+    NavCommand cmd = ble.consumeNavCommand();
+    switch (cmd) {
+        case NavCommand::Start:
+            if (remoteAvailable) {
+                spotLock.disengage();  // safety: cancel SpotLock if active
+                waypointNav.start(ble.getNavTargetLat(), ble.getNavTargetLon(),
+                                  ble.getNavTargetSpeed());
+                ble.sendResponse("{\"ack\":\"NAV_STARTED\"}");
+            } else {
+                ble.sendResponse("{\"error\":\"RF not available\"}");
+            }
+            break;
+        case NavCommand::Cancel:
+            waypointNav.cancel();
+            ble.sendResponse("{\"ack\":\"NAV_CANCELLED\"}");
+            break;
+        case NavCommand::None:
+            break;
+        default:
+            break;
+    }
+}
+
 void processSpotLockCommand() {
     if (!ble.hasSpotLockCommandPending() && !ble.hasSlSettingsPending())
         return;
 
-    // Apply settings before engage so they take effect
+    // Apply settings to both controllers before engage
     if (ble.hasSlSettingsPending()) {
-        spotLock.applySettings(ble.consumeSlSettings());
+        SpotLockSettings settings = ble.consumeSlSettings();
+        spotLock.applySettings(settings);
+        waypointNav.applySettings(settings);
     }
 
     if (!ble.hasSpotLockCommandPending())
@@ -129,8 +159,8 @@ void processSpotLockCommand() {
 }
 
 void processBleRfCommand() {
-    // Manual RF commands are blocked while SpotLock is active
-    if (spotLock.isActive())
+    // Manual RF commands are blocked while SpotLock or navigation is active
+    if (spotLock.isActive() || waypointNav.isActive())
         return;
 
     if (!ble.hasRfCommandPending())
@@ -268,7 +298,7 @@ void broadcastSensorStatus() {
     lastStatusBroadcastTime = now;
 
     GpsData gpsData = gps.getData();
-    ble.sendSensorStatus(gpsData, currentHeading, spotLock.getState());
+    ble.sendSensorStatus(gpsData, currentHeading, spotLock.getState(), waypointNav.getState());
 }
 
 void streamCalibrationData() {
@@ -337,9 +367,9 @@ void checkBleDisconnect() {
     if (ble.wasJustDisconnected()) {
         Serial.println("[Safety] BLE disconnected");
 
-        if (spotLock.isActive()) {
-            // SpotLock is running autonomously – keep it active, no emergency stop
-            Serial.println("[Safety] SpotLock active – continuing autonomous operation");
+        if (spotLock.isActive() || waypointNav.isActive()) {
+            // Autonomous control is active – continue without emergency stop
+            Serial.println("[Safety] Autonomous control active – continuing operation");
         } else {
             // No autonomous control – apply safety stop for any manual hold
             portENTER_CRITICAL(&holdStateMux);
@@ -413,16 +443,31 @@ void loop() {
     if (compassAvailable)
         currentHeading = compass.readHeading();
 
-    // SpotLock runs every loop iteration for precise hold timing
-    if (remoteAvailable)
+    // SpotLock and WaypointNav run every loop iteration for precise timing
+    if (remoteAvailable) {
         spotLock.update(gps.getData(), currentHeading);
+
+        if (waypointNav.isActive()) {
+            bool arrived = waypointNav.update(gps.getData(), currentHeading);
+            if (arrived) {
+                // Seamless handoff: nav ends, SpotLock holds the target position
+                float tLat = waypointNav.getState().targetLat;
+                float tLon = waypointNav.getState().targetLon;
+                Serial.printf("[Helm] NAV arrived – engaging SpotLock at %.6f,%.6f\n", tLat, tLon);
+                waypointNav.cancel();
+                spotLock.engage(tLat, tLon);
+                ble.sendResponse("{\"ack\":\"NAV_ARRIVED\"}");
+            }
+        }
+    }
 
     if (bleAvailable) {
         ble.update();
         processBleCommand();
         processSpotLockCommand();
-        processBleRfCommand();        // blocked internally when SpotLock active
-        processHoldTransmission();    // manual BLE holds (only when SpotLock inactive)
+        processNavCommand();
+        processBleRfCommand();        // blocked when SpotLock or nav active
+        processHoldTransmission();    // manual BLE holds (only when both inactive)
         streamCalibrationData();
     }
 
