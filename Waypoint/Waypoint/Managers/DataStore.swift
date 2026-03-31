@@ -10,14 +10,17 @@ class DataStore: ObservableObject {
 
     @Published var calibration: CompassCalibration = CompassCalibration()
     @Published var spotLockSettings: SpotLockSettings = SpotLockSettings()
+    @Published var navSettings: NavSettings = NavSettings()
     @Published private(set) var lastError: String?
 
     private let calibrationKey = "compassCalibration"
     private let spotLockSettingsKey = "spotLockSettings"
+    private let navSettingsKey = "navSettings"
 
     private init() {
         loadCalibration()
         loadSpotLockSettings()
+        loadNavSettings()
     }
 
     // MARK: - Calibration
@@ -101,6 +104,42 @@ class DataStore: ObservableObject {
         } catch {
             print("[DataStore] Failed to load spot lock settings: \(error)")
             spotLockSettings = SpotLockSettings()
+            return false
+        }
+    }
+
+    // MARK: - Nav Settings
+
+    func updateNavSettings(_ settings: NavSettings) {
+        navSettings = settings
+        saveNavSettings()
+    }
+
+    @discardableResult
+    func saveNavSettings() -> Bool {
+        do {
+            let data = try JSONEncoder().encode(navSettings)
+            UserDefaults.standard.set(data, forKey: navSettingsKey)
+            print("[DataStore] Nav settings saved")
+            return true
+        } catch {
+            print("[DataStore] Failed to save nav settings: \(error)")
+            return false
+        }
+    }
+
+    @discardableResult
+    func loadNavSettings() -> Bool {
+        guard let data = UserDefaults.standard.data(forKey: navSettingsKey) else {
+            return false
+        }
+        do {
+            navSettings = try JSONDecoder().decode(NavSettings.self, from: data)
+            print("[DataStore] Nav settings loaded")
+            return true
+        } catch {
+            print("[DataStore] Failed to load nav settings: \(error)")
+            navSettings = NavSettings()
             return false
         }
     }

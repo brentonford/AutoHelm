@@ -131,6 +131,10 @@ class BluetoothManager: NSObject, ObservableObject {
         sendCommand(settings.toSettingsCommand())
     }
 
+    func sendNavSettings(_ settings: NavSettings) {
+        sendCommand(settings.toNavSettingsCommand())
+    }
+
     // MARK: - Navigation Commands
 
     func startNavigation(to coordinate: CLLocationCoordinate2D, speedLevel: Int) {

@@ -58,13 +58,13 @@ class WaypointNavController: ObservableObject {
 
     // MARK: - Public API
 
-    /// Uploads current settings, waits for the write to arrive, then starts navigation.
+    /// Uploads navigation settings, waits for the write to arrive, then starts navigation.
     /// The 150 ms gap ensures the device has applied the latest settings before the
     /// NAV_START command is processed.
     func navigate(to waypoint: Waypoint, speedLevel: Int) {
         targetWaypoint = waypoint
         Task {
-            bluetooth.sendSpotLockSettings(DataStore.shared.spotLockSettings)
+            bluetooth.sendNavSettings(DataStore.shared.navSettings)
             try? await Task.sleep(for: .milliseconds(150))
             bluetooth.startNavigation(to: waypoint.coordinate, speedLevel: speedLevel)
         }

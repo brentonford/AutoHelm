@@ -258,6 +258,42 @@ void BleManager::parseCommand(const char* data) {
             sendResponse("{\"error\":\"Invalid SPOTLOCK_SETTINGS format\"}");
         }
 
+    } else if (strncmp(cmd, "NAV_SETTINGS:", 13) == 0) {
+        // Same 20-field CSV format as SPOTLOCK_SETTINGS — reuses SpotLockSettings struct.
+        // Applied only to WaypointNavController; SpotLock settings are unaffected.
+        SpotLockSettings s;
+        float spdDelaySec = 2.0f, corrIntervalSec = 1.0f;
+        int minSpd = 2, maxSpd = 10, smallDur = 200, medDur = 600, largeDur = 1000;
+        int minSat = 4, maxFail = 5, filterWin = 5;
+        int parsed = sscanf(cmd + 13,
+            "%f,%f,%f,%d,%d,%f,%f,%f,%f,%f,%f,%d,%d,%d,%f,%f,%d,%f,%d,%d",
+            &s.deadZoneRadius, &s.activationThreshold, &s.jogDistance,
+            &minSpd, &maxSpd, &s.proportionalGain,
+            &spdDelaySec, &s.headingTolerance, &corrIntervalSec,
+            &s.smallAngleThreshold, &s.largeAngleThreshold,
+            &smallDur, &medDur, &largeDur,
+            &s.maxRotationBeforeUntangle, &s.rotationPerMs,
+            &minSat, &s.maxHDOP, &maxFail, &filterWin);
+
+        if (parsed == 20) {
+            s.minSpeed              = (uint8_t)minSpd;
+            s.maxSpeed              = (uint8_t)maxSpd;
+            s.speedChangeDelayMs    = spdDelaySec * 1000.0f;
+            s.correctionIntervalMs  = corrIntervalSec * 1000.0f;
+            s.smallSteeringDuration = (uint16_t)smallDur;
+            s.mediumSteeringDuration= (uint16_t)medDur;
+            s.largeSteeringDuration = (uint16_t)largeDur;
+            s.minSatellites         = (uint8_t)minSat;
+            s.maxConsecutiveGpsFail = (uint8_t)maxFail;
+            s.filterWindowSize      = (uint8_t)filterWin;
+            _status.navPendingSettings     = s;
+            _status.hasNavSettingsPending  = true;
+            sendResponse("{\"ack\":\"NAV_SETTINGS\"}");
+        } else {
+            Serial.printf("[BLE] NAV_SETTINGS parse failed – got %d/20 fields\n", parsed);
+            sendResponse("{\"error\":\"Invalid NAV_SETTINGS format\"}");
+        }
+
     } else if (strncmp(cmd, "NAV_START:", 10) == 0) {
         float lat = 0.0f, lon = 0.0f;
         int   spd = 5;
@@ -493,3 +529,13 @@ NavCommand BleManager::consumeNavCommand() {
 float   BleManager::getNavTargetLat()   const { return _status.navTargetLat; }
 float   BleManager::getNavTargetLon()   const { return _status.navTargetLon; }
 uint8_t BleManager::getNavTargetSpeed() const { return _status.navTargetSpeed; }
+
+bool BleManager::hasNavSettingsPending() const {
+    return _status.hasNavSettingsPending;
+}
+
+SpotLockSettings BleManager::consumeNavSettings() {
+    SpotLockSettings s = _status.navPendingSettings;
+    _status.hasNavSettingsPending = false;
+    return s;
+}

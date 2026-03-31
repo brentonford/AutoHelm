@@ -165,7 +165,7 @@ struct SettingsView: View {
         }
     }
     
-    // MARK: - Spot Lock Section
+    // MARK: - Navigation Settings Section
 
     private var spotLockSection: some View {
         Section {
@@ -184,6 +184,28 @@ struct SettingsView: View {
                     }
                     Spacer()
                     if !dataStore.spotLockSettings.isAllDefault {
+                        Text("Modified")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+                }
+            }
+
+            NavigationLink {
+                NavSettingsView()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "location.north.line.fill")
+                        .foregroundColor(.orange)
+                        .frame(width: 28)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Navigation")
+                        Text("Waypoint navigation parameters")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    if !dataStore.navSettings.isAllDefault {
                         Text("Modified")
                             .font(.caption)
                             .foregroundColor(.orange)

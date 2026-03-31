@@ -91,6 +91,14 @@ void printSensorStatus() {
 }
 
 void processNavCommand() {
+    if (!ble.hasNavSettingsPending() && !ble.hasNavCommandPending()) return;
+
+    // Apply navigation-specific settings before acting on a nav command.
+    if (ble.hasNavSettingsPending()) {
+        SpotLockSettings settings = ble.consumeNavSettings();
+        waypointNav.applySettings(settings);
+    }
+
     if (!ble.hasNavCommandPending()) return;
 
     NavCommand cmd = ble.consumeNavCommand();
@@ -120,11 +128,11 @@ void processSpotLockCommand() {
     if (!ble.hasSpotLockCommandPending() && !ble.hasSlSettingsPending())
         return;
 
-    // Apply settings to both controllers before engage
+    // Apply Spot Lock settings only to spotLock.
+    // Navigation settings are applied separately via NAV_SETTINGS / processNavCommand().
     if (ble.hasSlSettingsPending()) {
         SpotLockSettings settings = ble.consumeSlSettings();
         spotLock.applySettings(settings);
-        waypointNav.applySettings(settings);
     }
 
     if (!ble.hasSpotLockCommandPending())

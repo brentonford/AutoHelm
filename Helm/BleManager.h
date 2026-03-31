@@ -58,10 +58,12 @@ struct BleStatus {
     bool             hasSlSettingsPending;
 
     // Waypoint navigation commands
-    NavCommand pendingNavCommand;
-    float      navTargetLat;
-    float      navTargetLon;
-    uint8_t    navTargetSpeed;
+    NavCommand       pendingNavCommand;
+    float            navTargetLat;
+    float            navTargetLon;
+    uint8_t          navTargetSpeed;
+    SpotLockSettings navPendingSettings;
+    bool             hasNavSettingsPending;
 
     BleStatus()
         : connected(false)
@@ -77,7 +79,8 @@ struct BleStatus {
         , pendingNavCommand(NavCommand::None)
         , navTargetLat(0.0f)
         , navTargetLon(0.0f)
-        , navTargetSpeed(5) {
+        , navTargetSpeed(5)
+        , hasNavSettingsPending(false) {
     }
 };
 
@@ -111,11 +114,13 @@ public:
     SpotLockSettings consumeSlSettings();
 
     // Navigation command accessors
-    bool       hasNavCommandPending() const;
-    NavCommand consumeNavCommand();
-    float      getNavTargetLat() const;
-    float      getNavTargetLon() const;
-    uint8_t    getNavTargetSpeed() const;
+    bool             hasNavCommandPending() const;
+    NavCommand       consumeNavCommand();
+    float            getNavTargetLat() const;
+    float            getNavTargetLon() const;
+    uint8_t          getNavTargetSpeed() const;
+    bool             hasNavSettingsPending() const;
+    SpotLockSettings consumeNavSettings();
 
     bool wasJustDisconnected() const;
     void clearDisconnectFlag();
