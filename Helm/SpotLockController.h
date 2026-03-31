@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include "DataModels.h"
+#include "NavMath.h"
 #include "Remote.h"
 
 // -------------------------------------------------------
@@ -68,6 +69,7 @@ private:
     uint32_t _speedHoldStart     = 0;
     uint32_t _speedHoldRetransmit= 0;
     uint32_t _lastSpeedStepTime  = 0;
+    uint32_t _lastResyncMs       = 0;  // last time a zero-assert re-sync pulse was sent
     bool     _applyingThrust     = false;
 
     // --- Correction timing ---
@@ -80,12 +82,8 @@ private:
     // --- GPS quality ---
     uint8_t _consecutiveGpsFail = 0;
 
-    // --- Position history (circular buffer, max 20) ---
-    static constexpr uint8_t MAX_HIST = 20;
-    float   _histLat[MAX_HIST] = {};
-    float   _histLon[MAX_HIST] = {};
-    uint8_t _histHead  = 0;
-    uint8_t _histCount = 0;
+    // --- Kalman filter for GPS distance noise reduction ---
+    KalmanFilter1D _kalmanDist;
 
     void processSteeringHold(uint32_t now);
     void processSpeedStep(uint32_t now);
@@ -98,10 +96,7 @@ private:
     void setTargetSpeed(int8_t target);
     void resetState();
 
-    bool isGpsAcceptable(const GpsData& gps) const;
-    void addToHistory(float lat, float lon);
-    void getFilteredPos(float& lat, float& lon) const;
-
+    bool     isGpsAcceptable(const GpsData& gps) const;
     uint16_t steeringDuration(float absAngle) const;
     float    proportionalSpeed(float distBeyondDeadZone) const;
 

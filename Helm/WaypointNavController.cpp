@@ -10,6 +10,8 @@ static constexpr uint32_t SPEED_HOLD_DURATION_MS = 1000;
 static constexpr uint32_t STEERING_RELEASE_DELAY = 200;
 static constexpr float    SAFE_ROTATION_LEVEL    = 360.0f;
 static constexpr float    NAV_RAMP_ZONE_M        = 8.0f;  // start slowing within this distance of deadZone
+static constexpr uint32_t RAMP_DOWN_DELAY_MS     = 500;   // faster decel: don't wait full speedChangeDelay when stepping down
+static constexpr uint32_t RESYNC_INTERVAL_MS     = 5000;  // re-assert zero every 5 s while stationary to correct speed-state drift
 
 WaypointNavController::WaypointNavController(Remote& remote)
     : _remote(remote) {}
@@ -65,7 +67,6 @@ void WaypointNavController::cancel() {
 // ============================================================
 void WaypointNavController::applySettings(const SpotLockSettings& s) {
     _settings = s;
-    if (_settings.filterWindowSize > MAX_HIST) _settings.filterWindowSize = MAX_HIST;
     Serial.printf("[Nav] Settings applied – deadZone=%.1fm rampStart=%.1fm\n",
                   _settings.deadZoneRadius,
                   _settings.deadZoneRadius + NAV_RAMP_ZONE_M);
@@ -161,8 +162,27 @@ void WaypointNavController::processSpeedStep(uint32_t now) {
         return;
     }
 
+    // Periodic zero-assert: while motor is believed stopped, send a Down pulse every
+    // RESYNC_INTERVAL_MS to correct any speed-state drift from missed RF packets.
+    if (_currentSpeed == 0 && _targetSpeed == 0 && !_cancelling) {
+        if (_lastResyncMs == 0) {
+            _lastResyncMs = now;  // arm timer on first stationary cycle
+        } else if ((now - _lastResyncMs) >= RESYNC_INTERVAL_MS) {
+            _remote.transmitSingle(Button::Down);
+            _lastResyncMs = now;
+        }
+        return;
+    }
+    _lastResyncMs = 0;  // reset timer whenever motor is commanded to move
+
     if (_currentSpeed == _targetSpeed) return;
-    if ((now - _lastSpeedStepTime) < (uint32_t)_settings.speedChangeDelayMs) return;
+
+    // Asymmetric ramp delays: decelerate quickly (500 ms), accelerate at the
+    // configured rate (speedChangeDelayMs, default 2000 ms).
+    uint32_t stepDelay = (_targetSpeed > _currentSpeed)
+        ? (uint32_t)_settings.speedChangeDelayMs
+        : RAMP_DOWN_DELAY_MS;
+    if ((now - _lastSpeedStepTime) < stepDelay) return;
 
     startSpeedStep(_targetSpeed > _currentSpeed);
 }
@@ -204,12 +224,11 @@ bool WaypointNavController::runCorrectionLogic(const GpsData& gps, float heading
 
     _lastCorrectionTime = now;
 
-    addToHistory(gps.latitude, gps.longitude);
-    float filtLat, filtLon;
-    getFilteredPos(filtLat, filtLon);
-
-    float dist    = haversineDistance(filtLat, filtLon, _state.targetLat, _state.targetLon);
-    float bearing = bearingTo(filtLat, filtLon, _state.targetLat, _state.targetLon);
+    // Kalman-filtered distance reduces GPS noise without the lag of a sliding mean.
+    // Bearing is computed from raw GPS — directional noise is acceptable for bang-bang steering.
+    float rawDist = haversineDistance(gps.latitude, gps.longitude, _state.targetLat, _state.targetLon);
+    float dist    = _kalmanDist.update(rawDist);
+    float bearing = bearingTo(gps.latitude, gps.longitude, _state.targetLat, _state.targetLon);
 
     _state.distMetres = dist;
     _state.bearingDeg = bearing;
@@ -275,7 +294,7 @@ int8_t WaypointNavController::targetSpeedForDist(float dist) const {
     if (dist >= rampStart) return (int8_t)_navMaxSpeed;
 
     float t = (dist - _settings.deadZoneRadius) / NAV_RAMP_ZONE_M;  // 0..1
-    t = max(0.0f, t);
+    t = sqrtf(max(0.0f, t));  // sqrt: gentler near arrival, steeper at ramp entry
     float spd = _settings.minSpeed + t * ((float)_navMaxSpeed - _settings.minSpeed);
     return (int8_t)max((int)_settings.minSpeed, (int)roundf(spd));
 }
@@ -291,34 +310,6 @@ bool WaypointNavController::isGpsAcceptable(const GpsData& gps) const {
     uint32_t age = millis() - gps.timestamp;
     if (gps.timestamp > 0 && age > 2000)             return false;
     return true;
-}
-
-// ============================================================
-// Position history (circular buffer)
-// ============================================================
-void WaypointNavController::addToHistory(float lat, float lon) {
-    uint8_t win     = min(_settings.filterWindowSize, (uint8_t)MAX_HIST);
-    _histLat[_histHead] = lat;
-    _histLon[_histHead] = lon;
-    _histHead = (_histHead + 1) % win;
-    if (_histCount < win) _histCount++;
-}
-
-void WaypointNavController::getFilteredPos(float& lat, float& lon) const {
-    if (_histCount < 3) {
-        uint8_t win  = min(_settings.filterWindowSize, (uint8_t)MAX_HIST);
-        uint8_t last = (_histHead == 0) ? (win - 1) : (_histHead - 1);
-        lat = _histLat[last];
-        lon = _histLon[last];
-        return;
-    }
-    float sumLat = 0.0f, sumLon = 0.0f;
-    for (uint8_t i = 0; i < _histCount; i++) {
-        sumLat += _histLat[i];
-        sumLon += _histLon[i];
-    }
-    lat = sumLat / _histCount;
-    lon = sumLon / _histCount;
 }
 
 // ============================================================
@@ -350,11 +341,11 @@ void WaypointNavController::resetMotion() {
     _lastSpeedStepTime   = 0;
 
     _lastCorrectionTime  = 0;
+    _lastResyncMs        = 0;
     _cumulativeRotation  = 0.0f;
     _isUntangling        = false;
     _consecutiveGpsFail  = 0;
-    _histHead            = 0;
-    _histCount           = 0;
+    _kalmanDist.reset();
 
     _state               = WaypointNavState();
 }

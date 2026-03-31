@@ -49,3 +49,27 @@ inline void calcDestination(float lat, float lon, float headingDeg, float distM,
 }
 
 } // namespace NavMath
+
+// -------------------------------------------------------
+// 1-D Kalman filter for GPS distance noise reduction.
+// Defined outside the NavMath namespace so controllers can
+// use it as a plain member type without `using namespace NavMath`.
+// Large initial p collapses to the first measurement on the
+// very first call to update() — no explicit init flag needed.
+// -------------------------------------------------------
+struct KalmanFilter1D {
+    float x = 0.0f;
+    float p = 9999.0f;  // large initial covariance → K≈1 on first measurement
+    static constexpr float Q = 0.25f;  // process noise (distance changes ~0.5 m/step)
+    static constexpr float R = 2.25f;  // measurement noise (GPS ±1.5 m typical)
+
+    float update(float z) {
+        p += Q;
+        float k = p / (p + R);
+        x += k * (z - x);
+        p *= (1.0f - k);
+        return x;
+    }
+
+    void reset() { x = 0.0f; p = 9999.0f; }
+};

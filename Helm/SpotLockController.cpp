@@ -9,6 +9,8 @@ static constexpr uint32_t HOLD_RETRANSMIT_MS      = 68;
 static constexpr uint32_t SPEED_HOLD_DURATION_MS  = 1000;
 static constexpr uint32_t STEERING_RELEASE_DELAY  = 200;
 static constexpr float    SAFE_ROTATION_LEVEL     = 360.0f;
+static constexpr uint32_t RAMP_DOWN_DELAY_MS      = 500;   // faster decel: don't wait full speedChangeDelay when stepping down
+static constexpr uint32_t RESYNC_INTERVAL_MS      = 5000;  // re-assert zero every 5 s while stationary to correct speed-state drift
 
 SpotLockController::SpotLockController(Remote& remote)
     : _remote(remote) {}
@@ -76,8 +78,7 @@ void SpotLockController::jog(SpotLockJogDir dir) {
     calcDestination(_lockLat, _lockLon, headingDeg, _settings.jogDistance, newLat, newLon);
     _lockLat = newLat;
     _lockLon = newLon;
-    _histCount = 0;
-    _histHead  = 0;
+    _kalmanDist.reset();  // clear filter — distance to new lock point has changed discontinuously
     _state.lockLat = _lockLat;
     _state.lockLon = _lockLon;
 
@@ -89,7 +90,6 @@ void SpotLockController::jog(SpotLockJogDir dir) {
 // ============================================================
 void SpotLockController::applySettings(const SpotLockSettings& s) {
     _settings = s;
-    if (_settings.filterWindowSize > MAX_HIST) _settings.filterWindowSize = MAX_HIST;
     Serial.printf("[SpotLock] Settings applied – deadZone=%.1fm activation=%.1fm\n",
                   _settings.deadZoneRadius, _settings.activationThreshold);
 }
@@ -188,8 +188,27 @@ void SpotLockController::processSpeedStep(uint32_t now) {
         return;
     }
 
+    // Periodic zero-assert: while motor is believed stopped, send a Down pulse every
+    // RESYNC_INTERVAL_MS to correct any speed-state drift from missed RF packets.
+    if (_currentSpeed == 0 && _targetSpeed == 0 && !_disengaging) {
+        if (_lastResyncMs == 0) {
+            _lastResyncMs = now;  // arm timer on first stationary cycle
+        } else if ((now - _lastResyncMs) >= RESYNC_INTERVAL_MS) {
+            _remote.transmitSingle(Button::Down);
+            _lastResyncMs = now;
+        }
+        return;
+    }
+    _lastResyncMs = 0;  // reset timer whenever motor is commanded to move
+
     if (_currentSpeed == _targetSpeed) return;
-    if ((now - _lastSpeedStepTime) < (uint32_t)_settings.speedChangeDelayMs) return;
+
+    // Asymmetric ramp delays: decelerate quickly (500 ms), accelerate at the
+    // configured rate (speedChangeDelayMs, default 2000 ms).
+    uint32_t stepDelay = (_targetSpeed > _currentSpeed)
+        ? (uint32_t)_settings.speedChangeDelayMs
+        : RAMP_DOWN_DELAY_MS;
+    if ((now - _lastSpeedStepTime) < stepDelay) return;
 
     startSpeedStep(_targetSpeed > _currentSpeed);
 }
@@ -231,12 +250,11 @@ void SpotLockController::runCorrectionLogic(const GpsData& gps, float heading, u
 
     _lastCorrectionTime = now;
 
-    addToHistory(gps.latitude, gps.longitude);
-    float filtLat, filtLon;
-    getFilteredPos(filtLat, filtLon);
-
-    float dist    = haversineDistance(filtLat, filtLon, _lockLat, _lockLon);
-    float bearing = bearingTo(filtLat, filtLon, _lockLat, _lockLon);
+    // Kalman-filtered distance reduces GPS noise without the lag of a sliding mean.
+    // Bearing is computed from raw GPS — directional noise is acceptable for bang-bang steering.
+    float rawDist = haversineDistance(gps.latitude, gps.longitude, _lockLat, _lockLon);
+    float dist    = _kalmanDist.update(rawDist);
+    float bearing = bearingTo(gps.latitude, gps.longitude, _lockLat, _lockLon);
 
     _state.distanceM  = dist;
     _state.bearingDeg = bearing;
@@ -300,35 +318,6 @@ bool SpotLockController::isGpsAcceptable(const GpsData& gps) const {
 }
 
 // ============================================================
-// Position history (circular buffer)
-// ============================================================
-void SpotLockController::addToHistory(float lat, float lon) {
-    uint8_t win = min(_settings.filterWindowSize, (uint8_t)MAX_HIST);
-    _histLat[_histHead] = lat;
-    _histLon[_histHead] = lon;
-    _histHead = (_histHead + 1) % win;
-    if (_histCount < win) _histCount++;
-}
-
-void SpotLockController::getFilteredPos(float& lat, float& lon) const {
-    if (_histCount < 3) {
-        // Return last sample
-        uint8_t win  = min(_settings.filterWindowSize, (uint8_t)MAX_HIST);
-        uint8_t last = (_histHead == 0) ? (win - 1) : (_histHead - 1);
-        lat = _histLat[last];
-        lon = _histLon[last];
-        return;
-    }
-    float sumLat = 0.0f, sumLon = 0.0f;
-    for (uint8_t i = 0; i < _histCount; i++) {
-        sumLat += _histLat[i];
-        sumLon += _histLon[i];
-    }
-    lat = sumLat / _histCount;
-    lon = sumLon / _histCount;
-}
-
-// ============================================================
 // Steering duration (mirrors Swift calculateSteeringDuration)
 // ============================================================
 uint16_t SpotLockController::steeringDuration(float absAngle) const {
@@ -367,12 +356,12 @@ void SpotLockController::resetState() {
     _applyingThrust      = false;
 
     _lastCorrectionTime = 0;
+    _lastResyncMs       = 0;
     _cumulativeRotation = 0.0f;
     _isUntangling       = false;
 
     _consecutiveGpsFail = 0;
-    _histHead           = 0;
-    _histCount          = 0;
+    _kalmanDist.reset();
 
     _state            = SpotLockState();
     _state.lockLat    = _lockLat;
