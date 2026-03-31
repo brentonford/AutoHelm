@@ -1,6 +1,15 @@
 import Foundation
 import CoreLocation
 
+enum HelmStateRaw: Int {
+    case idle           = 0
+    case spotLockActive = 1
+    case navApproaching = 2
+    case navArriving    = 3
+    case disengaging    = 4
+    case fault          = 5
+}
+
 struct SensorData: Codable, Equatable {
     let hasFix: Bool
     let satellites: Int
@@ -21,6 +30,9 @@ struct SensorData: Codable, Equatable {
     var slRotation: Double?
     var slTangled:  Bool?
     var slThrust:   Bool?
+
+    // Top-level helm state
+    var helmState: Int?
 
     // Waypoint navigation telemetry (present when nav_active = true)
     var navActive:   Bool?
@@ -81,6 +93,8 @@ struct SensorData: Codable, Equatable {
         case slTangled   = "sl_tangled"
         case slThrust    = "sl_thrust"
 
+        case helmState   = "helm_state"
+
         case navActive   = "nav_active"
         case navLat      = "nav_lat"
         case navLon      = "nav_lon"
@@ -89,6 +103,9 @@ struct SensorData: Codable, Equatable {
         case navSpeed    = "nav_speed"
         case navArriving = "nav_arriving"
     }
+
+    // HelmState convenience accessor
+    var currentHelmState: HelmStateRaw { HelmStateRaw(rawValue: helmState ?? 0) ?? .idle }
 
     // Navigation convenience accessors
     var isNavActive: Bool { navActive ?? false }

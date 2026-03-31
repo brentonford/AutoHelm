@@ -48,6 +48,22 @@ inline void calcDestination(float lat, float lon, float headingDeg, float distM,
     outLon = lon + (distM / (mpdl * cosf(lat * (float)DEG_TO_RAD))) * sinf(rad);
 }
 
+// Calibration table: estimated boat speed in m/s at each motor speed level 0–10.
+// Tune by running at each level and measuring GPS ground speed.
+constexpr float speedLevelToMs[11] = {
+    0.0f,   // 0 – stopped
+    0.30f,  // 1
+    0.55f,  // 2
+    0.80f,  // 3
+    1.05f,  // 4
+    1.35f,  // 5
+    1.65f,  // 6
+    1.95f,  // 7
+    2.30f,  // 8
+    2.65f,  // 9
+    3.00f   // 10
+};
+
 } // namespace NavMath
 
 // -------------------------------------------------------

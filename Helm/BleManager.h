@@ -91,7 +91,8 @@ public:
     bool begin();
     void update();
     void sendSensorStatus(const GpsData& gpsData, float heading,
-                          const SpotLockState& slState, const WaypointNavState& navState);
+                          const SpotLockState& slState, const WaypointNavState& navState,
+                          HelmState helmState);
     void sendCalibrationData(const String& data);
     void sendResponse(const String& response);
     void sendResponse(const char* response);
@@ -143,5 +144,6 @@ private:
     void   parseCommand(const char* data);
     String buildSensorStatusJson(const GpsData& gpsData, float heading,
                                  const SpotLockState& slState,
-                                 const WaypointNavState& navState);
+                                 const WaypointNavState& navState,
+                                 HelmState helmState);
 };

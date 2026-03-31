@@ -295,6 +295,19 @@ void processBleCommand() {
     }
 }
 
+HelmState computeHelmState() {
+    if (waypointNav.isActive()) {
+        if (!waypointNav.getState().active) return HelmState::Disengaging;
+        if (waypointNav.getState().arriving) return HelmState::NavArriving;
+        return HelmState::NavApproaching;
+    }
+    if (spotLock.isActive()) {
+        if (!spotLock.getState().active) return HelmState::Disengaging;
+        return HelmState::SpotLockActive;
+    }
+    return HelmState::Idle;
+}
+
 void broadcastSensorStatus() {
     if (!bleAvailable || !ble.isConnected())
         return;
@@ -306,7 +319,7 @@ void broadcastSensorStatus() {
     lastStatusBroadcastTime = now;
 
     GpsData gpsData = gps.getData();
-    ble.sendSensorStatus(gpsData, currentHeading, spotLock.getState(), waypointNav.getState());
+    ble.sendSensorStatus(gpsData, currentHeading, spotLock.getState(), waypointNav.getState(), computeHelmState());
 }
 
 void streamCalibrationData() {

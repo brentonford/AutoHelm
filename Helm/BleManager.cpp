@@ -347,7 +347,8 @@ void BleManager::parseCommand(const char* data) {
 
 String BleManager::buildSensorStatusJson(const GpsData& gpsData, float heading,
                                           const SpotLockState& sl,
-                                          const WaypointNavState& nav) {
+                                          const WaypointNavState& nav,
+                                          HelmState helmState) {
     static char json[BleConfig::jsonBufferSize];
 
     // Base fields
@@ -389,6 +390,7 @@ String BleManager::buildSensorStatusJson(const GpsData& gpsData, float heading,
         n += snprintf(json + n, sizeof(json) - n, ",\"nav_active\":false");
     }
 
+    n += snprintf(json + n, sizeof(json) - n, ",\"helm_state\":%d", (uint8_t)helmState);
     snprintf(json + n, sizeof(json) - n, "}");
 
     if (n < 0 || static_cast<size_t>(n) >= sizeof(json) - 2) {
@@ -399,7 +401,8 @@ String BleManager::buildSensorStatusJson(const GpsData& gpsData, float heading,
 
 void BleManager::sendSensorStatus(const GpsData& gpsData, float heading,
                                    const SpotLockState& slState,
-                                   const WaypointNavState& navState) {
+                                   const WaypointNavState& navState,
+                                   HelmState helmState) {
     if (!_status.connected || !_sensorStatusChar)
         return;
 
@@ -409,7 +412,7 @@ void BleManager::sendSensorStatus(const GpsData& gpsData, float heading,
 
     _lastStatusTime = now;
 
-    String json = buildSensorStatusJson(gpsData, heading, slState, navState);
+    String json = buildSensorStatusJson(gpsData, heading, slState, navState, helmState);
     if (json.length() == 0 || json.length() >= BleConfig::jsonBufferSize) {
         Serial.println("[BLE] WARNING: JSON invalid in sendSensorStatus");
         return;

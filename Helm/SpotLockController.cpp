@@ -114,6 +114,7 @@ void SpotLockController::update(const GpsData& gps, float heading) {
 
     processSteeringHold(now);
     processSpeedStep(now);
+    processDeadReckoning(now);
     runCorrectionLogic(gps, heading, now);
 
     // Update telemetry
@@ -254,13 +255,19 @@ void SpotLockController::runCorrectionLogic(const GpsData& gps, float heading, u
     // Bearing is computed from raw GPS — directional noise is acceptable for bang-bang steering.
     float rawDist = haversineDistance(gps.latitude, gps.longitude, _lockLat, _lockLon);
     float dist    = _kalmanDist.update(rawDist);
+    _lastKalmanDist = dist;
+    _lastKalmanMs   = now;
     float bearing = bearingTo(gps.latitude, gps.longitude, _lockLat, _lockLon);
 
     _state.distanceM  = dist;
     _state.bearingDeg = bearing;
 
     float relAngle = normalizeAngle180(bearing - heading);
-    float absAngle = fabsf(relAngle);
+
+    // Slow EMA of bearing error: adapts to persistent wind/current offset over ~20 corrections
+    _bearingBias = 0.95f * _bearingBias + 0.05f * relAngle;
+    float correctedRelAngle = relAngle - _bearingBias;
+    float absAngle = fabsf(correctedRelAngle);
 
     // Cable tangle check
     float absRot           = fabsf(_cumulativeRotation);
@@ -280,15 +287,30 @@ void SpotLockController::runCorrectionLogic(const GpsData& gps, float heading, u
         if (_isUntangling) {
             _isUntangling       = false;
             _state.cableTangled = false;
-            Serial.printf("[SpotLock] UNTANGLED %.1fdeg\n", _cumulativeRotation);
+            _cumulativeRotation = 0.0f;  // re-zero after untangle completes
+            Serial.printf("[SpotLock] UNTANGLED\n");
         }
-        SteerDir dir = (relAngle > 0) ? SteerDir::Right : SteerDir::Left;
-        startSteeringHold(dir, steeringDuration(absAngle));
+
+        // Bidirectional turn bias: if cable is significantly wound, consider going the other
+        // way if it reaches the target without adding too much distance.
+        float altAngle = 360.0f - absAngle;
+        bool useAltDir = (fabsf(_cumulativeRotation) > 180.0f)
+                      && (altAngle <= (float)_settings.largeAngleThreshold * 2.0f)
+                      && (altAngle <= absAngle * 2.5f);
+
+        SteerDir dir = useAltDir
+            ? ((correctedRelAngle > 0) ? SteerDir::Left  : SteerDir::Right)
+            : ((correctedRelAngle > 0) ? SteerDir::Right : SteerDir::Left);
+        float steerAngle = useAltDir ? altAngle : absAngle;
+
+        if (useAltDir) Serial.printf("[SpotLock] Alt turn dir chosen – rot=%.1fdeg\n", _cumulativeRotation);
+        startSteeringHold(dir, steeringDuration(steerAngle));
 
     } else {
         if (_isUntangling) {
             _isUntangling       = false;
             _state.cableTangled = false;
+            _cumulativeRotation = 0.0f;  // re-zero after untangle completes
         }
     }
 
@@ -298,10 +320,16 @@ void SpotLockController::runCorrectionLogic(const GpsData& gps, float heading, u
         setTargetSpeed((int8_t)proportionalSpeed(max(0.0f, dist - _settings.deadZoneRadius)));
     } else if (dist < _settings.deadZoneRadius) {
         if (_applyingThrust) { _applyingThrust = false; _state.applyingThrust = false; setTargetSpeed(0); }
+        // Opportunistic unwind: use idle time in dead zone to reduce cable winding
+        if (!_holdActive && !_isUntangling && fabsf(_cumulativeRotation) > 45.0f) {
+            SteerDir dir = (_cumulativeRotation > 0) ? SteerDir::Left : SteerDir::Right;
+            startSteeringHold(dir, _settings.smallSteeringDuration);
+            Serial.printf("[SpotLock] Opportunistic unwind %.1fdeg\n", _cumulativeRotation);
+        }
     }
 
-    Serial.printf("[SpotLock] dist=%.2fm bear=%.1f hdg=%.1f rel=%.1f spd=%d/%d\n",
-                  dist, bearing, heading, relAngle, _currentSpeed, _targetSpeed);
+    Serial.printf("[SpotLock] dist=%.2fm bear=%.1f hdg=%.1f rel=%.1f bias=%.1f spd=%d/%d\n",
+                  dist, bearing, heading, relAngle, _bearingBias, _currentSpeed, _targetSpeed);
 }
 
 // ============================================================
@@ -336,6 +364,22 @@ float SpotLockController::proportionalSpeed(float distBeyondDeadZone) const {
 }
 
 // ============================================================
+// Dead reckoning – projects distance forward between GPS updates
+// ============================================================
+void SpotLockController::processDeadReckoning(uint32_t now) {
+    if (!_active || !_applyingThrust || _lastKalmanMs == 0) return;
+
+    uint32_t msSinceKalman = now - _lastKalmanMs;
+    if (msSinceKalman > 1200) return;  // GPS too stale for reliable projection
+
+    float elapsed  = msSinceKalman / 1000.0f;
+    float projDist = fmaxf(0.0f, _lastKalmanDist - speedLevelToMs[_currentSpeed] * elapsed);
+
+    float excess = fmaxf(0.0f, projDist - _settings.deadZoneRadius);
+    setTargetSpeed((int8_t)proportionalSpeed(excess));
+}
+
+// ============================================================
 // resetState()
 // ============================================================
 void SpotLockController::resetState() {
@@ -359,6 +403,10 @@ void SpotLockController::resetState() {
     _lastResyncMs       = 0;
     _cumulativeRotation = 0.0f;
     _isUntangling       = false;
+
+    _bearingBias    = 0.0f;
+    _lastKalmanDist = 0.0f;
+    _lastKalmanMs   = 0;
 
     _consecutiveGpsFail = 0;
     _kalmanDist.reset();

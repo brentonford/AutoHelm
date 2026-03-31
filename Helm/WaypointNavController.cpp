@@ -92,6 +92,7 @@ bool WaypointNavController::update(const GpsData& gps, float heading) {
 
     processSteeringHold(now);
     processSpeedStep(now);
+    processDeadReckoning(now);
 
     _state.speedLevel = (uint8_t)max(0, (int)_currentSpeed);
 
@@ -228,6 +229,8 @@ bool WaypointNavController::runCorrectionLogic(const GpsData& gps, float heading
     // Bearing is computed from raw GPS — directional noise is acceptable for bang-bang steering.
     float rawDist = haversineDistance(gps.latitude, gps.longitude, _state.targetLat, _state.targetLon);
     float dist    = _kalmanDist.update(rawDist);
+    _lastKalmanDist = dist;
+    _lastKalmanMs   = now;
     float bearing = bearingTo(gps.latitude, gps.longitude, _state.targetLat, _state.targetLon);
 
     _state.distMetres = dist;
@@ -244,7 +247,11 @@ bool WaypointNavController::runCorrectionLogic(const GpsData& gps, float heading
 
     // Heading correction
     float relAngle = normalizeAngle180(bearing - heading);
-    float absAngle = fabsf(relAngle);
+
+    // Slow EMA of bearing error: adapts to persistent wind/current offset over ~20 corrections
+    _bearingBias = 0.95f * _bearingBias + 0.05f * relAngle;
+    float correctedRelAngle = relAngle - _bearingBias;
+    float absAngle = fabsf(correctedRelAngle);
 
     // Cable tangle check (prevents indefinite circular motion)
     float absRot           = fabsf(_cumulativeRotation);
@@ -262,20 +269,37 @@ bool WaypointNavController::runCorrectionLogic(const GpsData& gps, float heading
     } else if (absAngle > _settings.headingTolerance) {
         if (_isUntangling) {
             _isUntangling = false;
-            Serial.printf("[Nav] UNTANGLED %.1fdeg\n", _cumulativeRotation);
+            _cumulativeRotation = 0.0f;  // re-zero after untangle completes
+            Serial.printf("[Nav] UNTANGLED\n");
         }
-        SteerDir dir = (relAngle > 0) ? SteerDir::Right : SteerDir::Left;
-        startSteeringHold(dir, steeringDuration(absAngle));
+
+        // Bidirectional turn bias: if cable is significantly wound, consider going the other
+        // way if it reaches the target without adding too much distance.
+        float altAngle = 360.0f - absAngle;
+        bool useAltDir = (fabsf(_cumulativeRotation) > 180.0f)
+                      && (altAngle <= (float)_settings.largeAngleThreshold * 2.0f)
+                      && (altAngle <= absAngle * 2.5f);
+
+        SteerDir dir = useAltDir
+            ? ((correctedRelAngle > 0) ? SteerDir::Left  : SteerDir::Right)
+            : ((correctedRelAngle > 0) ? SteerDir::Right : SteerDir::Left);
+        float steerAngle = useAltDir ? altAngle : absAngle;
+
+        if (useAltDir) Serial.printf("[Nav] Alt turn dir chosen – rot=%.1fdeg\n", _cumulativeRotation);
+        startSteeringHold(dir, steeringDuration(steerAngle));
 
     } else {
-        if (_isUntangling) _isUntangling = false;
+        if (_isUntangling) {
+            _isUntangling = false;
+            _cumulativeRotation = 0.0f;  // re-zero after untangle completes
+        }
     }
 
     // Speed – cruise or ramp
     setTargetSpeed(targetSpeedForDist(dist));
 
-    Serial.printf("[Nav] dist=%.2fm bear=%.1f hdg=%.1f rel=%.1f spd=%d/%d arriving=%s\n",
-                  dist, bearing, heading, relAngle,
+    Serial.printf("[Nav] dist=%.2fm bear=%.1f hdg=%.1f rel=%.1f bias=%.1f spd=%d/%d arriving=%s\n",
+                  dist, bearing, heading, relAngle, _bearingBias,
                   _currentSpeed, _targetSpeed,
                   _state.arriving ? "YES" : "NO");
 
@@ -322,6 +346,21 @@ uint16_t WaypointNavController::steeringDuration(float absAngle) const {
 }
 
 // ============================================================
+// Dead reckoning – projects distance forward between GPS updates
+// ============================================================
+void WaypointNavController::processDeadReckoning(uint32_t now) {
+    if (!_state.active || _lastKalmanMs == 0) return;
+
+    uint32_t msSinceKalman = now - _lastKalmanMs;
+    if (msSinceKalman > 1200) return;  // GPS too stale for reliable projection
+
+    float elapsed  = msSinceKalman / 1000.0f;
+    float projDist = fmaxf(0.0f, _lastKalmanDist - speedLevelToMs[_currentSpeed] * elapsed);
+
+    setTargetSpeed(targetSpeedForDist(projDist));
+}
+
+// ============================================================
 // resetMotion() – clear all motion state
 // ============================================================
 void WaypointNavController::resetMotion() {
@@ -345,6 +384,11 @@ void WaypointNavController::resetMotion() {
     _cumulativeRotation  = 0.0f;
     _isUntangling        = false;
     _consecutiveGpsFail  = 0;
+
+    _bearingBias    = 0.0f;
+    _lastKalmanDist = 0.0f;
+    _lastKalmanMs   = 0;
+
     _kalmanDist.reset();
 
     _state               = WaypointNavState();

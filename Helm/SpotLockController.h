@@ -85,8 +85,14 @@ private:
     // --- Kalman filter for GPS distance noise reduction ---
     KalmanFilter1D _kalmanDist;
 
+    // --- Dead reckoning & disturbance bias ---
+    float    _lastKalmanDist  = 0.0f;
+    uint32_t _lastKalmanMs    = 0;
+    float    _bearingBias     = 0.0f;  // EMA of bearing error (item 5)
+
     void processSteeringHold(uint32_t now);
     void processSpeedStep(uint32_t now);
+    void processDeadReckoning(uint32_t now);
     void runCorrectionLogic(const GpsData& gps, float heading, uint32_t now);
 
     void startSteeringHold(SteerDir dir, uint16_t durationMs);

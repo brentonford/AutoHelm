@@ -93,3 +93,13 @@ struct CompassCalibration {
         , headingOffset(0.0f) {
     }
 };
+
+// Top-level system state, derived in Helm.ino and broadcast via BLE telemetry.
+enum class HelmState : uint8_t {
+    Idle           = 0,
+    SpotLockActive = 1,
+    NavApproaching = 2,
+    NavArriving    = 3,
+    Disengaging    = 4,  // either controller is ramping down
+    Fault          = 5
+};
