@@ -26,6 +26,14 @@ public:
 
     bool begin();
     float readHeading();
+
+    // Tilt-compensated heading using pitch and roll from an accelerometer (radians).
+    // Corrects for magnetic field projection errors when the sensor is not level.
+    // Axis orientation note: assumes X=forward, Y=starboard, Z=down relative to the
+    // mounted board.  If heading is systematically wrong when heeled, swap ax/ay in
+    // LIS3DHManager or exchange x/y in the Xh/Yh formulas.
+    float readHeadingTilted(float pitchRad, float rollRad);
+
     RawMagData readRaw();
     void setCalibration(const CompassCalibration& cal);
     CompassCalibration getCalibration() const;

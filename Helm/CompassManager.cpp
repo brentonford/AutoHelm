@@ -45,6 +45,62 @@ float CompassManager::normalizeHeading(float heading) {
     return heading;
 }
 
+float CompassManager::readHeadingTilted(float pitchRad, float rollRad) {
+    if (!_initialized) return 0.0f;
+
+    // Average sampleCount readings (same as readHeading)
+    float sumX = 0.0f, sumY = 0.0f, sumZ = 0.0f;
+    for (uint8_t i = 0; i < CompassConfig::sampleCount; i++) {
+        sensors_event_t event;
+        _mmc.getEvent(&event);
+        sumX += event.magnetic.x;
+        sumY += event.magnetic.y;
+        sumZ += event.magnetic.z;
+        delay(10);
+    }
+    float x = sumX / CompassConfig::sampleCount;
+    float y = sumY / CompassConfig::sampleCount;
+    float z = sumZ / CompassConfig::sampleCount;
+
+    if (_calibrating) updateCalibrationMinMax(x, y, z);
+
+    if (_debugEnabled) {
+        uint32_t now = millis();
+        if ((now - _lastDebugTime) >= 1000) {
+            Serial.printf("[Compass] Raw: X=%.2f Y=%.2f Z=%.2f  pitch=%.1f° roll=%.1f°\n",
+                          x, y, z, pitchRad * 180.0f / PI, rollRad * 180.0f / PI);
+            _lastDebugTime = now;
+        }
+    }
+
+    applyCalibration(x, y, z);
+
+    // Tilt compensation: project calibrated magnetometer readings onto the true
+    // horizontal plane using pitch (rotation around Y) and roll (rotation around X).
+    //
+    // Standard NED formulas (X forward, Y starboard, Z down):
+    //   Xh = mx·cos(pitch)                          + mz·sin(pitch)
+    //   Yh = mx·sin(roll)·sin(pitch) + my·cos(roll) − mz·sin(roll)·cos(pitch)
+    //
+    // If the sensor axes are oriented differently (e.g. Z up on the PiicoDev board)
+    // the sign of pitchRad/rollRad from LIS3DHManager already accounts for this.
+    float cp = cosf(pitchRad), sp = sinf(pitchRad);
+    float cr = cosf(rollRad),  sr = sinf(rollRad);
+
+    float Xh = x * cp          + z * sp;
+    float Yh = x * sr * sp + y * cr - z * sr * cp;
+
+    float heading = atan2f(Yh, Xh) * 180.0f / PI;
+    heading -= _calibration.headingOffset;
+    heading  = normalizeHeading(heading);
+
+    if (_debugEnabled) {
+        Serial.printf("[Compass] Tilt-comp heading: %.1f°\n", heading);
+    }
+
+    return heading;
+}
+
 RawMagData CompassManager::readRaw() {
     RawMagData data = {0.0f, 0.0f, 0.0f};
     

@@ -3,6 +3,7 @@
 #include "Remote.h"
 #include "GpsManager.h"
 #include "CompassManager.h"
+#include "LIS3DHManager.h"
 #include "BleManager.h"
 #include "SpotLockController.h"
 #include "WaypointNavController.h"
@@ -17,15 +18,17 @@ CC1101 cc1101(
 Remote remote(cc1101, Pins::cc1101Gdo0);
 GpsManager gps(Pins::gpsRx, Pins::gpsTx);
 CompassManager compass(Pins::i2cSda, Pins::i2cScl);
+LIS3DHManager accel;   // shares I2C bus with compass; begin() called after compass.begin()
 BleManager ble;
 SpotLockController spotLock(remote);
 WaypointNavController waypointNav(remote);
 
-bool cc1101Available = false;
-bool remoteAvailable = false;
-bool gpsAvailable = false;
+bool cc1101Available  = false;
+bool remoteAvailable  = false;
+bool gpsAvailable     = false;
 bool compassAvailable = false;
-bool bleAvailable = false;
+bool accelAvailable   = false;
+bool bleAvailable     = false;
 
 float currentHeading = 0.0f;
 uint32_t lastStatusBroadcastTime = 0;
@@ -86,6 +89,7 @@ void printSensorStatus() {
     Serial.printf("  GPS Fix Valid:     %s\n", gps.hasValidFix() ? "YES" : "NO");
     Serial.printf("  GPS DOP Valid:     %s (< %.1f)\n", gps.hasAcceptableDop() ? "YES" : "NO", NavigationConfig::maxDop);
     Serial.printf("  Compass Available: %s\n", compassAvailable ? "YES" : "NO");
+    Serial.printf("  Tilt Comp (LIS3DH):%s\n", accelAvailable ? "YES" : "NO");
     Serial.printf("  BLE Available:     %s\n", bleAvailable ? "YES" : "NO");
     Serial.printf("  BLE Connected:     %s\n", ble.isConnected() ? "YES" : "NO");
 }
@@ -439,6 +443,11 @@ void setup() {
     compassAvailable = compass.begin();
     Serial.println(compassAvailable ? "SUCCESS" : "FAILED");
 
+    // LIS3DH must be initialised after compass.begin() which calls Wire.begin()
+    Serial.print("[LIS3DH] Initializing... ");
+    accelAvailable = accel.begin();
+    Serial.println(accelAvailable ? "SUCCESS" : "FAILED (tilt compensation disabled)");
+
     Serial.print("[BLE] Initializing... ");
     bleAvailable = ble.begin();
     Serial.println(bleAvailable ? "SUCCESS" : "FAILED");
@@ -461,8 +470,23 @@ void loop() {
     if (gpsAvailable)
         gps.update();
 
-    if (compassAvailable)
-        currentHeading = compass.readHeading();
+    if (compassAvailable) {
+        if (accelAvailable) {
+            float ax, ay, az;
+            if (accel.readAccel(ax, ay, az)) {
+                // Pitch: bow-up is positive.  Roll: starboard-down is positive.
+                // If the LIS3DH Z axis points up (PiicoDev default), az≈+1 g when flat,
+                // which is consistent with these formulas.
+                float pitchRad = atan2f(-ax, sqrtf(ay * ay + az * az));
+                float rollRad  = atan2f(ay, az);
+                currentHeading = compass.readHeadingTilted(pitchRad, rollRad);
+            } else {
+                currentHeading = compass.readHeading();  // fall back on I2C error
+            }
+        } else {
+            currentHeading = compass.readHeading();
+        }
+    }
 
     // SpotLock and WaypointNav run every loop iteration for precise timing
     if (remoteAvailable) {
