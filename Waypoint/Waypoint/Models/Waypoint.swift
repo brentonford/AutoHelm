@@ -4,11 +4,13 @@ import CoreLocation
 
 @Model
 final class Waypoint {
-    var name: String
-    var notes: String
-    var latitude: Double
-    var longitude: Double
-    var dateCreated: Date
+    // Default values are required by CloudKit — all non-optional attributes must have
+    // a default so CloudKit can deserialise records that are missing fields.
+    var name: String = ""
+    var notes: String = ""
+    var latitude: Double = 0.0
+    var longitude: Double = 0.0
+    var dateCreated: Date = Date()
 
     // Optional array + explicit inverse are both required by CloudKit.
     // Non-optional arrays and missing inverses crash ModelContainer creation
@@ -35,9 +37,9 @@ final class Waypoint {
 
 @Model
 final class WaypointPhoto {
-    var filename: String
-    var thumbnailData: Data
-    var dateAdded: Date
+    var filename: String = ""
+    var thumbnailData: Data = Data()
+    var dateAdded: Date = Date()
 
     // Optional back-reference required by CloudKit (non-optional inverses break cascade delete).
     var waypoint: Waypoint?

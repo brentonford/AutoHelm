@@ -24,7 +24,7 @@ struct TrackListView: View {
             if tracks.isEmpty && !trackRecorder.isRecording {
                 ContentUnavailableView(
                     "No Tracks Yet",
-                    systemImage: "wake.indicator",
+                    systemImage: "chart.xyaxis.line",
                     description: Text("Tracks are recorded automatically while connected to the Helm.")
                 )
             }

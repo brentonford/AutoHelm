@@ -6,11 +6,27 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		DB2EBFA82F5F18490069E3E3 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DB3757E32EEEA94600232E42 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DB3757EA2EEEA94600232E42;
+			remoteInfo = Waypoint;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
+		DB2EBFA42F5F18490069E3E3 /* WaypointTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WaypointTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DB3757EB2EEEA94600232E42 /* Waypoint.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Waypoint.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		DB2EBFA52F5F18490069E3E3 /* WaypointTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = WaypointTests;
+			sourceTree = "<group>";
+		};
 		DB3757ED2EEEA94600232E42 /* Waypoint */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Waypoint;
@@ -19,6 +35,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		DB2EBFA12F5F18490069E3E3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		DB3757E82EEEA94600232E42 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -33,6 +56,7 @@
 			isa = PBXGroup;
 			children = (
 				DB3757ED2EEEA94600232E42 /* Waypoint */,
+				DB2EBFA52F5F18490069E3E3 /* WaypointTests */,
 				DB3757EC2EEEA94600232E42 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +65,7 @@
 			isa = PBXGroup;
 			children = (
 				DB3757EB2EEEA94600232E42 /* Waypoint.app */,
+				DB2EBFA42F5F18490069E3E3 /* WaypointTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,6 +73,29 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		DB2EBFA32F5F18490069E3E3 /* WaypointTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DB2EBFAC2F5F18490069E3E3 /* Build configuration list for PBXNativeTarget "WaypointTests" */;
+			buildPhases = (
+				DB2EBFA02F5F18490069E3E3 /* Sources */,
+				DB2EBFA12F5F18490069E3E3 /* Frameworks */,
+				DB2EBFA22F5F18490069E3E3 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DB2EBFA92F5F18490069E3E3 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				DB2EBFA52F5F18490069E3E3 /* WaypointTests */,
+			);
+			name = WaypointTests;
+			packageProductDependencies = (
+			);
+			productName = WaypointTests;
+			productReference = DB2EBFA42F5F18490069E3E3 /* WaypointTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		DB3757EA2EEEA94600232E42 /* Waypoint */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = DB3757F62EEEA94800232E42 /* Build configuration list for PBXNativeTarget "Waypoint" */;
@@ -80,6 +128,10 @@
 				LastSwiftUpdateCheck = 2620;
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
+					DB2EBFA32F5F18490069E3E3 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = DB3757EA2EEEA94600232E42;
+					};
 					DB3757EA2EEEA94600232E42 = {
 						CreatedOnToolsVersion = 26.2;
 					};
@@ -100,11 +152,19 @@
 			projectRoot = "";
 			targets = (
 				DB3757EA2EEEA94600232E42 /* Waypoint */,
+				DB2EBFA32F5F18490069E3E3 /* WaypointTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		DB2EBFA22F5F18490069E3E3 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		DB3757E92EEEA94600232E42 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -115,6 +175,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		DB2EBFA02F5F18490069E3E3 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		DB3757E72EEEA94600232E42 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -124,7 +191,62 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		DB2EBFA92F5F18490069E3E3 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DB3757EA2EEEA94600232E42 /* Waypoint */;
+			targetProxy = DB2EBFA82F5F18490069E3E3 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		DB2EBFAA2F5F18490069E3E3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = H4JX3F55TM;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = AutoHelm.WaypointTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Waypoint.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Waypoint";
+			};
+			name = Debug;
+		};
+		DB2EBFAB2F5F18490069E3E3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = H4JX3F55TM;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = AutoHelm.WaypointTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Waypoint.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Waypoint";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 		DB3757F42EEEA94800232E42 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -338,6 +460,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		DB2EBFAC2F5F18490069E3E3 /* Build configuration list for PBXNativeTarget "WaypointTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DB2EBFAA2F5F18490069E3E3 /* Debug */,
+				DB2EBFAB2F5F18490069E3E3 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		DB3757E62EEEA94600232E42 /* Build configuration list for PBXProject "Waypoint" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -345,7 +476,7 @@
 				DB3757F52EEEA94800232E42 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
+			defaultConfigurationName = Debug;
 		};
 		DB3757F62EEEA94800232E42 /* Build configuration list for PBXNativeTarget "Waypoint" */ = {
 			isa = XCConfigurationList;
@@ -354,7 +485,7 @@
 				DB3757F82EEEA94800232E42 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
+			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
 	};

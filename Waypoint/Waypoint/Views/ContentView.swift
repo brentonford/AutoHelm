@@ -44,7 +44,7 @@ struct ContentView: View {
             NavigationStack {
                 TrackListView()
             }
-            .tabItem { Label("Tracks", systemImage: "wake.indicator") }
+            .tabItem { Label("Tracks", systemImage: "chart.xyaxis.line") }
             .accessibilityLabel("Tracks Tab")
             .tag(3)
 
