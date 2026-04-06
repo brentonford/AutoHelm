@@ -12,7 +12,7 @@
 // -------------------------------------------------------
 
 namespace LIS3DHConfig {
-    constexpr uint8_t  address      = 0x18;
+    constexpr uint8_t  address      = 0x19;  // PiicoDev board pulls SA0 high
     // CTRL_REG1: ODR=10 Hz, normal mode, XYZ axes enabled
     constexpr uint8_t  CTRL_REG1    = 0x27;
     // CTRL_REG4: ±2 g, high-resolution mode (12-bit output, left-justified in 16 bits)

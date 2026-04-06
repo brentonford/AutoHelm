@@ -24,7 +24,7 @@ bool LIS3DHManager::writeRegister(uint8_t reg, uint8_t value) {
 bool LIS3DHManager::readBytes(uint8_t reg, uint8_t* buf, uint8_t len) {
     Wire.beginTransmission(_address);
     Wire.write(reg | AUTO_INC);
-    if (Wire.endTransmission(false) != 0) return false;
+    if (Wire.endTransmission(true) != 0) return false;
     Wire.requestFrom(_address, len);
     if (Wire.available() < len) return false;
     for (uint8_t i = 0; i < len; i++) buf[i] = Wire.read();
@@ -32,10 +32,18 @@ bool LIS3DHManager::readBytes(uint8_t reg, uint8_t* buf, uint8_t len) {
 }
 
 bool LIS3DHManager::begin() {
-    // Verify device identity
+    // Give the LIS3DH time to complete its power-on reset before the first I2C
+    // transaction.  Without this, the bus can be ready before the chip is.
+    delay(10);
+
+    // Verify device identity.
+    // Use endTransmission(true) (STOP bit) then a fresh requestFrom rather than
+    // a repeated-start (false).  The ESP32 I2C peripheral can drop the read
+    // address byte on some bus configurations when repeated-start is used for
+    // a single-register read, causing Wire.available() to return 0.
     Wire.beginTransmission(_address);
     Wire.write(REG_WHO_AM_I);
-    if (Wire.endTransmission(false) != 0) {
+    if (Wire.endTransmission(true) != 0) {
         Serial.printf("[LIS3DH] Not found at 0x%02X\n", _address);
         return false;
     }
