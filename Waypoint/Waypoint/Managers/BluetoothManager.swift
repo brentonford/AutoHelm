@@ -312,6 +312,15 @@ class BluetoothManager: NSObject, ObservableObject {
            finalCal.ack == "CAL_STOPPED" {
             print("[BLE] Response ACK: \(finalCal.ack)")
             isCalibrating = false
+            self.lastResponse = BleResponse(ack: finalCal.ack, error: nil)
+
+            // Zero offsets mean the Helm rejected the calibration (insufficient samples
+            // or duration) and returned its default/previous values — do not overwrite
+            // valid stored calibration with bad data.
+            guard abs(finalCal.offsetX) > 0.01 || abs(finalCal.offsetY) > 0.01 || abs(finalCal.offsetZ) > 0.01 else {
+                print("[BLE] CAL_STOPPED has zero offsets — Helm rejected calibration (insufficient samples/duration). Stored calibration unchanged.")
+                return
+            }
 
             let existingHeadingOffset = DataStore.shared.calibration.headingOffset
             let sampleCount = calibrationData?.samples ?? 0
@@ -333,8 +342,6 @@ class BluetoothManager: NSObject, ObservableObject {
                 try? await Task.sleep(for: .milliseconds(500))
                 self.sendCalibrationValues(calibration)
             }
-
-            self.lastResponse = BleResponse(ack: finalCal.ack, error: nil)
             return
         }
 
@@ -366,13 +373,18 @@ class BluetoothManager: NSObject, ObservableObject {
             
             if finalCal.ack == "CAL_STOPPED" {
                 isCalibrating = false
-                
+                self.lastResponse = BleResponse(ack: finalCal.ack, error: nil)
+
+                // Zero offsets mean the Helm rejected the calibration (insufficient
+                // samples or duration) — do not overwrite valid stored calibration.
+                guard abs(finalCal.offsetX) > 0.01 || abs(finalCal.offsetY) > 0.01 || abs(finalCal.offsetZ) > 0.01 else {
+                    print("[BLE] CAL_STOPPED has zero offsets — Helm rejected calibration. Stored calibration unchanged.")
+                    return
+                }
+
                 let sampleCount = calibrationData?.samples ?? 0
-                print("[BLE] Using sample count: \(sampleCount)")
-                
-                // Preserve existing headingOffset when updating magnetometer calibration
                 let existingHeadingOffset = DataStore.shared.calibration.headingOffset
-                
+
                 let calibration = CompassCalibration(
                     offsetX: finalCal.offsetX,
                     offsetY: finalCal.offsetY,
@@ -384,20 +396,13 @@ class BluetoothManager: NSObject, ObservableObject {
                     dateCalibrated: Date(),
                     sampleCount: max(sampleCount, 1)
                 )
-                
-                print("[BLE] Created calibration object with headingOffset: \(calibration.headingOffset)")
-                
                 DataStore.shared.updateCalibration(calibration)
-                print("[BLE] Saved calibration to DataStore")
-                
+                print("[BLE] Calibration saved: offset(\(calibration.offsetX),\(calibration.offsetY),\(calibration.offsetZ))")
+
                 Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(500))
-                    let commandString = calibration.toCommandString()
-                    print("[BLE] Sending calibration back to device: \(commandString)")
                     self.sendCalibrationValues(calibration)
                 }
-                
-                self.lastResponse = BleResponse(ack: finalCal.ack, error: nil)
             }
             return
         }
