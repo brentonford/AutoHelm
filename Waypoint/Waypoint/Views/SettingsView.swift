@@ -353,13 +353,24 @@ struct SettingsView: View {
     
     @MainActor
     private func calibrateNorth() async {
-        guard let currentHeading = await bluetooth.getCurrentHeading() else {
+        guard let adjustedHeading = await bluetooth.getCurrentHeading() else {
             print("[Settings] Failed to get current heading")
             return
         }
-        
-        print("[Settings] Current heading: \(currentHeading)°, setting as north offset")
-        bluetooth.setHeadingOffset(currentHeading)
+
+        // The device reports heading with headingOffset already subtracted.
+        // To recover the raw magnetic bearing when pointing north we add back
+        // the existing offset: rawNorth = adjustedHeading + existingOffset.
+        // That raw value becomes the new headingOffset so future readings
+        // subtract it and return 0° when pointing north.
+        let existingOffset = DataStore.shared.calibration.headingOffset
+        var newOffset = adjustedHeading + existingOffset
+        // Normalise to [0, 360)
+        newOffset = newOffset.truncatingRemainder(dividingBy: 360)
+        if newOffset < 0 { newOffset += 360 }
+
+        print("[Settings] Calibrate North: adjusted=\(adjustedHeading)°, existing=\(existingOffset)°, newOffset=\(newOffset)°")
+        bluetooth.setHeadingOffset(newOffset)
     }
 }
 
@@ -371,7 +382,6 @@ struct CalibrationView: View {
     @Environment(\.dismiss) var dismiss
     
     @State private var calibrationStarted = false
-    @State private var showingSaveConfirmation = false
     
     private var canSave: Bool {
         guard let data = bluetooth.calibrationData else { return false }
@@ -398,6 +408,12 @@ struct CalibrationView: View {
                         }
                         dismiss()
                     }
+                }
+            }
+            .onChange(of: bluetooth.isCalibrating) { old, new in
+                // Auto-dismiss when CAL_STOPPED is acknowledged and calibration was active
+                if old && !new && calibrationStarted {
+                    dismiss()
                 }
             }
         }
@@ -498,9 +514,6 @@ struct CalibrationView: View {
             if bluetooth.isCalibrating {
                 Button {
                     bluetooth.stopCalibration()
-                    if canSave {
-                        showingSaveConfirmation = true
-                    }
                 } label: {
                     HStack {
                         Image(systemName: "stop.fill")
@@ -525,18 +538,6 @@ struct CalibrationView: View {
                 .disabled(bluetooth.connectionState != .connected)
             }
             
-            if !bluetooth.isCalibrating && canSave {
-                Button {
-                    showingSaveConfirmation = true
-                } label: {
-                    HStack {
-                        Image(systemName: "square.and.arrow.down")
-                        Text("Save Calibration")
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-            }
         }
     }
 }

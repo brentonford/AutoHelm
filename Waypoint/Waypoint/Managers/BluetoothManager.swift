@@ -189,9 +189,14 @@ class BluetoothManager: NSObject, ObservableObject {
         var calibration = DataStore.shared.calibration
         calibration.headingOffset = offset
         DataStore.shared.updateCalibration(calibration)
-        
+
         print("[BLE] Heading offset set to \(offset)° - sending to device...")
-        sendCalibrationValues(calibration)
+        // Send heading offset directly so it works even before magnetometer calibration.
+        let command = String(format: "CAL_VALUES:%.2f,%.2f,%.2f,%.4f,%.4f,%.4f,%.1f",
+                             calibration.offsetX, calibration.offsetY, calibration.offsetZ,
+                             calibration.scaleX, calibration.scaleY, calibration.scaleZ,
+                             calibration.headingOffset)
+        sendCommand(command)
     }
 
     private func writeToCharacteristic(_ characteristic: CBCharacteristic?, data: Data) {
@@ -301,12 +306,47 @@ class BluetoothManager: NSObject, ObservableObject {
     }
 
     private func parseResponseCharacteristic(_ data: Data) {
-        // Handle command acknowledgments from the dedicated response characteristic
+        // CAL_STOPPED arrives on the response characteristic with calibration values embedded.
+        // Try FinalCalibrationResponse first so the values are not discarded.
+        if let finalCal = try? JSONDecoder().decode(FinalCalibrationResponse.self, from: data),
+           finalCal.ack == "CAL_STOPPED" {
+            print("[BLE] Response ACK: \(finalCal.ack)")
+            isCalibrating = false
+
+            let existingHeadingOffset = DataStore.shared.calibration.headingOffset
+            let sampleCount = calibrationData?.samples ?? 0
+            let calibration = CompassCalibration(
+                offsetX: finalCal.offsetX,
+                offsetY: finalCal.offsetY,
+                offsetZ: finalCal.offsetZ,
+                scaleX: finalCal.scaleX,
+                scaleY: finalCal.scaleY,
+                scaleZ: finalCal.scaleZ,
+                headingOffset: finalCal.headingOffset ?? existingHeadingOffset,
+                dateCalibrated: Date(),
+                sampleCount: max(sampleCount, 1)
+            )
+            DataStore.shared.updateCalibration(calibration)
+            print("[BLE] Calibration saved: offset(\(calibration.offsetX),\(calibration.offsetY),\(calibration.offsetZ))")
+
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(500))
+                self.sendCalibrationValues(calibration)
+            }
+
+            self.lastResponse = BleResponse(ack: finalCal.ack, error: nil)
+            return
+        }
+
+        // Generic command acknowledgment
         if let response = try? JSONDecoder().decode(BleResponse.self, from: data) {
             self.lastResponse = response
 
             if let ack = response.ack {
                 print("[BLE] Response ACK: \(ack)")
+                if ack == "START_CAL" || ack == "CAL_STARTED" {
+                    isCalibrating = true
+                }
             }
 
             if let error = response.error {
