@@ -23,6 +23,7 @@ SpotLockController::SpotLockController(Remote& remote)
 void SpotLockController::engage(float lat, float lon) {
     Serial.printf("[SpotLock] ENGAGE at %.6f, %.6f\n", lat, lon);
     resetState();
+    _gpsAborted = false;
     _lockLat  = lat;
     _lockLon  = lon;
     _active   = true;
@@ -262,6 +263,7 @@ void SpotLockController::runCorrectionLogic(const GpsData& gps, float heading, u
                       _consecutiveGpsFail, _settings.maxConsecutiveGpsFail);
         if (_consecutiveGpsFail >= _settings.maxConsecutiveGpsFail) {
             Serial.println("[SpotLock] GPS insufficient – disengaging");
+            _gpsAborted = true;
             disengage();
         }
         return;

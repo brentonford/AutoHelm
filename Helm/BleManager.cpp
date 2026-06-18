@@ -242,7 +242,6 @@ void BleManager::parseCommand(const char* data) {
             _status.slEngageLat      = lat;
             _status.slEngageLon      = lon;
             _status.pendingSlCommand = SpotLockCommand::Engage;
-            sendResponse("{\"ack\":\"SPOTLOCK_ENGAGE\"}");
         } else {
             sendResponse("{\"error\":\"Invalid SPOTLOCK_ENGAGE format\"}");
         }
@@ -282,7 +281,7 @@ void BleManager::parseCommand(const char* data) {
             s.largeSteeringDuration= (uint16_t)largeDur;
             s.minSatellites        = (uint8_t)minSat;
             s.maxConsecutiveGpsFail= (uint8_t)maxFail;
-            s.filterWindowSize     = (uint8_t)filterWin;
+            (void)filterWin;  // Deprecated field – accepted for protocol compatibility
             _status.slPendingSettings  = s;
             _status.hasSlSettingsPending = true;
             sendResponse("{\"ack\":\"SPOTLOCK_SETTINGS\"}");
@@ -318,7 +317,7 @@ void BleManager::parseCommand(const char* data) {
             s.largeSteeringDuration = (uint16_t)largeDur;
             s.minSatellites         = (uint8_t)minSat;
             s.maxConsecutiveGpsFail = (uint8_t)maxFail;
-            s.filterWindowSize      = (uint8_t)filterWin;
+            (void)filterWin;  // Deprecated field – accepted for protocol compatibility
             _status.navPendingSettings     = s;
             _status.hasNavSettingsPending  = true;
             sendResponse("{\"ack\":\"NAV_SETTINGS\"}");
@@ -336,7 +335,6 @@ void BleManager::parseCommand(const char* data) {
             _status.navTargetSpeed  = (uint8_t)constrain(spd, 1, 10);
             _status.pendingNavCommand = NavCommand::Start;
             Serial.printf("[BLE] NAV_START target=%.6f,%.6f speed=%d\n", lat, lon, spd);
-            sendResponse("{\"ack\":\"NAV_START\"}");
         } else {
             sendResponse("{\"error\":\"Invalid NAV_START format\"}");
         }

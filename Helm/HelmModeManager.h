@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include "DataModels.h"
+#include "GpsManager.h"
 #include "BleManager.h"
 #include "SpotLockController.h"
 #include "WaypointNavController.h"
@@ -10,7 +11,8 @@
 // drives RF at a time and sequences transitions (e.g. nav arrival -> Spot Lock).
 class HelmModeManager {
 public:
-    HelmModeManager(BleManager& ble, SpotLockController& spotLock, WaypointNavController& waypointNav);
+    HelmModeManager(GpsManager& gps, BleManager& ble,
+                    SpotLockController& spotLock, WaypointNavController& waypointNav);
 
     void requestNavStart(float lat, float lon, uint8_t speed);
     void requestNavCancel();
@@ -35,9 +37,11 @@ private:
         SpotLockDisengaging,
         Nav,
         NavCancelling,
-        NavHandoff
+        NavHandoff,
+        Fault
     };
 
+    GpsManager&             _gps;
     BleManager&             _ble;
     SpotLockController&     _spotLock;
     WaypointNavController&  _waypointNav;
@@ -53,8 +57,14 @@ private:
     float  _pendingSlLat = 0.0f;
     float  _pendingSlLon = 0.0f;
 
+    bool validateNavPreconditions(float targetLat, float targetLon, const char*& errorCode) const;
+    bool validateSpotLockPreconditions(float lockLat, float lockLon, const char*& errorCode) const;
+    void sendAutonomyError(const char* errorCode);
+    void clearFault();
+    void enterFault(const char* reason);
     void beginNavHandoff(float lat, float lon);
     void tryStartPendingNav();
     void tryEngagePendingSpotLock();
     void finishNavHandoff();
+    void handleControllerStopped(bool gpsAborted);
 };

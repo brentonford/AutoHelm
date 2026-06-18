@@ -23,7 +23,7 @@ LIS3DHManager accel;   // shares I2C bus with compass; begin() called after comp
 BleManager ble;
 SpotLockController spotLock(remote);
 WaypointNavController waypointNav(remote);
-HelmModeManager helmMode(ble, spotLock, waypointNav);
+HelmModeManager helmMode(gps, ble, spotLock, waypointNav);
 
 bool cc1101Available  = false;
 bool remoteAvailable  = false;

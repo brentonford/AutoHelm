@@ -47,6 +47,7 @@ struct NavSettings: Codable, Equatable {
 
     // MARK: - Position Filtering
 
+    // Deprecated – firmware uses Kalman filter; kept for BLE protocol compat
     var filterWindowSize: Int = 5
 
     // MARK: - Defaults

@@ -22,7 +22,6 @@ struct NavSettingsView: View {
             steeringSection
             cableSection
             gpsSection
-            filteringSection
             resetSection
         }
         .navigationTitle("Navigation")
@@ -249,26 +248,6 @@ struct NavSettingsView: View {
             )
         } header: {
             Text("GPS Quality")
-        }
-    }
-
-    // MARK: - Position Filtering
-
-    private var filteringSection: some View {
-        Section {
-            IntSettingRow(
-                info: SettingInfo(
-                    title: "Filter Window Size",
-                    unit: "samples",
-                    defaultValue: "5",
-                    description: "Number of GPS position samples averaged together for distance and bearing calculations. More samples smooth out GPS jitter but slow the system's response to real movement."
-                ),
-                value: s.filterWindowSize,
-                defaultValue: NavSettings.defaults.filterWindowSize,
-                onInfo: { activeInfo = $0 }
-            )
-        } header: {
-            Text("Position Filtering")
         }
     }
 

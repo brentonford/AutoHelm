@@ -47,8 +47,22 @@ struct SpotLockSettings {
     uint8_t  minSatellites             = 4;
     float    maxHDOP                   = 5.0f;
     uint8_t  maxConsecutiveGpsFail     = 5;
-    uint8_t  filterWindowSize          = 5;
+    uint8_t  filterWindowSize          = 5;  // Deprecated: kept for BLE protocol compat; firmware uses Kalman filter
 };
+
+enum class GpsReadiness : uint8_t {
+    Ready,
+    NoFix,
+    StaleData,
+    InsufficientSatellites,
+    UnacceptableDop,
+    InvalidCoordinates
+};
+
+namespace GpsValidation {
+    bool isValidCoordinate(float lat, float lon);
+    const char* errorCodeFor(GpsReadiness reason);
+}
 
 struct GpsData {
     float latitude;

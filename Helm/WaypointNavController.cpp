@@ -24,6 +24,7 @@ WaypointNavController::WaypointNavController(Remote& remote)
 void WaypointNavController::start(float targetLat, float targetLon, uint8_t maxSpeedLevel) {
     Serial.printf("[Nav] START target=%.6f,%.6f speed=%d\n", targetLat, targetLon, maxSpeedLevel);
     resetMotion();
+    _gpsAborted = false;
 
     _navMaxSpeed        = constrain(maxSpeedLevel, (uint8_t)1, (uint8_t)10);
     _state.active       = true;
@@ -236,6 +237,7 @@ bool WaypointNavController::runCorrectionLogic(const GpsData& gps, float heading
                       _consecutiveGpsFail, _settings.maxConsecutiveGpsFail);
         if (_consecutiveGpsFail >= _settings.maxConsecutiveGpsFail) {
             Serial.println("[Nav] GPS insufficient – cancelling navigation");
+            _gpsAborted = true;
             cancel();
         }
         return false;

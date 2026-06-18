@@ -40,8 +40,11 @@ public:
     void update(const GpsData& gps, float compassHeading);
 
     const SpotLockState& getState() const { return _state; }
+    const SpotLockSettings& getSettings() const { return _settings; }
     bool isActive() const { return _active || _disengaging || _zeroing; }
     bool isZeroing() const { return _zeroing; }
+    bool wasGpsAborted() const { return _gpsAborted; }
+    void clearGpsAborted() { _gpsAborted = false; }
 
 private:
     Remote&          _remote;
@@ -85,6 +88,7 @@ private:
 
     // --- GPS quality ---
     uint8_t _consecutiveGpsFail = 0;
+    bool    _gpsAborted         = false;
 
     // --- Kalman filter for GPS distance noise reduction ---
     KalmanFilter1D _kalmanDist;

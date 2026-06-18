@@ -17,6 +17,7 @@ class WaypointNavController: ObservableObject {
     @Published private(set) var targetBearing:   Double   = 0
     @Published private(set) var currentSpeed:    Int      = 0
     @Published private(set) var isArriving:      Bool     = false
+    @Published private(set) var isFaulted:       Bool     = false
 
     // MARK: - Private
 
@@ -36,7 +37,10 @@ class WaypointNavController: ObservableObject {
         bluetooth.$sensorData
             .sink { [weak self] data in
                 guard let self else { return }
-                let active = data?.isNavActive ?? false
+                let faulted = data?.currentHelmState == .fault
+                self.isFaulted = faulted
+
+                let active = faulted ? false : (data?.isNavActive ?? false)
                 self.isActive = active
                 if active, let data {
                     self.distanceMetres = data.navDistanceMetres

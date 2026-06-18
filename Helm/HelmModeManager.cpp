@@ -1,13 +1,96 @@
 #include "HelmModeManager.h"
 
-HelmModeManager::HelmModeManager(BleManager& ble,
+HelmModeManager::HelmModeManager(GpsManager& gps, BleManager& ble,
                                  SpotLockController& spotLock,
                                  WaypointNavController& waypointNav)
-    : _ble(ble)
+    : _gps(gps)
+    , _ble(ble)
     , _spotLock(spotLock)
     , _waypointNav(waypointNav) {}
 
+bool HelmModeManager::validateNavPreconditions(float targetLat, float targetLon,
+                                               const char*& errorCode) const {
+    if (!GpsValidation::isValidCoordinate(targetLat, targetLon)) {
+        errorCode = GpsValidation::errorCodeFor(GpsReadiness::InvalidCoordinates);
+        return false;
+    }
+
+    const SpotLockSettings& settings = _waypointNav.getSettings();
+    GpsReadiness readiness = _gps.checkAutonomyReadiness(settings.minSatellites, settings.maxHDOP);
+    if (readiness != GpsReadiness::Ready) {
+        errorCode = GpsValidation::errorCodeFor(readiness);
+        return false;
+    }
+
+    errorCode = nullptr;
+    return true;
+}
+
+bool HelmModeManager::validateSpotLockPreconditions(float lockLat, float lockLon,
+                                                    const char*& errorCode) const {
+    if (!GpsValidation::isValidCoordinate(lockLat, lockLon)) {
+        errorCode = GpsValidation::errorCodeFor(GpsReadiness::InvalidCoordinates);
+        return false;
+    }
+
+    const SpotLockSettings& settings = _spotLock.getSettings();
+    GpsReadiness readiness = _gps.checkAutonomyReadiness(settings.minSatellites, settings.maxHDOP);
+    if (readiness != GpsReadiness::Ready) {
+        errorCode = GpsValidation::errorCodeFor(readiness);
+        return false;
+    }
+
+    errorCode = nullptr;
+    return true;
+}
+
+void HelmModeManager::sendAutonomyError(const char* errorCode) {
+    char response[64];
+    snprintf(response, sizeof(response), "{\"error\":\"%s\"}", errorCode);
+    _ble.sendResponse(response);
+}
+
+void HelmModeManager::clearFault() {
+    if (_mode == Mode::Fault) {
+        _mode = Mode::Idle;
+    }
+    _spotLock.clearGpsAborted();
+    _waypointNav.clearGpsAborted();
+}
+
+void HelmModeManager::enterFault(const char* reason) {
+    _pendingNavStart = false;
+    _pendingSpotLockEngage = false;
+    _mode = Mode::Fault;
+
+    char response[80];
+    snprintf(response, sizeof(response),
+             "{\"error\":\"%s\",\"helm_state\":%u}", reason, (unsigned)HelmState::Fault);
+    _ble.sendResponse(response);
+
+    _spotLock.clearGpsAborted();
+    _waypointNav.clearGpsAborted();
+    Serial.printf("[HelmMode] FAULT – %s\n", reason);
+}
+
+void HelmModeManager::handleControllerStopped(bool gpsAborted) {
+    if (gpsAborted) {
+        enterFault("GPS_LOST");
+        return;
+    }
+    _mode = Mode::Idle;
+}
+
 void HelmModeManager::requestNavStart(float lat, float lon, uint8_t speed) {
+    clearFault();
+
+    const char* errorCode = nullptr;
+    if (!validateNavPreconditions(lat, lon, errorCode)) {
+        _pendingNavStart = false;
+        sendAutonomyError(errorCode);
+        return;
+    }
+
     _pendingNavLat    = lat;
     _pendingNavLon    = lon;
     _pendingNavSpeed  = speed;
@@ -35,6 +118,7 @@ void HelmModeManager::requestNavStart(float lat, float lon, uint8_t speed) {
 }
 
 void HelmModeManager::requestNavCancel() {
+    clearFault();
     _pendingNavStart = false;
     _pendingSpotLockEngage = false;
 
@@ -50,6 +134,15 @@ void HelmModeManager::requestNavCancel() {
 }
 
 void HelmModeManager::requestSpotLockEngage(float lat, float lon) {
+    clearFault();
+
+    const char* errorCode = nullptr;
+    if (!validateSpotLockPreconditions(lat, lon, errorCode)) {
+        _pendingSpotLockEngage = false;
+        sendAutonomyError(errorCode);
+        return;
+    }
+
     _pendingSlLat = lat;
     _pendingSlLon = lon;
     _pendingSpotLockEngage = true;
@@ -76,6 +169,7 @@ void HelmModeManager::requestSpotLockEngage(float lat, float lon) {
 }
 
 void HelmModeManager::requestSpotLockDisengage() {
+    clearFault();
     _pendingSpotLockEngage = false;
 
     if (!_spotLock.isActive()) {
@@ -116,6 +210,14 @@ void HelmModeManager::beginNavHandoff(float lat, float lon) {
 void HelmModeManager::tryStartPendingNav() {
     if (!_pendingNavStart) return;
 
+    const char* errorCode = nullptr;
+    if (!validateNavPreconditions(_pendingNavLat, _pendingNavLon, errorCode)) {
+        _pendingNavStart = false;
+        _mode = Mode::Idle;
+        sendAutonomyError(errorCode);
+        return;
+    }
+
     _waypointNav.start(_pendingNavLat, _pendingNavLon, _pendingNavSpeed);
     _pendingNavStart = false;
     _mode = Mode::Nav;
@@ -125,6 +227,14 @@ void HelmModeManager::tryStartPendingNav() {
 void HelmModeManager::tryEngagePendingSpotLock() {
     if (!_pendingSpotLockEngage) return;
 
+    const char* errorCode = nullptr;
+    if (!validateSpotLockPreconditions(_pendingSlLat, _pendingSlLon, errorCode)) {
+        _pendingSpotLockEngage = false;
+        _mode = Mode::Idle;
+        sendAutonomyError(errorCode);
+        return;
+    }
+
     _spotLock.engage(_pendingSlLat, _pendingSlLon);
     _pendingSpotLockEngage = false;
     _mode = Mode::SpotLock;
@@ -132,27 +242,39 @@ void HelmModeManager::tryEngagePendingSpotLock() {
 }
 
 void HelmModeManager::finishNavHandoff() {
+    const char* errorCode = nullptr;
+    if (!validateSpotLockPreconditions(_handoffLat, _handoffLon, errorCode)) {
+        _mode = Mode::Idle;
+        sendAutonomyError(errorCode);
+        return;
+    }
+
     _spotLock.engage(_handoffLat, _handoffLon);
     _mode = Mode::SpotLock;
     _ble.sendResponse("{\"ack\":\"NAV_ARRIVED\"}");
 }
 
 void HelmModeManager::update(const GpsData& gps, float heading) {
+    (void)gps;
+
     switch (_mode) {
         case Mode::Idle:
+        case Mode::Fault:
             break;
 
         case Mode::SpotLock:
             _spotLock.update(gps, heading);
             if (!_spotLock.isActive()) {
-                _mode = Mode::Idle;
+                handleControllerStopped(_spotLock.wasGpsAborted());
             }
             break;
 
         case Mode::SpotLockDisengaging:
             _spotLock.update(gps, heading);
             if (!_spotLock.isActive()) {
-                if (_pendingNavStart) {
+                if (_spotLock.wasGpsAborted()) {
+                    handleControllerStopped(true);
+                } else if (_pendingNavStart) {
                     tryStartPendingNav();
                 } else if (_pendingSpotLockEngage) {
                     tryEngagePendingSpotLock();
@@ -168,7 +290,7 @@ void HelmModeManager::update(const GpsData& gps, float heading) {
                 beginNavHandoff(_waypointNav.getState().targetLat,
                                 _waypointNav.getState().targetLon);
             } else if (!_waypointNav.isActive()) {
-                _mode = Mode::Idle;
+                handleControllerStopped(_waypointNav.wasGpsAborted());
             }
             break;
         }
@@ -176,7 +298,9 @@ void HelmModeManager::update(const GpsData& gps, float heading) {
         case Mode::NavCancelling:
             _waypointNav.update(gps, heading);
             if (!_waypointNav.isActive()) {
-                if (_pendingNavStart) {
+                if (_waypointNav.wasGpsAborted()) {
+                    handleControllerStopped(true);
+                } else if (_pendingNavStart) {
                     tryStartPendingNav();
                 } else if (_pendingSpotLockEngage) {
                     tryEngagePendingSpotLock();
@@ -196,14 +320,18 @@ void HelmModeManager::update(const GpsData& gps, float heading) {
 }
 
 bool HelmModeManager::allowsManualRf() const {
-    return _mode == Mode::Idle;
+    return _mode == Mode::Idle || _mode == Mode::Fault;
 }
 
 bool HelmModeManager::isAutonomousActive() const {
-    return _mode != Mode::Idle;
+    return _mode != Mode::Idle && _mode != Mode::Fault;
 }
 
 HelmState HelmModeManager::getHelmState() const {
+    if (_mode == Mode::Fault) {
+        return HelmState::Fault;
+    }
+
     switch (_mode) {
         case Mode::SpotLockDisengaging:
         case Mode::NavCancelling:

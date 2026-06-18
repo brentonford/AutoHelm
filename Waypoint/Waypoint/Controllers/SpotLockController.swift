@@ -22,6 +22,7 @@ class SpotLockController: ObservableObject {
     @Published private(set) var isJogging: Bool = false
     @Published private(set) var cableRotation: Double = 0
     @Published private(set) var isCableTangled: Bool = false
+    @Published private(set) var isFaulted: Bool = false
 
     // MARK: - Supporting Types (retained for view compatibility)
 
@@ -75,11 +76,18 @@ class SpotLockController: ObservableObject {
         bluetooth.$sensorData
             .sink { [weak self] data in
                 guard let self else { return }
-                let active = data?.isSpotLockActive ?? false
+                let faulted = data?.currentHelmState == .fault
+                self.isFaulted = faulted
+
+                let active = faulted ? false : (data?.isSpotLockActive ?? false)
 
                 // Telemetry-driven disengage: clear the disengaging flag as soon as the
                 // device confirms sl_active = false, rather than relying on a fixed delay.
                 if self.isDisengaging && !active {
+                    self.isDisengaging = false
+                }
+
+                if faulted {
                     self.isDisengaging = false
                 }
 

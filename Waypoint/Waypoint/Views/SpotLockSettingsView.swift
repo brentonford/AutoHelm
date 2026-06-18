@@ -28,7 +28,6 @@ struct SpotLockSettingsView: View {
             cableSection
             gpsSection
             connectivitySection
-            filteringSection
             resetSection
         }
         .navigationTitle("Spot Lock")
@@ -315,7 +314,7 @@ struct SpotLockSettingsView: View {
                     title: "Disconnect Grace Period",
                     unit: "s",
                     defaultValue: "5",
-                    description: "How long Spot Lock continues operating after BLE connection to the Helm is lost. This allows brief dropouts in RF-noisy environments (near other vessels, docks, marinas) without disengaging. The motor continues running autonomously during this period.\n\nBalance convenience against safety for your situation."
+                    description: "Reserved for future app-side disconnect handling. The Helm firmware continues Spot Lock and navigation autonomously when BLE drops; this setting does not change device behavior today."
                 ),
                 value: s.disconnectGracePeriodSeconds,
                 defaultValue: SpotLockSettings.defaults.disconnectGracePeriodSeconds,
@@ -323,26 +322,6 @@ struct SpotLockSettingsView: View {
             )
         } header: {
             Text("Connectivity")
-        }
-    }
-
-    // MARK: - Position Filtering
-
-    private var filteringSection: some View {
-        Section {
-            IntSettingRow(
-                info: SettingInfo(
-                    title: "Filter Window Size",
-                    unit: "samples",
-                    defaultValue: "5",
-                    description: "Number of GPS position samples averaged together for distance and bearing calculations. More samples smooth out GPS jitter but slow the system's response to real drift. Fewer samples are more reactive but may trigger corrections that chase noise.\n\nIncrease near structures that cause GPS multipath interference."
-                ),
-                value: s.filterWindowSize,
-                defaultValue: SpotLockSettings.defaults.filterWindowSize,
-                onInfo: { activeInfo = $0 }
-            )
-        } header: {
-            Text("Position Filtering")
         }
     }
 

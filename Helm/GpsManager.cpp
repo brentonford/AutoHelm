@@ -1,4 +1,5 @@
 #include "GpsManager.h"
+#include <math.h>
 
 GpsManager::GpsManager(uint8_t rxPin, uint8_t txPin)
     : _rxPin(rxPin)
@@ -349,3 +350,52 @@ bool GpsManager::hasSufficientSatellites() const {
 bool GpsManager::hasAcceptableDop() const {
     return _data.hdop < NavigationConfig::maxDop;
 }
+
+GpsReadiness GpsManager::checkAutonomyReadiness(uint8_t minSatellites, float maxHdop) const {
+    if (!_data.hasFix) {
+        return GpsReadiness::NoFix;
+    }
+    if (!isDataFresh()) {
+        return GpsReadiness::StaleData;
+    }
+    if (_data.satellites < minSatellites) {
+        return GpsReadiness::InsufficientSatellites;
+    }
+    const bool hdopValid = (_data.hdop < 99.0f);
+    if (hdopValid && _data.hdop >= maxHdop) {
+        return GpsReadiness::UnacceptableDop;
+    }
+    return GpsReadiness::Ready;
+}
+
+namespace GpsValidation {
+
+bool isValidCoordinate(float lat, float lon) {
+    if (!isfinite(lat) || !isfinite(lon)) {
+        return false;
+    }
+    if (lat < -90.0f || lat > 90.0f) {
+        return false;
+    }
+    if (lon < -180.0f || lon > 180.0f) {
+        return false;
+    }
+    if (fabsf(lat) < 0.000001f && fabsf(lon) < 0.000001f) {
+        return false;
+    }
+    return true;
+}
+
+const char* errorCodeFor(GpsReadiness reason) {
+    switch (reason) {
+        case GpsReadiness::NoFix:                   return "NO_GPS_FIX";
+        case GpsReadiness::StaleData:               return "GPS_STALE";
+        case GpsReadiness::InsufficientSatellites:  return "INSUFFICIENT_SATELLITES";
+        case GpsReadiness::UnacceptableDop:         return "HDOP_TOO_HIGH";
+        case GpsReadiness::InvalidCoordinates:      return "INVALID_COORDINATES";
+        case GpsReadiness::Ready:
+        default:                                    return "GPS_NOT_READY";
+    }
+}
+
+}  // namespace GpsValidation

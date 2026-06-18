@@ -22,6 +22,7 @@ public:
     bool hasValidFix() const;
     bool hasSufficientSatellites() const;
     bool hasAcceptableDop() const;
+    GpsReadiness checkAutonomyReadiness(uint8_t minSatellites, float maxHdop) const;
     
     void setDebugEnabled(bool enabled);
     bool isDebugEnabled() const;

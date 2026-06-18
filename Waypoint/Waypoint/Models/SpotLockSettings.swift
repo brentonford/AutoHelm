@@ -31,10 +31,10 @@ struct SpotLockSettings: Codable, Equatable {
     var maxHDOP: Double = 5.0
     var maxConsecutiveGpsFailures: Int = 5
 
-    // MARK: - Connectivity
+    // MARK: - Connectivity (iOS-only; not sent to firmware)
     var disconnectGracePeriodSeconds: Double = 5.0
 
-    // MARK: - Position Filtering
+    // MARK: - Position Filtering (deprecated – firmware uses Kalman filter; kept for BLE protocol compat)
     var filterWindowSize: Int = 5
 
     // MARK: - Defaults
