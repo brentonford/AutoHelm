@@ -8,7 +8,11 @@ BleManager::BleManager()
     , _calibrationChar(nullptr)
     , _responseChar(nullptr)
     , _lastStatusTime(0)
-    , _justDisconnected(false) {
+    , _commandQueue(nullptr)
+    , _connected(false)
+    , _justDisconnected(false)
+    , _restartAdvertisingPending(false)
+    , _advertisingRestartAtMs(0) {
 }
 
 bool BleManager::begin() {
@@ -51,30 +55,51 @@ bool BleManager::begin() {
     advertising->addServiceUUID(BleConfig::serviceUuid);
     advertising->setScanResponse(true);
     advertising->setMinPreferred(0x06);
-    advertising->setMinPreferred(0x12);
+    advertising->setMaxPreferred(0x12);
     BLEDevice::startAdvertising();
+
+    _commandQueue = xQueueCreate(BleConfig::commandQueueDepth, sizeof(BleQueuedCommand));
+    if (!_commandQueue) {
+        Serial.println("[BLE] ERROR: Failed to create command queue");
+        return false;
+    }
 
     Serial.println("[BLE] Advertising as 'Helm'");
     return true;
 }
 
 void BleManager::update() {
+    drainCommandQueue();
+
+    if (_restartAdvertisingPending && millis() >= _advertisingRestartAtMs) {
+        _restartAdvertisingPending = false;
+        BLEDevice::startAdvertising();
+        Serial.println("[BLE] Advertising restarted");
+    }
+}
+
+void BleManager::drainCommandQueue() {
+    if (!_commandQueue) return;
+
+    BleQueuedCommand queued;
+    while (xQueueReceive(_commandQueue, &queued, 0) == pdTRUE) {
+        parseCommand(queued.data);
+    }
 }
 
 void BleManager::onConnect(BLEServer* server) {
-    _status.connected = true;
+    _connected = true;
     _justDisconnected = false;
+    _restartAdvertisingPending = false;
     Serial.println("[BLE] Client connected");
 }
 
 void BleManager::onDisconnect(BLEServer* server) {
-    _status.connected = false;
+    _connected = false;
     _justDisconnected = true;
+    _restartAdvertisingPending = true;
+    _advertisingRestartAtMs = millis() + BleConfig::advertisingRestartDelayMs;
     Serial.println("[BLE] Client disconnected");
-
-    delay(500);
-    BLEDevice::startAdvertising();
-    Serial.println("[BLE] Advertising restarted");
 }
 
 bool BleManager::wasJustDisconnected() const {
@@ -105,29 +130,37 @@ void BleManager::onWrite(BLECharacteristic* characteristic) {
         return;
     }
     
-    if (len > 127) {
+    if (len >= BleConfig::commandMaxLen) {
         Serial.printf("[BLE] ERROR: Command too long (%d bytes)\n", len);
         return;
     }
 
-    static char cmdBuffer[128];
-    memcpy(cmdBuffer, pData, len);
-    cmdBuffer[len] = '\0';
+    if (!_commandQueue) {
+        Serial.println("[BLE] ERROR: Command queue not initialized");
+        return;
+    }
+
+    BleQueuedCommand queued = {};
+    memcpy(queued.data, pData, len);
+    queued.data[len] = '\0';
 
     bool isAllNullBytes = true;
     for (size_t i = 0; i < len; i++) {
-        if (cmdBuffer[i] != '\0') {
+        if (queued.data[i] != '\0') {
             isAllNullBytes = false;
             break;
         }
     }
-    
+
     if (isAllNullBytes) {
         Serial.println("[BLE] All null bytes - ignoring");
         return;
     }
 
-    parseCommand(cmdBuffer);
+    if (xQueueSend(_commandQueue, &queued, 0) != pdTRUE) {
+        Serial.println("[BLE] WARNING: Command queue full – dropping command");
+        sendResponse("{\"error\":\"COMMAND_QUEUE_FULL\"}");
+    }
 }
 
 void BleManager::parseCommand(const char* data) {
@@ -403,7 +436,7 @@ void BleManager::sendSensorStatus(const GpsData& gpsData, float heading,
                                    const SpotLockState& slState,
                                    const WaypointNavState& navState,
                                    HelmState helmState) {
-    if (!_status.connected || !_sensorStatusChar)
+    if (!_connected || !_sensorStatusChar)
         return;
 
     uint32_t now = millis();
@@ -423,7 +456,7 @@ void BleManager::sendSensorStatus(const GpsData& gpsData, float heading,
 }
 
 void BleManager::sendCalibrationData(const String& data) {
-    if (!_status.connected || !_calibrationChar)
+    if (!_connected || !_calibrationChar)
         return;
 
     if (data.length() > 512) {
@@ -436,7 +469,7 @@ void BleManager::sendCalibrationData(const String& data) {
 }
 
 void BleManager::sendResponse(const String& response) {
-    if (!_status.connected || !_responseChar)
+    if (!_connected || !_responseChar)
         return;
 
     if (response.length() > BleConfig::jsonBufferSize) {
@@ -449,7 +482,7 @@ void BleManager::sendResponse(const String& response) {
 }
 
 void BleManager::sendResponse(const char* response) {
-    if (!_status.connected || !_responseChar)
+    if (!_connected || !_responseChar)
         return;
 
     size_t len = strlen(response);
@@ -463,7 +496,7 @@ void BleManager::sendResponse(const char* response) {
 }
 
 bool BleManager::isConnected() const {
-    return _status.connected;
+    return _connected;
 }
 
 BleCommand BleManager::consumeCommand() {

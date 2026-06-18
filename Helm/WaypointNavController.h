@@ -39,7 +39,8 @@ public:
     bool update(const GpsData& gps, float compassHeading);
 
     const WaypointNavState& getState() const { return _state; }
-    bool isActive() const { return _state.active || _cancelling; }
+    bool isActive() const { return _state.active || _cancelling || _zeroing; }
+    bool isZeroing() const { return _zeroing; }
 
 private:
     Remote&           _remote;
@@ -48,6 +49,9 @@ private:
 
     uint8_t  _navMaxSpeed         = 5;
     bool     _cancelling          = false;  // graceful stop after cancel()
+    bool     _zeroing             = false;
+    uint8_t  _zeroStepsRemaining  = 0;
+    uint32_t _lastZeroStepMs      = 0;
 
     // --- Steering hold (non-blocking, mirrors SpotLockController) ---
     enum class SteerDir : uint8_t { None, Left, Right };
@@ -86,6 +90,7 @@ private:
     uint32_t _lastKalmanMs    = 0;
     float    _bearingBias     = 0.0f;
 
+    void processMotorZeroing(uint32_t now);
     void processSteeringHold(uint32_t now);
     void processSpeedStep(uint32_t now);
     void processDeadReckoning(uint32_t now);

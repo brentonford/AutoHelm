@@ -11,6 +11,8 @@ static constexpr uint32_t STEERING_RELEASE_DELAY  = 200;
 static constexpr float    SAFE_ROTATION_LEVEL     = 360.0f;
 static constexpr uint32_t RAMP_DOWN_DELAY_MS      = 500;   // faster decel: don't wait full speedChangeDelay when stepping down
 static constexpr uint32_t RESYNC_INTERVAL_MS      = 5000;  // re-assert zero every 5 s while stationary to correct speed-state drift
+static constexpr uint8_t  MOTOR_ZERO_STEPS        = 10;
+static constexpr uint32_t MOTOR_ZERO_STEP_MS      = 100;
 
 SpotLockController::SpotLockController(Remote& remote)
     : _remote(remote) {}
@@ -28,13 +30,10 @@ void SpotLockController::engage(float lat, float lon) {
     _state.lockLat = lat;
     _state.lockLon = lon;
 
-    // Zero motor speed: 10 x single Down packets, 100 ms apart
-    Serial.println("[SpotLock] Zeroing motor speed...");
-    for (uint8_t i = 0; i < 10; i++) {
-        _remote.transmitSingle(Button::Down);
-        delay(100);
-    }
-    Serial.println("[SpotLock] Motor zeroed, algorithm active");
+    _zeroing            = true;
+    _zeroStepsRemaining = MOTOR_ZERO_STEPS;
+    _lastZeroStepMs     = 0;
+    Serial.println("[SpotLock] Zeroing motor speed (non-blocking)...");
 }
 
 // ============================================================
@@ -112,6 +111,11 @@ void SpotLockController::update(const GpsData& gps, float heading) {
 
     if (!_active) return;
 
+    if (_zeroing) {
+        processMotorZeroing(now);
+        return;
+    }
+
     processSteeringHold(now);
     processSpeedStep(now);
     processDeadReckoning(now);
@@ -123,6 +127,25 @@ void SpotLockController::update(const GpsData& gps, float heading) {
     _state.cableTangled  = (fabsf(_cumulativeRotation) > _settings.maxRotationBeforeUntangle);
     _state.applyingThrust= _applyingThrust;
     _state.speedLevel    = (uint8_t)max(0, (int)_currentSpeed);
+}
+
+// ============================================================
+// Motor zeroing – non-blocking Down pulses before algorithm runs
+// ============================================================
+void SpotLockController::processMotorZeroing(uint32_t now) {
+    if (!_zeroing) return;
+
+    if (_zeroStepsRemaining == 0) {
+        _zeroing = false;
+        Serial.println("[SpotLock] Motor zeroed, algorithm active");
+        return;
+    }
+
+    if (_lastZeroStepMs == 0 || (now - _lastZeroStepMs) >= MOTOR_ZERO_STEP_MS) {
+        _remote.transmitSingle(Button::Down);
+        _zeroStepsRemaining--;
+        _lastZeroStepMs = now;
+    }
 }
 
 // ============================================================
@@ -410,6 +433,10 @@ void SpotLockController::resetState() {
 
     _consecutiveGpsFail = 0;
     _kalmanDist.reset();
+
+    _zeroing            = false;
+    _zeroStepsRemaining = 0;
+    _lastZeroStepMs     = 0;
 
     _state            = SpotLockState();
     _state.lockLat    = _lockLat;

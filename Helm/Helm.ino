@@ -7,6 +7,7 @@
 #include "BleManager.h"
 #include "SpotLockController.h"
 #include "WaypointNavController.h"
+#include "HelmModeManager.h"
 
 CC1101 cc1101(
     Pins::cc1101Cs,
@@ -22,6 +23,7 @@ LIS3DHManager accel;   // shares I2C bus with compass; begin() called after comp
 BleManager ble;
 SpotLockController spotLock(remote);
 WaypointNavController waypointNav(remote);
+HelmModeManager helmMode(ble, spotLock, waypointNav);
 
 bool cc1101Available  = false;
 bool remoteAvailable  = false;
@@ -43,17 +45,31 @@ volatile uint32_t holdStartTime = 0;
 constexpr uint32_t holdTransmitIntervalMs = 68;
 constexpr uint32_t holdTransmitTimeoutMs = 30000;
 
+// Non-blocking one-shot RF burst for momentary BLE/serial commands
+struct ManualBurstState {
+    bool active = false;
+    Button button = Button::Count;
+    uint32_t holdStart = 0;
+    uint32_t lastRetransmit = 0;
+};
+ManualBurstState manualBurst;
+constexpr uint32_t manualBurstDurationMs = 1000;
+
 // Emergency stop state machine (non-blocking)
 enum class EmergencyStopState : uint8_t {
     Idle,
-    InProgress,
+    HoldingDown,
+    BetweenSteps,
     Complete
 };
-volatile EmergencyStopState emergencyStopState = EmergencyStopState::Idle;
-volatile uint8_t emergencyStopCount = 0;
-volatile uint32_t lastEmergencyStopTime = 0;
+EmergencyStopState emergencyStopState = EmergencyStopState::Idle;
+uint8_t emergencyStopCount = 0;
+uint32_t emergencyStopPhaseStart = 0;
+uint32_t emergencyStopLastRetransmit = 0;
+constexpr uint32_t emergencyStopHoldMs = 1000;
 constexpr uint32_t emergencyStopIntervalMs = 500;
 constexpr uint8_t emergencyStopMaxCount = 10;
+constexpr uint32_t emergencyStopRetransmitMs = 68;
 
 void printGpsStatus() {
     GpsData data = gps.getData();
@@ -97,10 +113,9 @@ void printSensorStatus() {
 void processNavCommand() {
     if (!ble.hasNavSettingsPending() && !ble.hasNavCommandPending()) return;
 
-    // Apply navigation-specific settings before acting on a nav command.
     if (ble.hasNavSettingsPending()) {
         SpotLockSettings settings = ble.consumeNavSettings();
-        waypointNav.applySettings(settings);
+        helmMode.applyNavSettings(settings);
     }
 
     if (!ble.hasNavCommandPending()) return;
@@ -109,17 +124,14 @@ void processNavCommand() {
     switch (cmd) {
         case NavCommand::Start:
             if (remoteAvailable) {
-                spotLock.disengage();  // safety: cancel SpotLock if active
-                waypointNav.start(ble.getNavTargetLat(), ble.getNavTargetLon(),
-                                  ble.getNavTargetSpeed());
-                ble.sendResponse("{\"ack\":\"NAV_STARTED\"}");
+                helmMode.requestNavStart(ble.getNavTargetLat(), ble.getNavTargetLon(),
+                                         ble.getNavTargetSpeed());
             } else {
                 ble.sendResponse("{\"error\":\"RF not available\"}");
             }
             break;
         case NavCommand::Cancel:
-            waypointNav.cancel();
-            ble.sendResponse("{\"ack\":\"NAV_CANCELLED\"}");
+            helmMode.requestNavCancel();
             break;
         case NavCommand::None:
             break;
@@ -132,11 +144,9 @@ void processSpotLockCommand() {
     if (!ble.hasSpotLockCommandPending() && !ble.hasSlSettingsPending())
         return;
 
-    // Apply Spot Lock settings only to spotLock.
-    // Navigation settings are applied separately via NAV_SETTINGS / processNavCommand().
     if (ble.hasSlSettingsPending()) {
         SpotLockSettings settings = ble.consumeSlSettings();
-        spotLock.applySettings(settings);
+        helmMode.applySpotLockSettings(settings);
     }
 
     if (!ble.hasSpotLockCommandPending())
@@ -146,20 +156,18 @@ void processSpotLockCommand() {
     switch (cmd) {
         case SpotLockCommand::Engage:
             if (remoteAvailable) {
-                spotLock.engage(ble.getSlEngageLat(), ble.getSlEngageLon());
-                ble.sendResponse("{\"ack\":\"SPOTLOCK_ENGAGED\"}");
+                helmMode.requestSpotLockEngage(ble.getSlEngageLat(), ble.getSlEngageLon());
             } else {
                 ble.sendResponse("{\"error\":\"RF not available\"}");
             }
             break;
 
         case SpotLockCommand::Disengage:
-            spotLock.disengage();
-            ble.sendResponse("{\"ack\":\"SPOTLOCK_DISENGAGED\"}");
+            helmMode.requestSpotLockDisengage();
             break;
 
         case SpotLockCommand::Jog:
-            spotLock.jog(ble.getSlJogDir());
+            helmMode.requestSpotLockJog(ble.getSlJogDir());
             break;
 
         case SpotLockCommand::None:
@@ -170,9 +178,36 @@ void processSpotLockCommand() {
     }
 }
 
+void startManualBurst(Button button) {
+    if (!remoteAvailable) return;
+
+    manualBurst.active = true;
+    manualBurst.button = button;
+    manualBurst.holdStart = millis();
+    manualBurst.lastRetransmit = 0;
+    remote.transmitSingle(button);
+}
+
+void processManualBurst() {
+    if (!manualBurst.active || !remoteAvailable) return;
+
+    uint32_t now = millis();
+    if ((now - manualBurst.holdStart) >= manualBurstDurationMs) {
+        remote.transmitSingle(Button::Release);
+        manualBurst.active = false;
+        manualBurst.button = Button::Count;
+        return;
+    }
+
+    if (manualBurst.lastRetransmit == 0 ||
+        (now - manualBurst.lastRetransmit) >= holdTransmitIntervalMs) {
+        remote.transmitSingle(manualBurst.button);
+        manualBurst.lastRetransmit = now;
+    }
+}
+
 void processBleRfCommand() {
-    // Manual RF commands are blocked while SpotLock or navigation is active
-    if (spotLock.isActive() || waypointNav.isActive())
+    if (!helmMode.allowsManualRf())
         return;
 
     if (!ble.hasRfCommandPending())
@@ -196,7 +231,7 @@ void processBleRfCommand() {
             Serial.println("[BLE] Starting LEFT hold transmission");
             remote.transmitSingle(Button::Left);
         } else {
-            remote.transmitHold(Button::Left, 1000);
+            startManualBurst(Button::Left);
         }
     } else if (cmd == "RIGHT") {
         if (isHold) {
@@ -209,27 +244,27 @@ void processBleRfCommand() {
             Serial.println("[BLE] Starting RIGHT hold transmission");
             remote.transmitSingle(Button::Right);
         } else {
-            remote.transmitHold(Button::Right, 1000);
+            startManualBurst(Button::Right);
         }
     } else if (cmd == "UP") {
-        remote.transmitHold(Button::Up, 1000);
+        startManualBurst(Button::Up);
     } else if (cmd == "DOWN") {
-        remote.transmitHold(Button::Down, 1000);
+        startManualBurst(Button::Down);
     } else if (cmd == "MOTOR") {
-        remote.transmitHold(Button::Motor, 1000);
+        startManualBurst(Button::Motor);
     } else if (cmd == "MOMENTARY") {
-        remote.transmitHold(Button::Momentary, 1000);
+        startManualBurst(Button::Momentary);
     } else if (cmd == "RELEASE") {
         portENTER_CRITICAL(&holdStateMux);
         isHoldActive = false;
         portEXIT_CRITICAL(&holdStateMux);
+        manualBurst.active = false;
         remote.transmitSingle(Button::Release);
         Serial.println("[BLE] Stopping hold transmission");
     }
 }
 
 void processHoldTransmission() {
-    // Read state atomically
     portENTER_CRITICAL(&holdStateMux);
     bool holdActive = isHoldActive;
     Button holdButton = activeHoldButton;
@@ -291,25 +326,12 @@ void processBleCommand() {
         default:
             break;
     }
-    
+
     if (ble.hasCalibrationPending()) {
         CompassCalibration cal = ble.consumeCalibration();
         compass.setCalibration(cal);
         Serial.println("[BLE] Calibration values applied to compass");
     }
-}
-
-HelmState computeHelmState() {
-    if (waypointNav.isActive()) {
-        if (!waypointNav.getState().active) return HelmState::Disengaging;
-        if (waypointNav.getState().arriving) return HelmState::NavArriving;
-        return HelmState::NavApproaching;
-    }
-    if (spotLock.isActive()) {
-        if (!spotLock.getState().active) return HelmState::Disengaging;
-        return HelmState::SpotLockActive;
-    }
-    return HelmState::Idle;
 }
 
 void broadcastSensorStatus() {
@@ -323,50 +345,53 @@ void broadcastSensorStatus() {
     lastStatusBroadcastTime = now;
 
     GpsData gpsData = gps.getData();
-    ble.sendSensorStatus(gpsData, currentHeading, spotLock.getState(), waypointNav.getState(), computeHelmState());
+    ble.sendSensorStatus(gpsData, currentHeading, spotLock.getState(), waypointNav.getState(),
+                         helmMode.getHelmState());
 }
 
 void streamCalibrationData() {
     if (!bleAvailable || !ble.isConnected())
         return;
-    
+
     if (!compassAvailable)
         return;
-    
+
     if (!compass.isCalibrating())
         return;
-    
+
     if (!compass.shouldStreamCalibrationData())
         return;
-    
+
     String calibrationJson = compass.getCalibrationJson();
     ble.sendCalibrationData(calibrationJson);
     compass.markCalibrationDataSent();
 }
 
-// Initiates the non-blocking emergency stop sequence
 void startEmergencyStop() {
     if (!remoteAvailable) {
         Serial.println("[Safety] Cannot perform emergency stop - RF not available");
         return;
     }
 
-    if (emergencyStopState != EmergencyStopState::Idle) {
-        return;  // Already in progress
+    if (emergencyStopState != EmergencyStopState::Idle &&
+        emergencyStopState != EmergencyStopState::Complete) {
+        return;
     }
 
     Serial.println("[Safety] EMERGENCY STOP - BLE Disconnected");
     Serial.println("[Safety] Sending 10 RF_DOWN commands to reduce speed to 0");
 
-    emergencyStopState = EmergencyStopState::InProgress;
+    emergencyStopState = EmergencyStopState::HoldingDown;
     emergencyStopCount = 0;
-    lastEmergencyStopTime = 0;
+    emergencyStopPhaseStart = 0;
+    emergencyStopLastRetransmit = 0;
 }
 
-// Processes emergency stop state machine (non-blocking)
 void processEmergencyStop() {
-    if (emergencyStopState != EmergencyStopState::InProgress)
+    if (emergencyStopState == EmergencyStopState::Idle ||
+        emergencyStopState == EmergencyStopState::Complete) {
         return;
+    }
 
     if (!remoteAvailable) {
         emergencyStopState = EmergencyStopState::Idle;
@@ -375,16 +400,45 @@ void processEmergencyStop() {
 
     uint32_t now = millis();
 
-    if (lastEmergencyStopTime == 0 || (now - lastEmergencyStopTime) >= emergencyStopIntervalMs) {
-        emergencyStopCount++;
-        remote.transmitHold(Button::Down, 1000);
-        Serial.printf("[Safety] Emergency stop %d/%d\n", emergencyStopCount, emergencyStopMaxCount);
-        lastEmergencyStopTime = now;
+    switch (emergencyStopState) {
+        case EmergencyStopState::HoldingDown:
+            if (emergencyStopPhaseStart == 0) {
+                emergencyStopPhaseStart = now;
+                emergencyStopLastRetransmit = 0;
+                remote.transmitSingle(Button::Down);
+            }
 
-        if (emergencyStopCount >= emergencyStopMaxCount) {
-            emergencyStopState = EmergencyStopState::Complete;
-            Serial.println("[Safety] Emergency stop complete - speed should be 0");
-        }
+            if ((now - emergencyStopPhaseStart) >= emergencyStopHoldMs) {
+                remote.transmitSingle(Button::Release);
+                emergencyStopCount++;
+                Serial.printf("[Safety] Emergency stop %d/%d\n",
+                              emergencyStopCount, emergencyStopMaxCount);
+                emergencyStopPhaseStart = now;
+                emergencyStopState = EmergencyStopState::BetweenSteps;
+                break;
+            }
+
+            if (emergencyStopLastRetransmit == 0 ||
+                (now - emergencyStopLastRetransmit) >= emergencyStopRetransmitMs) {
+                remote.transmitSingle(Button::Down);
+                emergencyStopLastRetransmit = now;
+            }
+            break;
+
+        case EmergencyStopState::BetweenSteps:
+            if ((now - emergencyStopPhaseStart) >= emergencyStopIntervalMs) {
+                if (emergencyStopCount >= emergencyStopMaxCount) {
+                    emergencyStopState = EmergencyStopState::Complete;
+                    Serial.println("[Safety] Emergency stop complete - speed should be 0");
+                } else {
+                    emergencyStopState = EmergencyStopState::HoldingDown;
+                    emergencyStopPhaseStart = 0;
+                }
+            }
+            break;
+
+        default:
+            break;
     }
 }
 
@@ -392,11 +446,9 @@ void checkBleDisconnect() {
     if (ble.wasJustDisconnected()) {
         Serial.println("[Safety] BLE disconnected");
 
-        if (spotLock.isActive() || waypointNav.isActive()) {
-            // Autonomous control is active – continue without emergency stop
+        if (helmMode.isAutonomousActive()) {
             Serial.println("[Safety] Autonomous control active – continuing operation");
         } else {
-            // No autonomous control – apply safety stop for any manual hold
             portENTER_CRITICAL(&holdStateMux);
             bool wasHoldActive = isHoldActive;
             isHoldActive = false;
@@ -409,6 +461,7 @@ void checkBleDisconnect() {
                 }
             }
 
+            manualBurst.active = false;
             startEmergencyStop();
         }
 
@@ -443,7 +496,6 @@ void setup() {
     compassAvailable = compass.begin();
     Serial.println(compassAvailable ? "SUCCESS" : "FAILED");
 
-    // LIS3DH must be initialised after compass.begin() which calls Wire.begin()
     Serial.print("[LIS3DH] Initializing... ");
     accelAvailable = accel.begin();
     Serial.println(accelAvailable ? "SUCCESS" : "FAILED (tilt compensation disabled)");
@@ -474,36 +526,19 @@ void loop() {
         if (accelAvailable) {
             float ax, ay, az;
             if (accel.readAccel(ax, ay, az)) {
-                // Pitch: bow-up is positive.  Roll: starboard-down is positive.
-                // If the LIS3DH Z axis points up (PiicoDev default), az≈+1 g when flat,
-                // which is consistent with these formulas.
                 float pitchRad = atan2f(-ax, sqrtf(ay * ay + az * az));
                 float rollRad  = atan2f(ay, az);
                 currentHeading = compass.readHeadingTilted(pitchRad, rollRad);
             } else {
-                currentHeading = compass.readHeading();  // fall back on I2C error
+                currentHeading = compass.readHeading();
             }
         } else {
             currentHeading = compass.readHeading();
         }
     }
 
-    // SpotLock and WaypointNav run every loop iteration for precise timing
     if (remoteAvailable) {
-        spotLock.update(gps.getData(), currentHeading);
-
-        if (waypointNav.isActive()) {
-            bool arrived = waypointNav.update(gps.getData(), currentHeading);
-            if (arrived) {
-                // Seamless handoff: nav ends, SpotLock holds the target position
-                float tLat = waypointNav.getState().targetLat;
-                float tLon = waypointNav.getState().targetLon;
-                Serial.printf("[Helm] NAV arrived – engaging SpotLock at %.6f,%.6f\n", tLat, tLon);
-                waypointNav.cancel();
-                spotLock.engage(tLat, tLon);
-                ble.sendResponse("{\"ack\":\"NAV_ARRIVED\"}");
-            }
-        }
+        helmMode.update(gps.getData(), currentHeading);
     }
 
     if (bleAvailable) {
@@ -511,8 +546,9 @@ void loop() {
         processBleCommand();
         processSpotLockCommand();
         processNavCommand();
-        processBleRfCommand();        // blocked when SpotLock or nav active
-        processHoldTransmission();    // manual BLE holds (only when both inactive)
+        processBleRfCommand();
+        processManualBurst();
+        processHoldTransmission();
         streamCalibrationData();
     }
 
@@ -526,12 +562,12 @@ void loop() {
     char c = Serial.read();
 
     switch (c) {
-        case 'R': remote.transmitHold(Button::Right); break;
-        case 'L': remote.transmitHold(Button::Left); break;
-        case 'U': remote.transmitHold(Button::Up); break;
-        case 'D': remote.transmitHold(Button::Down); break;
-        case 'M': remote.transmitHold(Button::Motor); break;
-        case 'S': remote.transmitHold(Button::Momentary); break;
+        case 'R': startManualBurst(Button::Right); break;
+        case 'L': startManualBurst(Button::Left); break;
+        case 'U': startManualBurst(Button::Up); break;
+        case 'D': startManualBurst(Button::Down); break;
+        case 'M': startManualBurst(Button::Motor); break;
+        case 'S': startManualBurst(Button::Momentary); break;
 
         case 'r': remote.transmitSingle(Button::Right); break;
         case 'l': remote.transmitSingle(Button::Left); break;

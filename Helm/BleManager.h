@@ -5,6 +5,8 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 
 #include "DataModels.h"
 #include "SpotLockController.h"
@@ -19,7 +21,14 @@ namespace BleConfig {
     constexpr const char* responseCharUuid = "0000FFE5-0000-1000-8000-00805F9B34FB";
     constexpr uint32_t statusIntervalMs = 500;
     constexpr size_t jsonBufferSize = 768;  // Enlarged for SpotLock + WaypointNav telemetry fields
+    constexpr size_t commandQueueDepth = 8;
+    constexpr size_t commandMaxLen = 128;
+    constexpr uint32_t advertisingRestartDelayMs = 500;
 }
+
+struct BleQueuedCommand {
+    char data[BleConfig::commandMaxLen];
+};
 
 enum class BleCommand : uint8_t {
     None,
@@ -139,8 +148,13 @@ private:
     BLECharacteristic* _responseChar;
     BleStatus          _status;
     uint32_t           _lastStatusTime;
-    bool               _justDisconnected;
+    QueueHandle_t      _commandQueue;
+    volatile bool      _connected;
+    volatile bool      _justDisconnected;
+    bool               _restartAdvertisingPending;
+    uint32_t           _advertisingRestartAtMs;
 
+    void   drainCommandQueue();
     void   parseCommand(const char* data);
     String buildSensorStatusJson(const GpsData& gpsData, float heading,
                                  const SpotLockState& slState,

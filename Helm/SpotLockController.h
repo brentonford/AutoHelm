@@ -40,15 +40,19 @@ public:
     void update(const GpsData& gps, float compassHeading);
 
     const SpotLockState& getState() const { return _state; }
-    bool isActive() const { return _active || _disengaging; }
+    bool isActive() const { return _active || _disengaging || _zeroing; }
+    bool isZeroing() const { return _zeroing; }
 
 private:
     Remote&          _remote;
     SpotLockSettings _settings;
     SpotLockState    _state;
 
-    bool  _active      = false;
-    bool  _disengaging = false;
+    bool    _active      = false;
+    bool    _disengaging = false;
+    bool    _zeroing     = false;
+    uint8_t _zeroStepsRemaining = 0;
+    uint32_t _lastZeroStepMs    = 0;
     float _lockLat     = 0.0f;
     float _lockLon     = 0.0f;
 
@@ -90,6 +94,7 @@ private:
     uint32_t _lastKalmanMs    = 0;
     float    _bearingBias     = 0.0f;  // EMA of bearing error (item 5)
 
+    void processMotorZeroing(uint32_t now);
     void processSteeringHold(uint32_t now);
     void processSpeedStep(uint32_t now);
     void processDeadReckoning(uint32_t now);

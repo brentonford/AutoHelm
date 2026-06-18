@@ -12,6 +12,8 @@ static constexpr float    SAFE_ROTATION_LEVEL    = 360.0f;
 static constexpr float    NAV_RAMP_ZONE_M        = 8.0f;  // start slowing within this distance of deadZone
 static constexpr uint32_t RAMP_DOWN_DELAY_MS     = 500;   // faster decel: don't wait full speedChangeDelay when stepping down
 static constexpr uint32_t RESYNC_INTERVAL_MS     = 5000;  // re-assert zero every 5 s while stationary to correct speed-state drift
+static constexpr uint8_t  MOTOR_ZERO_STEPS       = 10;
+static constexpr uint32_t MOTOR_ZERO_STEP_MS     = 100;
 
 WaypointNavController::WaypointNavController(Remote& remote)
     : _remote(remote) {}
@@ -31,13 +33,10 @@ void WaypointNavController::start(float targetLat, float targetLon, uint8_t maxS
     _state.arriving     = false;
     _cancelling         = false;
 
-    // Zero motor speed: 10 x single Down packets, 100 ms apart
-    Serial.println("[Nav] Zeroing motor speed...");
-    for (uint8_t i = 0; i < 10; i++) {
-        _remote.transmitSingle(Button::Down);
-        delay(100);
-    }
-    Serial.println("[Nav] Motor zeroed, navigation active");
+    _zeroing            = true;
+    _zeroStepsRemaining = MOTOR_ZERO_STEPS;
+    _lastZeroStepMs     = 0;
+    Serial.println("[Nav] Zeroing motor speed (non-blocking)...");
 }
 
 // ============================================================
@@ -90,6 +89,11 @@ bool WaypointNavController::update(const GpsData& gps, float heading) {
 
     if (!_state.active) return false;
 
+    if (_zeroing) {
+        processMotorZeroing(now);
+        return false;
+    }
+
     processSteeringHold(now);
     processSpeedStep(now);
     processDeadReckoning(now);
@@ -97,6 +101,25 @@ bool WaypointNavController::update(const GpsData& gps, float heading) {
     _state.speedLevel = (uint8_t)max(0, (int)_currentSpeed);
 
     return runCorrectionLogic(gps, heading, now);
+}
+
+// ============================================================
+// Motor zeroing – non-blocking Down pulses before navigation runs
+// ============================================================
+void WaypointNavController::processMotorZeroing(uint32_t now) {
+    if (!_zeroing) return;
+
+    if (_zeroStepsRemaining == 0) {
+        _zeroing = false;
+        Serial.println("[Nav] Motor zeroed, navigation active");
+        return;
+    }
+
+    if (_lastZeroStepMs == 0 || (now - _lastZeroStepMs) >= MOTOR_ZERO_STEP_MS) {
+        _remote.transmitSingle(Button::Down);
+        _zeroStepsRemaining--;
+        _lastZeroStepMs = now;
+    }
 }
 
 // ============================================================
@@ -390,6 +413,10 @@ void WaypointNavController::resetMotion() {
     _lastKalmanMs   = 0;
 
     _kalmanDist.reset();
+
+    _zeroing            = false;
+    _zeroStepsRemaining = 0;
+    _lastZeroStepMs     = 0;
 
     _state               = WaypointNavState();
 }

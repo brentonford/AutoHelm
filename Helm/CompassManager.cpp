@@ -56,7 +56,6 @@ float CompassManager::readHeadingTilted(float pitchRad, float rollRad) {
         sumX += event.magnetic.x;
         sumY += event.magnetic.y;
         sumZ += event.magnetic.z;
-        delay(10);
     }
     float x = sumX / CompassConfig::sampleCount;
     float y = sumY / CompassConfig::sampleCount;
@@ -132,8 +131,6 @@ float CompassManager::readHeading() {
         sumX += event.magnetic.x;
         sumY += event.magnetic.y;
         sumZ += event.magnetic.z;
-
-        delay(10);
     }
 
     float x = sumX / CompassConfig::sampleCount;
