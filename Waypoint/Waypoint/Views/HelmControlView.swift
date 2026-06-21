@@ -7,7 +7,7 @@ struct HelmControlView: View {
     @EnvironmentObject var navController: WaypointNavController
 
     private var canNavigate: Bool {
-        bluetooth.connectionState == .connected &&
+        bluetooth.isOperational &&
         bluetooth.sensorData?.isNavigationReady == true
     }
 
@@ -39,7 +39,7 @@ struct HelmControlView: View {
         Section {
             ManualMotorControls(
                 bluetooth: bluetooth,
-                isDisabled: autonomousModeActive,
+                isDisabled: autonomousModeActive || !bluetooth.isOperational,
                 onManualControl: {
                     Task {
                         if navController.isActive || navController.isStarting {
@@ -54,7 +54,9 @@ struct HelmControlView: View {
         } header: {
             Text("Manual Remote Control")
         } footer: {
-            if autonomousModeActive {
+            if !bluetooth.isOperational {
+                Text("Connect and authenticate before sending motor commands.")
+            } else if autonomousModeActive {
                 Text("Manual control is disabled while navigation or Spot Lock is active. Using manual control cancels autonomous modes.")
             } else {
                 Text("Manual control cancels any active navigation or Spot Lock")

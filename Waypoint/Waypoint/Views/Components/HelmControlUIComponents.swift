@@ -336,11 +336,22 @@ struct JogButton: View {
 
 struct ConnectionStatus: View {
     @ObservedObject var bluetooth: BluetoothManager
+
+    private var statusColor: Color {
+        switch bluetooth.connectionState {
+        case .connected:
+            return bluetooth.isAuthenticated ? .green : .orange
+        case .reconnecting, .connecting, .scanning:
+            return .orange
+        case .disconnected:
+            return .red
+        }
+    }
     
     var body: some View {
         HStack {
             Circle()
-                .fill(bluetooth.connectionState == .connected ? Color.green : Color.red)
+                .fill(statusColor)
                 .frame(width: 12, height: 12)
             Text(bluetooth.connectionState.rawValue)
             Spacer()

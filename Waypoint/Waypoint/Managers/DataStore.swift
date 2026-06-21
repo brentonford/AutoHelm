@@ -11,16 +11,19 @@ class DataStore: ObservableObject {
     @Published var calibration: CompassCalibration = CompassCalibration()
     @Published var spotLockSettings: SpotLockSettings = SpotLockSettings()
     @Published var navSettings: NavSettings = NavSettings()
+    @Published var bleAuthSecret: String = ""
     @Published private(set) var lastError: String?
 
     private let calibrationKey = "compassCalibration"
     private let spotLockSettingsKey = "spotLockSettings"
     private let navSettingsKey = "navSettings"
+    private let bleAuthSecretKey = "bleAuthSecret"
 
     private init() {
         loadCalibration()
         loadSpotLockSettings()
         loadNavSettings()
+        loadBleAuthSecret()
     }
 
     // MARK: - Calibration
@@ -142,6 +145,32 @@ class DataStore: ObservableObject {
             navSettings = NavSettings()
             return false
         }
+    }
+
+    // MARK: - BLE Security
+
+    var requiresBleAuth: Bool {
+        !bleAuthSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func updateBleAuthSecret(_ secret: String) {
+        bleAuthSecret = secret
+        saveBleAuthSecret()
+    }
+
+    @discardableResult
+    func saveBleAuthSecret() -> Bool {
+        UserDefaults.standard.set(bleAuthSecret, forKey: bleAuthSecretKey)
+        return true
+    }
+
+    @discardableResult
+    func loadBleAuthSecret() -> Bool {
+        guard let secret = UserDefaults.standard.string(forKey: bleAuthSecretKey) else {
+            return false
+        }
+        bleAuthSecret = secret
+        return true
     }
 }
 

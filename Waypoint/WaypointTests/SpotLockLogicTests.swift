@@ -344,3 +344,26 @@ final class KalmanDistanceFilterTests: XCTestCase {
         XCTAssertLessThan(afterJump, 15.0)
     }
 }
+
+// MARK: - BLE Protocol Tests
+
+final class SpotLockSettingsCommandTests: XCTestCase {
+
+    func test_settingsCommand_includesDisconnectGraceAsField21() {
+        var settings = SpotLockSettings.defaults
+        settings.disconnectGracePeriodSeconds = 7.5
+
+        let command = settings.toSettingsCommand()
+        XCTAssertTrue(command.hasPrefix("SPOTLOCK_SETTINGS:"))
+        let fields = String(command.dropFirst("SPOTLOCK_SETTINGS:".count)).split(separator: ",")
+        XCTAssertEqual(fields.count, 21)
+        XCTAssertEqual(Double(fields[20]) ?? 0, 7.5, accuracy: 0.001)
+    }
+
+    func test_settingsCommand_backwardCompatibleFieldCount() {
+        let command = SpotLockSettings.defaults.toSettingsCommand()
+        let fields = String(command.dropFirst("SPOTLOCK_SETTINGS:".count)).split(separator: ",")
+        XCTAssertEqual(fields.count, 21)
+        XCTAssertEqual(Double(fields[20]) ?? 0, 5.0, accuracy: 0.001)
+    }
+}

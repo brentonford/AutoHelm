@@ -12,6 +12,11 @@
 #include "SpotLockController.h"
 #include "WaypointNavController.h"
 
+namespace BleSecurity {
+    constexpr uint8_t maxAuthFailures = 5;
+    constexpr uint32_t defaultDisconnectGraceMs = 5000;
+}
+
 namespace BleConfig {
     constexpr const char* deviceName = "Helm";
     constexpr const char* serviceUuid = "0000FFE0-0000-1000-8000-00805F9B34FB";
@@ -107,6 +112,11 @@ public:
     void sendResponse(const char* response);
 
     bool isConnected() const;
+    bool requiresAuth() const;
+    bool isAuthenticated() const;
+    void setDisconnectGracePeriodMs(uint32_t graceMs);
+    uint32_t getDisconnectGracePeriodMs() const;
+
     BleCommand consumeCommand();
     bool hasRfCommandPending() const;
     String consumeRfCommand();
@@ -154,9 +164,15 @@ private:
     bool               _restartAdvertisingPending;
     uint32_t           _advertisingRestartAtMs;
     char               _sensorStatusBuffer[BleConfig::jsonBufferSize];
+    bool               _authenticated;
+    uint8_t            _authFailedAttempts;
+    uint32_t           _disconnectGracePeriodMs;
 
     void   drainCommandQueue();
     void   parseCommand(const char* data);
+    bool   isPrivilegedCommand(const char* cmd) const;
+    bool   ensureAuthenticatedFor(const char* cmd);
+    void   resetAuthSession();
     size_t buildSensorStatusJson(const GpsData& gpsData, float heading,
                                    const SpotLockState& slState,
                                    const WaypointNavState& navState,

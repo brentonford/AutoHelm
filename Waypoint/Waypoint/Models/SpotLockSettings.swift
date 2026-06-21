@@ -31,7 +31,7 @@ struct SpotLockSettings: Codable, Equatable {
     var maxHDOP: Double = 5.0
     var maxConsecutiveGpsFailures: Int = 5
 
-    // MARK: - Connectivity (iOS-only; not sent to firmware)
+    // MARK: - Connectivity (synced to firmware via SPOTLOCK_SETTINGS field 21)
     var disconnectGracePeriodSeconds: Double = 5.0
 
     // MARK: - Position Filtering (deprecated – firmware uses Kalman filter; kept for BLE protocol compat)
@@ -52,7 +52,8 @@ struct SpotLockSettings: Codable, Equatable {
         ",\(smallAngleThreshold),\(largeAngleThreshold)" +
         ",\(smallSteeringDuration),\(mediumSteeringDuration),\(largeSteeringDuration)" +
         ",\(maxRotationBeforeUntangle),\(rotationPerMs)" +
-        ",\(minSatellites),\(maxHDOP),\(maxConsecutiveGpsFailures),\(filterWindowSize)"
+        ",\(minSatellites),\(maxHDOP),\(maxConsecutiveGpsFailures),\(filterWindowSize)" +
+        ",\(disconnectGracePeriodSeconds)"
     }
 
     // MARK: - Validation

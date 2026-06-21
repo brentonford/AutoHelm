@@ -1,4 +1,5 @@
 #include "BleManager.h"
+#include "BleAuth.h"
 
 BleManager::BleManager()
     : _server(nullptr)
@@ -12,7 +13,10 @@ BleManager::BleManager()
     , _connected(false)
     , _justDisconnected(false)
     , _restartAdvertisingPending(false)
-    , _advertisingRestartAtMs(0) {
+    , _advertisingRestartAtMs(0)
+    , _authenticated(false)
+    , _authFailedAttempts(0)
+    , _disconnectGracePeriodMs(BleSecurity::defaultDisconnectGraceMs) {
 }
 
 bool BleManager::begin() {
@@ -64,6 +68,12 @@ bool BleManager::begin() {
         return false;
     }
 
+    if (requiresAuth()) {
+        Serial.println("[BLE] Auth required – privileged commands gated until AUTH");
+    } else {
+        Serial.println("[BLE] Auth disabled (no BLE_AUTH_SECRET configured)");
+    }
+
     Serial.println("[BLE] Advertising as 'Helm'");
     return true;
 }
@@ -91,6 +101,7 @@ void BleManager::onConnect(BLEServer* server) {
     _connected = true;
     _justDisconnected = false;
     _restartAdvertisingPending = false;
+    resetAuthSession();
     Serial.println("[BLE] Client connected");
 }
 
@@ -99,7 +110,68 @@ void BleManager::onDisconnect(BLEServer* server) {
     _justDisconnected = true;
     _restartAdvertisingPending = true;
     _advertisingRestartAtMs = millis() + BleConfig::advertisingRestartDelayMs;
+    resetAuthSession();
     Serial.println("[BLE] Client disconnected");
+}
+
+void BleManager::resetAuthSession() {
+    _authenticated = !requiresAuth();
+    _authFailedAttempts = 0;
+}
+
+bool BleManager::requiresAuth() const {
+    return BleAuth::isRequired();
+}
+
+bool BleManager::isAuthenticated() const {
+    return _authenticated;
+}
+
+void BleManager::setDisconnectGracePeriodMs(uint32_t graceMs) {
+    _disconnectGracePeriodMs = constrain(graceMs, 1000U, 30000U);
+}
+
+uint32_t BleManager::getDisconnectGracePeriodMs() const {
+    return _disconnectGracePeriodMs;
+}
+
+bool BleManager::isPrivilegedCommand(const char* cmd) const {
+    if (!cmd || cmd[0] == '\0') {
+        return false;
+    }
+
+    if (strncmp(cmd, "AUTH:", 5) == 0) {
+        return false;
+    }
+
+    return strncmp(cmd, "RF_", 3) == 0
+        || strncmp(cmd, "SPOTLOCK_", 9) == 0
+        || strncmp(cmd, "NAV_", 4) == 0
+        || strcmp(cmd, "START_CAL") == 0
+        || strcmp(cmd, "STOP_CAL") == 0
+        || strncmp(cmd, "CAL_VALUES:", 11) == 0;
+}
+
+bool BleManager::ensureAuthenticatedFor(const char* cmd) {
+    if (!requiresAuth()) {
+        return true;
+    }
+
+    if (_authenticated) {
+        return true;
+    }
+
+    if (!isPrivilegedCommand(cmd)) {
+        return true;
+    }
+
+    if (_authFailedAttempts >= BleSecurity::maxAuthFailures) {
+        sendResponse("{\"error\":\"AUTH_LOCKED\"}");
+        return false;
+    }
+
+    sendResponse("{\"error\":\"AUTH_REQUIRED\"}");
+    return false;
 }
 
 bool BleManager::wasJustDisconnected() const {
@@ -200,6 +272,35 @@ void BleManager::parseCommand(const char* data) {
     if (len == 0) {
         return;
     }
+
+    if (strncmp(cmd, "AUTH:", 5) == 0) {
+        const char* secret = cmd + 5;
+        while (*secret == ' ' || *secret == '\t') {
+            secret++;
+        }
+
+        if (_authFailedAttempts >= BleSecurity::maxAuthFailures) {
+            sendResponse("{\"error\":\"AUTH_LOCKED\"}");
+            return;
+        }
+
+        if (BleAuth::validateSecret(secret)) {
+            _authenticated = true;
+            _authFailedAttempts = 0;
+            sendResponse("{\"ack\":\"AUTH_OK\"}");
+            Serial.println("[BLE] Client authenticated");
+        } else {
+            _authFailedAttempts++;
+            sendResponse("{\"error\":\"AUTH_FAILED\"}");
+            Serial.printf("[BLE] Auth failed (%u/%u)\n",
+                          _authFailedAttempts, BleSecurity::maxAuthFailures);
+        }
+        return;
+    }
+
+    if (!ensureAuthenticatedFor(cmd)) {
+        return;
+    }
     
     for (char* p = cmd; *p; p++) {
         *p = toupper(*p);
@@ -256,22 +357,23 @@ void BleManager::parseCommand(const char* data) {
 
     } else if (strncmp(cmd, "SPOTLOCK_SETTINGS:", 18) == 0) {
         // CSV: deadZone,activation,jog,minSpd,maxSpd,gain,spdDelayS,hdgTol,corrIntervalS,
-        //      smallAng,largeAng,smallDur,medDur,largeDur,maxRot,rotPerMs,minSat,maxHDOP,maxFail,filterWin
+        //      smallAng,largeAng,smallDur,medDur,largeDur,maxRot,rotPerMs,minSat,maxHDOP,maxFail,filterWin,disconnectGraceS
         SpotLockSettings s;
         float spdDelaySec = 2.0f, corrIntervalSec = 1.0f;
+        float disconnectGraceSec = s.disconnectGracePeriodSec;
         int minSpd = 3, maxSpd = 10, smallDur = 200, medDur = 600, largeDur = 1000;
         int minSat = 4, maxFail = 5, filterWin = 5;
         int parsed = sscanf(cmd + 18,
-            "%f,%f,%f,%d,%d,%f,%f,%f,%f,%f,%f,%d,%d,%d,%f,%f,%d,%f,%d,%d",
+            "%f,%f,%f,%d,%d,%f,%f,%f,%f,%f,%f,%d,%d,%d,%f,%f,%d,%f,%d,%d,%f",
             &s.deadZoneRadius, &s.activationThreshold, &s.jogDistance,
             &minSpd, &maxSpd, &s.proportionalGain,
             &spdDelaySec, &s.headingTolerance, &corrIntervalSec,
             &s.smallAngleThreshold, &s.largeAngleThreshold,
             &smallDur, &medDur, &largeDur,
             &s.maxRotationBeforeUntangle, &s.rotationPerMs,
-            &minSat, &s.maxHDOP, &maxFail, &filterWin);
+            &minSat, &s.maxHDOP, &maxFail, &filterWin, &disconnectGraceSec);
 
-        if (parsed == 20) {
+        if (parsed == 20 || parsed == 21) {
             s.minSpeed             = (uint8_t)minSpd;
             s.maxSpeed             = (uint8_t)maxSpd;
             s.speedChangeDelayMs   = spdDelaySec * 1000.0f;
@@ -282,11 +384,15 @@ void BleManager::parseCommand(const char* data) {
             s.minSatellites        = (uint8_t)minSat;
             s.maxConsecutiveGpsFail= (uint8_t)maxFail;
             (void)filterWin;  // Deprecated field – accepted for protocol compatibility
+            if (parsed == 21) {
+                s.disconnectGracePeriodSec = constrain(disconnectGraceSec, 1.0f, 30.0f);
+            }
+            setDisconnectGracePeriodMs((uint32_t)(s.disconnectGracePeriodSec * 1000.0f));
             _status.slPendingSettings  = s;
             _status.hasSlSettingsPending = true;
             sendResponse("{\"ack\":\"SPOTLOCK_SETTINGS\"}");
         } else {
-            Serial.printf("[BLE] SPOTLOCK_SETTINGS parse failed – got %d/20 fields\n", parsed);
+            Serial.printf("[BLE] SPOTLOCK_SETTINGS parse failed – got %d/21 fields\n", parsed);
             sendResponse("{\"error\":\"Invalid SPOTLOCK_SETTINGS format\"}");
         }
 
@@ -421,6 +527,11 @@ size_t BleManager::buildSensorStatusJson(const GpsData& gpsData, float heading,
     }
 
     n += snprintf(json + n, sizeof(_sensorStatusBuffer) - n, ",\"helm_state\":%d", (uint8_t)helmState);
+    n += snprintf(json + n, sizeof(_sensorStatusBuffer) - n,
+        ",\"ble_authed\":%s,\"disconnect_grace_s\":%.1f",
+        _authenticated ? "true" : "false",
+        _disconnectGracePeriodMs / 1000.0f
+    );
     n += snprintf(json + n, sizeof(_sensorStatusBuffer) - n, "}");
 
     if (n < 0 || static_cast<size_t>(n) >= sizeof(_sensorStatusBuffer) - 1) {

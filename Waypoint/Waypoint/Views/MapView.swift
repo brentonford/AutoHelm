@@ -18,7 +18,7 @@ struct MapView: View {
     @State private var lastPinTapDate: Date = .distantPast
 
     private var canNavigate: Bool {
-        guard bluetooth.connectionState == .connected else { return false }
+        guard bluetooth.isOperational else { return false }
         guard let sensors = bluetooth.sensorData else { return false }
         return sensors.hasFix && sensors.isNavigationReady
     }

@@ -314,7 +314,7 @@ struct SpotLockSettingsView: View {
                     title: "Disconnect Grace Period",
                     unit: "s",
                     defaultValue: "5",
-                    description: "Reserved for future app-side disconnect handling. The Helm firmware continues Spot Lock and navigation autonomously when BLE drops; this setting does not change device behavior today."
+                    description: "Seconds to wait after BLE disconnect before the Helm triggers a manual-mode safety stop. Spot Lock and navigation continue autonomously during the grace period and after disconnect."
                 ),
                 value: s.disconnectGracePeriodSeconds,
                 defaultValue: SpotLockSettings.defaults.disconnectGracePeriodSeconds,

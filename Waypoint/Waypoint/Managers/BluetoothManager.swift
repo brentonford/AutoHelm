@@ -13,8 +13,9 @@ private enum BleUuids {
 
 private enum BleConstants {
     nonisolated static let deviceName = "Helm"
-    static let reconnectDelaySeconds: TimeInterval = 3.0
+    static let reconnectDelaySeconds: TimeInterval = 1.0
     static let rssiUpdateIntervalSeconds: TimeInterval = 2.0
+    static let authTimeoutSeconds: TimeInterval = 8.0
 }
 
 private struct FinalCalibrationResponse: Codable {
@@ -38,6 +39,7 @@ struct BLECommandHistory: Identifiable {
 class BluetoothManager: NSObject, ObservableObject {
 
     @Published private(set) var connectionState: ConnectionState = .disconnected
+    @Published private(set) var isAuthenticated: Bool = false
     @Published private(set) var sensorData: SensorData?
     @Published private(set) var lastResponse: BleResponse?
     @Published private(set) var lastError: String?
@@ -56,8 +58,12 @@ class BluetoothManager: NSObject, ObservableObject {
 
     private var reconnectTimer: Timer?
     private var rssiTimer: Timer?
+    private var disconnectGraceTimer: Timer?
+    private var authTimeoutTask: Task<Void, Never>?
     private var shouldReconnect = true
-    private var characteristicsReady = false  // Track when all characteristics are discovered
+    private var characteristicsReady = false
+    private var pendingCommands: [String] = []
+    private var autoUploadPending = false
     
     private var locationTracker: LocationWithSpeed?
     private var lastLocationUpdate: Date?
@@ -94,22 +100,31 @@ class BluetoothManager: NSObject, ObservableObject {
     func disconnect() {
         shouldReconnect = false
         reconnectTimer?.invalidate()
+        disconnectGraceTimer?.invalidate()
         rssiTimer?.invalidate()
+        authTimeoutTask?.cancel()
 
         if let peripheral = peripheral, let central = centralManager {
             central.cancelPeripheralConnection(peripheral)
         }
     }
 
+    var isOperational: Bool {
+        connectionState == .connected && isAuthenticated
+    }
+
     func sendCommand(_ command: String) {
-        guard let data = command.data(using: .utf8) else { return }
-        writeToCharacteristic(commandChar, data: data)
-        
-        // Add to command history (newest first, max 5 entries)
-        commandHistory.insert(BLECommandHistory(command: command, timestamp: Date()), at: 0)
-        if commandHistory.count > maxCommandHistory {
-            commandHistory.removeLast()
+        if command.hasPrefix("AUTH:") {
+            transmitCommand(command)
+            return
         }
+
+        if DataStore.shared.requiresBleAuth && !isAuthenticated {
+            pendingCommands.append(command)
+            return
+        }
+
+        transmitCommand(command)
     }
 
     func sendMotorCommand(_ command: String) {
@@ -199,12 +214,118 @@ class BluetoothManager: NSObject, ObservableObject {
         sendCommand(command)
     }
 
+    private func transmitCommand(_ command: String) {
+        guard let data = command.data(using: .utf8) else { return }
+        writeToCharacteristic(commandChar, data: data)
+
+        commandHistory.insert(BLECommandHistory(command: command, timestamp: Date()), at: 0)
+        if commandHistory.count > maxCommandHistory {
+            commandHistory.removeLast()
+        }
+    }
+
     private func writeToCharacteristic(_ characteristic: CBCharacteristic?, data: Data) {
         guard let char = characteristic, let peripheral = peripheral else {
             lastError = "Not connected"
             return
         }
         peripheral.writeValue(data, for: char, type: .withResponse)
+    }
+
+    private func beginAuthentication() {
+        isAuthenticated = false
+        pendingCommands.removeAll()
+        authTimeoutTask?.cancel()
+
+        guard DataStore.shared.requiresBleAuth else {
+            isAuthenticated = true
+            flushPendingCommands()
+            runAutoUploadIfNeeded()
+            return
+        }
+
+        let secret = DataStore.shared.bleAuthSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !secret.isEmpty else {
+            lastError = "BLE pairing secret not configured"
+            return
+        }
+
+        print("[BLE] Sending AUTH challenge...")
+        transmitCommand("AUTH:\(secret)")
+
+        authTimeoutTask = Task {
+            try? await Task.sleep(for: .seconds(BleConstants.authTimeoutSeconds))
+            guard !Task.isCancelled, !self.isAuthenticated else { return }
+            self.lastError = "BLE authentication timed out"
+            self.disconnect()
+        }
+    }
+
+    private func flushPendingCommands() {
+        guard isAuthenticated else { return }
+        let queued = pendingCommands
+        pendingCommands.removeAll()
+        for command in queued {
+            transmitCommand(command)
+        }
+    }
+
+    private func runAutoUploadIfNeeded() {
+        guard autoUploadPending, commandChar != nil else { return }
+        autoUploadPending = false
+        autoUploadCalibration()
+        autoUploadSpotLockSettings()
+        autoUploadNavSettings()
+    }
+
+    private func handleAuthResponse(_ response: BleResponse) {
+        if response.ack == "AUTH_OK" {
+            isAuthenticated = true
+            authTimeoutTask?.cancel()
+            authTimeoutTask = nil
+            lastError = nil
+            print("[BLE] Authentication succeeded")
+            flushPendingCommands()
+            runAutoUploadIfNeeded()
+            return
+        }
+
+        if response.error == "AUTH_FAILED" {
+            lastError = "Invalid BLE pairing secret"
+            authTimeoutTask?.cancel()
+            disconnect()
+            return
+        }
+
+        if response.error == "AUTH_REQUIRED" {
+            if !isAuthenticated {
+                beginAuthentication()
+            }
+            return
+        }
+
+        if response.error == "AUTH_LOCKED" {
+            lastError = "Too many failed auth attempts – reconnect to try again"
+            disconnect()
+        }
+    }
+
+    private func startDisconnectGracePeriod() {
+        disconnectGraceTimer?.invalidate()
+        let graceSeconds = DataStore.shared.spotLockSettings.disconnectGracePeriodSeconds
+        connectionState = .reconnecting
+
+        disconnectGraceTimer = Timer.scheduledTimer(
+            withTimeInterval: graceSeconds,
+            repeats: false
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if self.connectionState == .reconnecting {
+                    self.connectionState = .disconnected
+                }
+            }
+        }
     }
 
     private func startRSSIMonitoring() {
@@ -248,6 +369,11 @@ class BluetoothManager: NSObject, ObservableObject {
         lastLocationUpdate = nil
         isCalibrating = false
         calibrationData = nil
+        isAuthenticated = false
+        pendingCommands.removeAll()
+        autoUploadPending = false
+        authTimeoutTask?.cancel()
+        authTimeoutTask = nil
         rssi = -100
         signalStrength = .disconnected
     }
@@ -355,6 +481,7 @@ class BluetoothManager: NSObject, ObservableObject {
         // Generic command acknowledgment
         if let response = try? JSONDecoder().decode(BleResponse.self, from: data) {
             self.lastResponse = response
+            handleAuthResponse(response)
 
             if let ack = response.ack {
                 print("[BLE] Response ACK: \(ack)")
@@ -424,6 +551,7 @@ class BluetoothManager: NSObject, ObservableObject {
         
         if let response = try? JSONDecoder().decode(BleResponse.self, from: data) {
             self.lastResponse = response
+            handleAuthResponse(response)
             
             if let ack = response.ack {
                 if ack == "START_CAL" || ack == "CAL_STARTED" {
@@ -485,11 +613,11 @@ extension BluetoothManager: CBCentralManagerDelegate {
 
     nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         Task { @MainActor in
+            disconnectGraceTimer?.invalidate()
             connectionState = .connected
             shouldReconnect = true
             peripheral.discoverServices([BleUuids.service])
             startRSSIMonitoring()
-            // Note: Auto-upload will be triggered when characteristics are discovered
         }
     }
 
@@ -514,11 +642,17 @@ extension BluetoothManager: CBCentralManagerDelegate {
         error: Error?
     ) {
         Task { @MainActor in
-            connectionState = .disconnected
             clearCharacteristics()
             clearDeviceData()
             stopRSSIMonitoring()
-            scheduleReconnect()
+
+            if shouldReconnect {
+                startDisconnectGracePeriod()
+                scheduleReconnect()
+            } else {
+                disconnectGraceTimer?.invalidate()
+                connectionState = .disconnected
+            }
         }
     }
 }
@@ -562,13 +696,11 @@ extension BluetoothManager: CBPeripheralDelegate {
                 }
             }
 
-            // Check if all required characteristics are ready
             if commandChar != nil {
                 characteristicsReady = true
-                print("[BLE] All characteristics discovered - triggering auto-upload")
-                autoUploadCalibration()
-                autoUploadSpotLockSettings()
-                autoUploadNavSettings()
+                print("[BLE] All characteristics discovered - starting authentication")
+                autoUploadPending = true
+                beginAuthentication()
             }
         }
     }

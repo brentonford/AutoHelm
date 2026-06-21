@@ -101,6 +101,7 @@ enum ConnectionState: String {
     case disconnected = "Disconnected"
     case scanning = "Scanning..."
     case connecting = "Connecting..."
+    case reconnecting = "Reconnecting..."
     case connected = "Connected"
 }
 

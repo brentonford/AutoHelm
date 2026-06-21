@@ -28,7 +28,7 @@ struct NavigateSheet: View {
     }
 
     private var canNavigate: Bool {
-        bluetooth.connectionState == .connected &&
+        bluetooth.isOperational &&
         (bluetooth.sensorData?.isNavigationReady ?? false)
     }
 
@@ -71,7 +71,7 @@ struct NavigateSheet: View {
                 if !canNavigate {
                     Section {
                         Label(
-                            bluetooth.connectionState == .connected
+                            bluetooth.isOperational
                                 ? "GPS fix required to navigate"
                                 : "Connect to Helm to navigate",
                             systemImage: "exclamationmark.triangle"

@@ -444,31 +444,59 @@ void processEmergencyStop() {
     }
 }
 
-void checkBleDisconnect() {
-    if (ble.wasJustDisconnected()) {
-        Serial.println("[Safety] BLE disconnected");
+bool disconnectSafetyPending = false;
+uint32_t disconnectSafetyDeadlineMs = 0;
 
-        if (helmMode.isAutonomousActive()) {
-            Serial.println("[Safety] Autonomous control active – continuing operation");
-        } else {
-            portENTER_CRITICAL(&holdStateMux);
-            bool wasHoldActive = isHoldActive;
-            isHoldActive = false;
-            portEXIT_CRITICAL(&holdStateMux);
+void executeBleDisconnectSafety() {
+    Serial.println("[Safety] BLE disconnect grace expired");
 
-            if (wasHoldActive) {
-                Serial.println("[Safety] Stopping manual hold transmission");
-                if (remoteAvailable) {
-                    remote.transmitSingle(Button::Release);
-                }
-            }
-
-            manualBurst.active = false;
-            startEmergencyStop();
-        }
-
-        ble.clearDisconnectFlag();
+    if (helmMode.isAutonomousActive()) {
+        Serial.println("[Safety] Autonomous control active – continuing operation");
+        return;
     }
+
+    portENTER_CRITICAL(&holdStateMux);
+    bool wasHoldActive = isHoldActive;
+    isHoldActive = false;
+    portEXIT_CRITICAL(&holdStateMux);
+
+    if (wasHoldActive) {
+        Serial.println("[Safety] Stopping manual hold transmission");
+        if (remoteAvailable) {
+            remote.transmitSingle(Button::Release);
+        }
+    }
+
+    manualBurst.active = false;
+    startEmergencyStop();
+}
+
+void checkBleDisconnect() {
+    uint32_t now = millis();
+
+    if (ble.isConnected()) {
+        if (disconnectSafetyPending) {
+            disconnectSafetyPending = false;
+            Serial.println("[Safety] BLE reconnected within grace period – safety stop cancelled");
+        }
+        return;
+    }
+
+    if (ble.wasJustDisconnected()) {
+        ble.clearDisconnectFlag();
+        disconnectSafetyPending = true;
+        disconnectSafetyDeadlineMs = now + ble.getDisconnectGracePeriodMs();
+        Serial.printf("[Safety] BLE disconnected – grace period %lu ms before safety stop\n",
+                      static_cast<unsigned long>(ble.getDisconnectGracePeriodMs()));
+        return;
+    }
+
+    if (!disconnectSafetyPending || now < disconnectSafetyDeadlineMs) {
+        return;
+    }
+
+    disconnectSafetyPending = false;
+    executeBleDisconnectSafety();
 }
 
 void setup() {

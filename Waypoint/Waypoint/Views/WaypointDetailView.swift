@@ -15,7 +15,7 @@ struct WaypointDetailView: View {
     @State private var showNavigateSheet = false
 
     private var canNavigate: Bool {
-        bluetooth.connectionState == .connected &&
+        bluetooth.isOperational &&
         (bluetooth.sensorData?.isNavigationReady ?? false)
     }
 

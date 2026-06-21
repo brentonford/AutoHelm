@@ -10,6 +10,7 @@ struct SettingsView: View {
         List {
             calibrationSection
             northCalibrationSection
+            bleSecuritySection
             deviceSection
             spotLockSection
             dataSection
@@ -69,7 +70,7 @@ struct SettingsView: View {
                     Text(dataStore.calibration.isCalibrated ? "Recalibrate Compass" : "Calibrate Compass")
                 }
             }
-            .disabled(bluetooth.connectionState != .connected)
+            .disabled(!bluetooth.isOperational)
             
             if dataStore.calibration.isCalibrated {
                 Button {
@@ -80,7 +81,7 @@ struct SettingsView: View {
                         Text("Send to Helm")
                     }
                 }
-                .disabled(bluetooth.connectionState != .connected)
+                .disabled(!bluetooth.isOperational)
             }
         } header: {
             Text("Compass")
@@ -142,7 +143,7 @@ struct SettingsView: View {
                     Text("Calibrate North")
                 }
             }
-            .disabled(bluetooth.connectionState != .connected || bluetooth.sensorData == nil)
+            .disabled(!bluetooth.isOperational || bluetooth.sensorData == nil)
             
             if dataStore.calibration.headingOffset != 0 {
                 Button(role: .destructive) {
@@ -156,7 +157,7 @@ struct SettingsView: View {
                         Text("Reset North Offset")
                     }
                 }
-                .disabled(bluetooth.connectionState != .connected)
+                .disabled(!bluetooth.isOperational)
             }
         } header: {
             Text("North Calibration")
@@ -217,6 +218,32 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - BLE Security
+
+    private var bleSecuritySection: some View {
+        Section {
+            SecureField("Pairing Secret", text: $dataStore.bleAuthSecret)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .onChange(of: dataStore.bleAuthSecret) { _, newValue in
+                    dataStore.updateBleAuthSecret(newValue)
+                }
+
+            if bluetooth.connectionState == .connected {
+                HStack {
+                    Text("Command Access")
+                    Spacer()
+                    Text(bluetooth.isAuthenticated ? "Authenticated" : "Awaiting Auth")
+                        .foregroundColor(bluetooth.isAuthenticated ? .green : .orange)
+                }
+            }
+        } header: {
+            Text("BLE Security")
+        } footer: {
+            Text("Set the same secret in Helm/secrets.h as BLE_AUTH_SECRET. Leave empty for development builds with auth disabled. Motor and autonomous commands are rejected until authentication succeeds.")
+        }
+    }
+
     // MARK: - Device Section
     
     private var deviceSection: some View {
@@ -232,7 +259,7 @@ struct SettingsView: View {
                 Button("Connect to Helm") {
                     bluetooth.startScanning()
                 }
-            } else if bluetooth.connectionState == .connected {
+            } else if bluetooth.connectionState == .connected || bluetooth.connectionState == .reconnecting {
                 Button("Disconnect") {
                     bluetooth.disconnect()
                 }
@@ -535,7 +562,7 @@ struct CalibrationView: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(bluetooth.connectionState != .connected)
+                .disabled(!bluetooth.isOperational)
             }
             
         }

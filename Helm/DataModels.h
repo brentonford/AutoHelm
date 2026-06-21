@@ -48,6 +48,7 @@ struct SpotLockSettings {
     float    maxHDOP                   = 5.0f;
     uint8_t  maxConsecutiveGpsFail     = 5;
     uint8_t  filterWindowSize          = 5;  // Deprecated: kept for BLE protocol compat; firmware uses Kalman filter
+    float    disconnectGracePeriodSec  = 5.0f; // BLE disconnect grace before manual-mode safety stop
 };
 
 enum class GpsReadiness : uint8_t {

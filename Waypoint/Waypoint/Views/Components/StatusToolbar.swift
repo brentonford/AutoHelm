@@ -59,15 +59,17 @@ struct StatusIndicator: View {
 struct StatusToolbar: ToolbarContent {
     @ObservedObject var bluetooth: BluetoothManager
     
+    private var hasLiveSensors: Bool {
+        bluetooth.connectionState == .connected && bluetooth.sensorData != nil
+    }
+
     private var compassColor: Color {
-        guard bluetooth.connectionState == .connected else { return .red }
-        guard bluetooth.sensorData != nil else { return .red }
+        guard hasLiveSensors else { return .red }
         return .green
     }
     
     private var navigationColor: Color {
-        guard bluetooth.connectionState == .connected else { return .red }
-        guard let sensors = bluetooth.sensorData else { return .red }
+        guard hasLiveSensors, let sensors = bluetooth.sensorData else { return .red }
         return sensors.isNavigationReady ? .green : .orange
     }
     
@@ -79,7 +81,7 @@ struct StatusToolbar: ToolbarContent {
                     signalStrength: bluetooth.signalStrength
                 )
                 
-                if bluetooth.connectionState == .connected, let sensors = bluetooth.sensorData {
+                if hasLiveSensors, let sensors = bluetooth.sensorData {
                     GPSQualityIndicator(
                         label: "GPS:",
                         quality: sensors.gpsQuality
