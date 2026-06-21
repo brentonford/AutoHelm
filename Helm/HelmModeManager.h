@@ -18,7 +18,7 @@ public:
     void requestNavCancel();
     void requestSpotLockEngage(float lat, float lon);
     void requestSpotLockDisengage();
-    void requestSpotLockJog(SpotLockJogDir dir);
+    bool requestSpotLockJog(SpotLockJogDir dir);
 
     void applyNavSettings(const SpotLockSettings& settings);
     void applySpotLockSettings(const SpotLockSettings& settings);

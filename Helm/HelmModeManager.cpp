@@ -183,10 +183,11 @@ void HelmModeManager::requestSpotLockDisengage() {
     _ble.sendResponse("{\"ack\":\"SPOTLOCK_DISENGAGED\"}");
 }
 
-void HelmModeManager::requestSpotLockJog(SpotLockJogDir dir) {
-    if (_mode == Mode::SpotLock) {
-        _spotLock.jog(dir);
+bool HelmModeManager::requestSpotLockJog(SpotLockJogDir dir) {
+    if (_mode != Mode::SpotLock) {
+        return false;
     }
+    return _spotLock.jog(dir);
 }
 
 void HelmModeManager::applyNavSettings(const SpotLockSettings& settings) {

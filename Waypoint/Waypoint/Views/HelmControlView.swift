@@ -4,12 +4,18 @@ import CoreLocation
 struct HelmControlView: View {
     @EnvironmentObject var bluetooth: BluetoothManager
     @EnvironmentObject var spotLockController: SpotLockController
-    
+    @EnvironmentObject var navController: WaypointNavController
+
     private var canNavigate: Bool {
         bluetooth.connectionState == .connected &&
         bluetooth.sensorData?.isNavigationReady == true
     }
-    
+
+    private var autonomousModeActive: Bool {
+        navController.isActive || navController.isStarting ||
+        spotLockController.isActive || spotLockController.isEngaging
+    }
+
     private var bearing: Double? {
         guard let sensors = bluetooth.sensorData,
               let lockPos = spotLockController.lockPosition else { return nil }
@@ -28,35 +34,47 @@ struct HelmControlView: View {
             StatusToolbar(bluetooth: bluetooth)
         }
     }
-    
+
     private var motorControlSection: some View {
         Section {
-            ManualMotorControls(bluetooth: bluetooth) {
-                Task {
-                    await spotLockController.disengage()
+            ManualMotorControls(
+                bluetooth: bluetooth,
+                isDisabled: autonomousModeActive,
+                onManualControl: {
+                    Task {
+                        if navController.isActive || navController.isStarting {
+                            navController.cancel()
+                        }
+                        if spotLockController.isActive || spotLockController.isEngaging {
+                            await spotLockController.disengage()
+                        }
+                    }
                 }
-            }
+            )
         } header: {
             Text("Manual Remote Control")
         } footer: {
-            Text("Manual control automatically disables Spot Lock")
+            if autonomousModeActive {
+                Text("Manual control is disabled while navigation or Spot Lock is active. Using manual control cancels autonomous modes.")
+            } else {
+                Text("Manual control cancels any active navigation or Spot Lock")
+            }
         }
     }
-    
+
     private var spotLockSection: some View {
         Section {
             SpotLockControls(
                 spotLockController: spotLockController,
                 canNavigate: canNavigate,
+                navIsActive: navController.isActive || navController.isStarting,
                 onEngageHere: {
                     Task {
                         guard let sensors = bluetooth.sensorData else { return }
                         await spotLockController.engage(at: sensors.currentLocation)
                     }
                 },
-                onEngageAtWaypoint: {
-                    // Waypoint functionality removed
-                },
+                onEngageAtWaypoint: {},
                 onDisengage: {
                     Task {
                         await spotLockController.disengage()
@@ -69,21 +87,27 @@ struct HelmControlView: View {
                     spotLockController.jogStop()
                 }
             )
-            
+
+            if navController.isActive || navController.isStarting {
+                Text("Spot Lock is unavailable while navigation is active.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             if spotLockController.isActive, let sensors = bluetooth.sensorData {
                 Divider()
-                
+
                 LabeledContent("Current Heading") {
                     Text(String(format: "%.1f°", sensors.heading))
                         .foregroundColor(.blue)
                 }
-                
+
                 if let bearing = bearing {
                     LabeledContent("Bearing to Lock") {
                         Text(String(format: "%.1f° %@", bearing, cardinalDirection(for: bearing)))
                             .foregroundColor(.green)
                     }
-                    
+
                     LabeledContent("Relative Angle") {
                         let relativeAngle = calculateRelativeAngle(
                             currentHeading: sensors.heading,
@@ -100,19 +124,19 @@ struct HelmControlView: View {
             Text("Maintains position within 2m radius with automatic corrections")
         }
     }
-    
+
     private var connectionSection: some View {
         Section("Helm Device") {
             ConnectionStatus(bluetooth: bluetooth)
-            
+
             if !bluetooth.commandHistory.isEmpty {
                 Divider()
-                
+
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Recent Commands")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    
+
                     ForEach(bluetooth.commandHistory) { entry in
                         HStack {
                             Text(entry.command)
@@ -129,7 +153,7 @@ struct HelmControlView: View {
             }
         }
     }
-    
+
     private var gpsStatusSection: some View {
         Section("GPS Status") {
             if let sensors = bluetooth.sensorData {
@@ -140,7 +164,7 @@ struct HelmControlView: View {
             }
         }
     }
-    
+
     private var compassSection: some View {
         Section("Compass") {
             if let sensors = bluetooth.sensorData {
@@ -151,13 +175,13 @@ struct HelmControlView: View {
             }
         }
     }
-    
+
     private func cardinalDirection(for bearing: Double) -> String {
         let directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
         let index = Int((bearing + 22.5) / 45.0) % 8
         return directions[index]
     }
-    
+
     private func calculateRelativeAngle(currentHeading: Double, targetBearing: Double) -> Double {
         var angle = targetBearing - currentHeading
         while angle > 180 {
@@ -174,4 +198,5 @@ struct HelmControlView: View {
     HelmControlView()
         .environmentObject(BluetoothManager())
         .environmentObject(SpotLockController(bluetooth: BluetoothManager()))
+        .environmentObject(WaypointNavController(bluetooth: BluetoothManager()))
 }

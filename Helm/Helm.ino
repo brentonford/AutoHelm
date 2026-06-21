@@ -167,7 +167,9 @@ void processSpotLockCommand() {
             break;
 
         case SpotLockCommand::Jog:
-            helmMode.requestSpotLockJog(ble.getSlJogDir());
+            if (helmMode.requestSpotLockJog(ble.getSlJogDir())) {
+                ble.sendResponse("{\"ack\":\"SPOTLOCK_JOG\"}");
+            }
             break;
 
         case SpotLockCommand::None:

@@ -23,7 +23,7 @@ public:
 
     void engage(float lat, float lon);
     void disengage();
-    void jog(SpotLockJogDir dir);
+    bool jog(SpotLockJogDir dir);
     void applySettings(const SpotLockSettings& s);
     void update(const GpsData& gps, float compassHeading);
 
@@ -48,6 +48,7 @@ private:
     float _lockLat     = 0.0f;
     float _lockLon     = 0.0f;
     bool  _applyingThrust = false;
+    uint32_t _lastJogMs   = 0;
 
     void runCorrectionLogic(const GpsData& gps, float heading, uint32_t now);
     void processDeadReckoning(uint32_t now);

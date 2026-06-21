@@ -37,15 +37,20 @@ inline float normalizeAngle180(float angle) {
     return angle;
 }
 
-// Flat-earth destination projection.
-// Accurate to ~0.01% within a few hundred metres at latitudes below 60°;
-// error grows at higher latitudes (the constant 111320 is calibrated at the equator).
-inline void calcDestination(float lat, float lon, float headingDeg, float distM,
-                             float& outLat, float& outLon) {
-    float rad  = headingDeg * (float)DEG_TO_RAD;
-    float mpdl = 111320.0f;  // metres per degree of latitude (equatorial approximation)
-    outLat = lat + (distM / mpdl) * cosf(rad);
-    outLon = lon + (distM / (mpdl * cosf(lat * (float)DEG_TO_RAD))) * sinf(rad);
+// Great-circle destination from start point, initial bearing, and distance.
+inline void calcDestination(float latDeg, float lonDeg, float bearingDeg, float distM,
+                            float& outLat, float& outLon) {
+    float lat  = latDeg * (float)DEG_TO_RAD;
+    float lon  = lonDeg * (float)DEG_TO_RAD;
+    float brng = bearingDeg * (float)DEG_TO_RAD;
+    float ang  = distM / EARTH_RADIUS_M;
+
+    float lat2 = asinf(sinf(lat) * cosf(ang) + cosf(lat) * sinf(ang) * cosf(brng));
+    float lon2 = lon + atan2f(sinf(brng) * sinf(ang) * cosf(lat),
+                              cosf(ang) - sinf(lat) * sinf(lat2));
+
+    outLat = lat2 * (float)RAD_TO_DEG;
+    outLon = fmodf(lon2 * (float)RAD_TO_DEG + 540.0f, 360.0f) - 180.0f;
 }
 
 // Calibration table: estimated boat speed in m/s at each motor speed level 0–10.

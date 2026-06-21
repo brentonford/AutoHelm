@@ -14,6 +14,7 @@ class SpotLockController: ObservableObject {
 
     @Published var lockPosition: CLLocationCoordinate2D?
     @Published private(set) var isActive: Bool = false
+    @Published private(set) var isEngaging: Bool = false
     @Published private(set) var isDisengaging: Bool = false
     @Published private(set) var distanceFromLock: Double = 0
     @Published private(set) var isApplyingThrust: Bool = false
@@ -62,12 +63,14 @@ class SpotLockController: ObservableObject {
     private let bluetooth: BluetoothManager
     private var cancellables = Set<AnyCancellable>()
     private var jogTimer: Timer?
+    private var engageTimeoutTask: Task<Void, Never>?
 
     // MARK: - Initialization
 
     init(bluetooth: BluetoothManager) {
         self.bluetooth = bluetooth
         observeSensorData()
+        observeResponses()
     }
 
     // MARK: - Observe device telemetry
@@ -81,14 +84,21 @@ class SpotLockController: ObservableObject {
 
                 let active = faulted ? false : (data?.isSpotLockActive ?? false)
 
-                // Telemetry-driven disengage: clear the disengaging flag as soon as the
-                // device confirms sl_active = false, rather than relying on a fixed delay.
                 if self.isDisengaging && !active {
                     self.isDisengaging = false
                 }
 
+                if active {
+                    self.isEngaging = false
+                    self.engageTimeoutTask?.cancel()
+                    self.engageTimeoutTask = nil
+                }
+
                 if faulted {
                     self.isDisengaging = false
+                    self.isEngaging = false
+                    self.engageTimeoutTask?.cancel()
+                    self.engageTimeoutTask = nil
                 }
 
                 self.isActive = active
@@ -102,10 +112,30 @@ class SpotLockController: ObservableObject {
                     self.currentSpeedLevel        = data.spotLockSpeed
                     self.cableRotation            = data.spotLockRotation
                     self.isCableTangled           = data.spotLockTangled
-                } else if !active {
+                } else if !active && !self.isEngaging {
                     self.distanceFromLock  = 0
                     self.isApplyingThrust  = false
                     self.currentSpeedLevel = 0
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func observeResponses() {
+        bluetooth.$lastResponse
+            .compactMap { $0 }
+            .sink { [weak self] response in
+                guard let self else { return }
+                guard self.isEngaging else { return }
+
+                if response.ack == "SPOTLOCK_ENGAGED" {
+                    self.isEngaging = false
+                    self.engageTimeoutTask?.cancel()
+                    self.engageTimeoutTask = nil
+                } else if response.error != nil {
+                    self.isEngaging = false
+                    self.engageTimeoutTask?.cancel()
+                    self.engageTimeoutTask = nil
                 }
             }
             .store(in: &cancellables)
@@ -115,28 +145,32 @@ class SpotLockController: ObservableObject {
 
     /// Uploads current settings then engages SpotLock at the given position.
     func engage(at position: CLLocationCoordinate2D) async {
-        // Upload settings first so device has latest values before starting
         bluetooth.sendSpotLockSettings(DataStore.shared.spotLockSettings)
 
-        // Small gap so the settings write arrives before engage
         try? await Task.sleep(for: .milliseconds(150))
 
+        lockPosition = position
+        isEngaging = true
+        isDisengaging = false
         bluetooth.engageSpotLock(at: position)
 
-        // Optimistic local update – device will confirm via sl_active within 500 ms
-        lockPosition = position
-        isActive = true
+        engageTimeoutTask?.cancel()
+        engageTimeoutTask = Task {
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled, self.isEngaging, !self.isActive else { return }
+            self.isEngaging = false
+        }
     }
 
     /// Sends disengage command to the device.
-    /// The `isDisengaging` flag is cleared when the device confirms `sl_active = false`
-    /// via telemetry, rather than after a hardcoded delay.
     func disengage() async {
-        guard isActive else { return }
+        guard isActive || isEngaging else { return }
+        isEngaging = false
+        engageTimeoutTask?.cancel()
+        engageTimeoutTask = nil
         isDisengaging = true
         stopJog()
         bluetooth.disengageSpotLock()
-        // isDisengaging cleared by observeSensorData() when sl_active → false
     }
 
     /// Starts sending jog commands to the device (call on button press).

@@ -40,8 +40,15 @@ void SpotLockController::disengage() {
     }
 }
 
-void SpotLockController::jog(SpotLockJogDir dir) {
-    if (!_active) return;
+bool SpotLockController::jog(SpotLockJogDir dir) {
+    if (!_active) return false;
+
+    uint32_t now = millis();
+    constexpr uint32_t JOG_MIN_INTERVAL_MS = 200;
+    if (_lastJogMs > 0 && (now - _lastJogMs) < JOG_MIN_INTERVAL_MS) {
+        return false;
+    }
+    _lastJogMs = now;
 
     float headingDeg;
     switch (dir) {
@@ -60,6 +67,7 @@ void SpotLockController::jog(SpotLockJogDir dir) {
     _state.lockLon = _lockLon;
 
     Serial.printf("[SpotLock] JOG -> %.6f, %.6f\n", _lockLat, _lockLon);
+    return true;
 }
 
 void SpotLockController::applySettings(const SpotLockSettings& s) {

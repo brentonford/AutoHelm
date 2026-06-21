@@ -3,6 +3,7 @@ import CoreLocation
 
 struct ManualMotorControls: View {
     let bluetooth: BluetoothManager
+    let isDisabled: Bool
     let onManualControl: () -> Void
     
     @State private var activeHoldButton: String?
@@ -47,9 +48,12 @@ struct ManualMotorControls: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
+        .opacity(isDisabled ? 0.45 : 1.0)
+        .disabled(isDisabled)
     }
     
     private func startHoldCommand(_ command: String, label: String) {
+        guard !isDisabled else { return }
         onManualControl()
         activeHoldButton = label
         bluetooth.sendCommand(command)
@@ -66,6 +70,7 @@ struct ManualMotorControls: View {
     }
 
     private func sendMomentaryCommand(_ command: String, label: String) {
+        guard !isDisabled else { return }
         onManualControl()
         activeMomentaryButton = label
         bluetooth.sendCommand(command)
@@ -132,6 +137,7 @@ struct MomentaryButton: View {
 struct SpotLockControls: View {
     let spotLockController: SpotLockController
     let canNavigate: Bool
+    let navIsActive: Bool
     let onEngageHere: () -> Void
     let onEngageAtWaypoint: () -> Void
     let onDisengage: () -> Void
@@ -142,7 +148,9 @@ struct SpotLockControls: View {
     
     var body: some View {
         VStack(spacing: 12) {
-            if spotLockController.isDisengaging {
+            if spotLockController.isEngaging {
+                engagingIndicator
+            } else if spotLockController.isDisengaging {
                 disengagingIndicator
             } else {
                 HStack {
@@ -214,7 +222,7 @@ struct SpotLockControls: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.blue)
-                    .disabled(!canNavigate)
+                    .disabled(!canNavigate || navIsActive)
                     .alert("Motor Initialization Required", isPresented: $showingInitWarning) {
                         Button("Cancel", role: .cancel) { }
                         Button("Continue") {
@@ -228,6 +236,26 @@ struct SpotLockControls: View {
         }
     }
     
+    private var engagingIndicator: some View {
+        VStack(spacing: 12) {
+            HStack {
+                ProgressView()
+                    .scaleEffect(0.8)
+                Text("Engaging...")
+                    .font(.headline)
+                    .foregroundColor(.blue)
+                Spacer()
+            }
+
+            Text("Waiting for device confirmation")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding()
+        .background(Color.blue.opacity(0.1))
+        .cornerRadius(8)
+    }
+
     private var disengagingIndicator: some View {
         VStack(spacing: 12) {
             HStack {

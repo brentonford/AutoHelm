@@ -376,14 +376,13 @@ void BleManager::parseCommand(const char* data) {
     }
 }
 
-String BleManager::buildSensorStatusJson(const GpsData& gpsData, float heading,
+size_t BleManager::buildSensorStatusJson(const GpsData& gpsData, float heading,
                                           const SpotLockState& sl,
                                           const WaypointNavState& nav,
                                           HelmState helmState) {
-    static char json[BleConfig::jsonBufferSize];
+    char* json = _sensorStatusBuffer;
 
-    // Base fields
-    int n = snprintf(json, sizeof(json),
+    int n = snprintf(json, sizeof(_sensorStatusBuffer),
         "{\"has_fix\":%s,\"satellites\":%d,\"currentLat\":%.6f,\"currentLon\":%.6f"
         ",\"altitude\":%.1f,\"hdop\":%.1f,\"heading\":%.1f",
         gpsData.hasFix ? "true" : "false",
@@ -394,7 +393,7 @@ String BleManager::buildSensorStatusJson(const GpsData& gpsData, float heading,
 
     // SpotLock telemetry
     if (sl.active) {
-        n += snprintf(json + n, sizeof(json) - n,
+        n += snprintf(json + n, sizeof(_sensorStatusBuffer) - n,
             ",\"sl_active\":true,\"sl_lat\":%.6f,\"sl_lon\":%.6f"
             ",\"sl_dist\":%.2f,\"sl_bearing\":%.1f,\"sl_speed\":%d"
             ",\"sl_rotation\":%.1f,\"sl_tangled\":%s,\"sl_thrust\":%s",
@@ -405,12 +404,12 @@ String BleManager::buildSensorStatusJson(const GpsData& gpsData, float heading,
             sl.applyingThrust ? "true" : "false"
         );
     } else {
-        n += snprintf(json + n, sizeof(json) - n, ",\"sl_active\":false");
+        n += snprintf(json + n, sizeof(_sensorStatusBuffer) - n, ",\"sl_active\":false");
     }
 
     // Navigation telemetry
     if (nav.active) {
-        n += snprintf(json + n, sizeof(json) - n,
+        n += snprintf(json + n, sizeof(_sensorStatusBuffer) - n,
             ",\"nav_active\":true,\"nav_lat\":%.6f,\"nav_lon\":%.6f"
             ",\"nav_dist\":%.2f,\"nav_bearing\":%.1f,\"nav_speed\":%d,\"nav_arriving\":%s",
             nav.targetLat, nav.targetLon,
@@ -418,16 +417,17 @@ String BleManager::buildSensorStatusJson(const GpsData& gpsData, float heading,
             nav.arriving ? "true" : "false"
         );
     } else {
-        n += snprintf(json + n, sizeof(json) - n, ",\"nav_active\":false");
+        n += snprintf(json + n, sizeof(_sensorStatusBuffer) - n, ",\"nav_active\":false");
     }
 
-    n += snprintf(json + n, sizeof(json) - n, ",\"helm_state\":%d", (uint8_t)helmState);
-    snprintf(json + n, sizeof(json) - n, "}");
+    n += snprintf(json + n, sizeof(_sensorStatusBuffer) - n, ",\"helm_state\":%d", (uint8_t)helmState);
+    n += snprintf(json + n, sizeof(_sensorStatusBuffer) - n, "}");
 
-    if (n < 0 || static_cast<size_t>(n) >= sizeof(json) - 2) {
+    if (n < 0 || static_cast<size_t>(n) >= sizeof(_sensorStatusBuffer) - 1) {
         Serial.println("[BLE] WARNING: JSON buffer truncated in buildSensorStatusJson");
+        return 0;
     }
-    return String(json);
+    return static_cast<size_t>(n);
 }
 
 void BleManager::sendSensorStatus(const GpsData& gpsData, float heading,
@@ -443,13 +443,13 @@ void BleManager::sendSensorStatus(const GpsData& gpsData, float heading,
 
     _lastStatusTime = now;
 
-    String json = buildSensorStatusJson(gpsData, heading, slState, navState, helmState);
-    if (json.length() == 0 || json.length() >= BleConfig::jsonBufferSize) {
+    size_t jsonLen = buildSensorStatusJson(gpsData, heading, slState, navState, helmState);
+    if (jsonLen == 0 || jsonLen >= BleConfig::jsonBufferSize) {
         Serial.println("[BLE] WARNING: JSON invalid in sendSensorStatus");
         return;
     }
 
-    _sensorStatusChar->setValue((uint8_t*)json.c_str(), json.length());
+    _sensorStatusChar->setValue((uint8_t*)_sensorStatusBuffer, jsonLen);
     _sensorStatusChar->notify();
 }
 

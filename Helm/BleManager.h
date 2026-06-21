@@ -153,11 +153,12 @@ private:
     volatile bool      _justDisconnected;
     bool               _restartAdvertisingPending;
     uint32_t           _advertisingRestartAtMs;
+    char               _sensorStatusBuffer[BleConfig::jsonBufferSize];
 
     void   drainCommandQueue();
     void   parseCommand(const char* data);
-    String buildSensorStatusJson(const GpsData& gpsData, float heading,
-                                 const SpotLockState& slState,
-                                 const WaypointNavState& navState,
-                                 HelmState helmState);
+    size_t buildSensorStatusJson(const GpsData& gpsData, float heading,
+                                   const SpotLockState& slState,
+                                   const WaypointNavState& navState,
+                                   HelmState helmState);
 };
