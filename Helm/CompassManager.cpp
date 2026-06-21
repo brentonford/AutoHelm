@@ -1,4 +1,10 @@
 #include "CompassManager.h"
+#include <Preferences.h>
+
+namespace CompassNvs {
+    constexpr const char* ns = "compass";
+    constexpr const char* keyValid = "valid";
+}
 
 CompassManager::CompassManager(uint8_t sdaPin, uint8_t sclPin)
     : _sdaPin(sdaPin)
@@ -27,8 +33,54 @@ bool CompassManager::begin() {
     _mmc.setContinuousMode(true);
 
     _initialized = true;
+    loadCalibrationFromNvs();
     Serial.println("[Compass] MMC5603 initialized");
     return true;
+}
+
+void CompassManager::loadCalibrationFromNvs() {
+    Preferences prefs;
+    if (!prefs.begin(CompassNvs::ns, true)) {
+        return;
+    }
+
+    if (!prefs.getBool(CompassNvs::keyValid, false)) {
+        prefs.end();
+        return;
+    }
+
+    _calibration.offsetX       = prefs.getFloat("ox", 0.0f);
+    _calibration.offsetY       = prefs.getFloat("oy", 0.0f);
+    _calibration.offsetZ       = prefs.getFloat("oz", 0.0f);
+    _calibration.scaleX        = prefs.getFloat("sx", 1.0f);
+    _calibration.scaleY        = prefs.getFloat("sy", 1.0f);
+    _calibration.scaleZ        = prefs.getFloat("sz", 1.0f);
+    _calibration.headingOffset = prefs.getFloat("ho", 0.0f);
+    prefs.end();
+
+    Serial.printf("[Compass] Loaded calibration from NVS – Offsets(%.2f,%.2f,%.2f) HeadingOffset(%.1f)\n",
+                  _calibration.offsetX, _calibration.offsetY, _calibration.offsetZ,
+                  _calibration.headingOffset);
+}
+
+void CompassManager::saveCalibrationToNvs(const CompassCalibration& cal) {
+    Preferences prefs;
+    if (!prefs.begin(CompassNvs::ns, false)) {
+        Serial.println("[Compass] WARNING: Failed to open NVS for calibration save");
+        return;
+    }
+
+    prefs.putBool(CompassNvs::keyValid, true);
+    prefs.putFloat("ox", cal.offsetX);
+    prefs.putFloat("oy", cal.offsetY);
+    prefs.putFloat("oz", cal.offsetZ);
+    prefs.putFloat("sx", cal.scaleX);
+    prefs.putFloat("sy", cal.scaleY);
+    prefs.putFloat("sz", cal.scaleZ);
+    prefs.putFloat("ho", cal.headingOffset);
+    prefs.end();
+
+    Serial.println("[Compass] Calibration saved to NVS");
 }
 
 void CompassManager::applyCalibration(float& x, float& y, float& z) {
@@ -180,6 +232,7 @@ bool CompassManager::isDebugEnabled() const {
 
 void CompassManager::setCalibration(const CompassCalibration& cal) {
     _calibration = cal;
+    saveCalibrationToNvs(cal);
     Serial.printf("[Compass] Calibration set - Offsets: %.2f, %.2f, %.2f  Scales: %.3f, %.3f, %.3f  HeadingOffset: %.1f\n",
         cal.offsetX, cal.offsetY, cal.offsetZ,
         cal.scaleX, cal.scaleY, cal.scaleZ,
@@ -245,6 +298,7 @@ void CompassManager::stopCalibration() {
     _calibration.scaleY = scaleY;
     _calibration.scaleZ = scaleZ;
     // Note: headingOffset is NOT changed during magnetometer calibration
+    saveCalibrationToNvs(_calibration);
 
     Serial.printf("[Compass] Calibration complete - %lu samples in %lu ms\n", _calSampleCount, calibrationDuration);
     Serial.printf("[Compass] Min: %.2f, %.2f, %.2f  Max: %.2f, %.2f, %.2f\n",

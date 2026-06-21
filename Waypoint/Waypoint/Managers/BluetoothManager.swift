@@ -260,6 +260,13 @@ class BluetoothManager: NSObject, ObservableObject {
     }
 
     @MainActor
+    private func autoUploadNavSettings() {
+        guard commandChar != nil else { return }
+        print("[BLE] Auto-uploading Nav settings on connect...")
+        sendNavSettings(DataStore.shared.navSettings)
+    }
+
+    @MainActor
     private func autoUploadCalibration() {
         let calibration = DataStore.shared.calibration
         
@@ -561,6 +568,7 @@ extension BluetoothManager: CBPeripheralDelegate {
                 print("[BLE] All characteristics discovered - triggering auto-upload")
                 autoUploadCalibration()
                 autoUploadSpotLockSettings()
+                autoUploadNavSettings()
             }
         }
     }

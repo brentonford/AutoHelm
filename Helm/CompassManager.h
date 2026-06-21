@@ -69,4 +69,6 @@ private:
     void applyCalibration(float& x, float& y, float& z);
     float normalizeHeading(float heading);
     void updateCalibrationMinMax(float x, float y, float z);
+    void loadCalibrationFromNvs();
+    void saveCalibrationToNvs(const CompassCalibration& cal);
 };

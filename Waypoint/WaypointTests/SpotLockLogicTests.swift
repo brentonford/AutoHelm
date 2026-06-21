@@ -288,50 +288,59 @@ final class GPSQualityTests: XCTestCase {
     }
 }
 
-// MARK: - Position Filter Tests
+// MARK: - Kalman Distance Filter Tests (mirrors firmware KalmanFilter1D in NavMath.h)
 
-final class PositionFilterTests: XCTestCase {
+final class KalmanDistanceFilterTests: XCTestCase {
 
-    // Reproduce the sliding-window average from SpotLockController.addToPositionHistory
-    private func averageCoord(_ samples: [CLLocationCoordinate2D]) -> CLLocationCoordinate2D {
-        let avgLat = samples.map { $0.latitude  }.reduce(0, +) / Double(samples.count)
-        let avgLon = samples.map { $0.longitude }.reduce(0, +) / Double(samples.count)
-        return CLLocationCoordinate2D(latitude: avgLat, longitude: avgLon)
-    }
+    private struct KalmanFilter1D {
+        var x: Double = 0
+        var p: Double = 9999
+        static let q = 0.25
+        static let r = 2.25
 
-    func test_singleSample_returnsItself() {
-        let c = CLLocationCoordinate2D(latitude: -33.0, longitude: 151.0)
-        let avg = averageCoord([c])
-        XCTAssertEqual(avg.latitude,  c.latitude,  accuracy: 0.000001)
-        XCTAssertEqual(avg.longitude, c.longitude, accuracy: 0.000001)
-    }
-
-    func test_twoIdentical_returnsSame() {
-        let c = CLLocationCoordinate2D(latitude: -33.0, longitude: 151.0)
-        let avg = averageCoord([c, c])
-        XCTAssertEqual(avg.latitude,  c.latitude,  accuracy: 0.000001)
-        XCTAssertEqual(avg.longitude, c.longitude, accuracy: 0.000001)
-    }
-
-    func test_twoOpposites_returnsMidpoint() {
-        let a = CLLocationCoordinate2D(latitude: -33.0, longitude: 151.0)
-        let b = CLLocationCoordinate2D(latitude: -33.002, longitude: 151.002)
-        let avg = averageCoord([a, b])
-        XCTAssertEqual(avg.latitude,  -33.001,  accuracy: 0.000001)
-        XCTAssertEqual(avg.longitude, 151.001, accuracy: 0.000001)
-    }
-
-    func test_noisyJitter_reducesVariance() {
-        // Simulate 5 noisy samples around a true position
-        let truth = CLLocationCoordinate2D(latitude: -33.0, longitude: 151.0)
-        let jitter: [Double] = [0.00002, -0.00003, 0.00001, -0.00001, 0.00002]
-        let samples = jitter.map {
-            CLLocationCoordinate2D(latitude: truth.latitude + $0,
-                                   longitude: truth.longitude - $0)
+        mutating func update(_ z: Double) -> Double {
+            p += Self.q
+            let k = p / (p + Self.r)
+            x += k * (z - x)
+            p *= (1 - k)
+            return x
         }
-        let avg = averageCoord(samples)
-        // Average jitter is 0.000002 — much smaller than max 0.00003
-        XCTAssertEqual(avg.latitude,  truth.latitude,  accuracy: 0.00005)
-        XCTAssertEqual(avg.longitude, truth.longitude, accuracy: 0.00005)
+
+        mutating func reset() {
+            x = 0
+            p = 9999
+        }
+    }
+
+    func test_firstMeasurement_convergesToInput() {
+        var filter = KalmanFilter1D()
+        let result = filter.update(12.5)
+        XCTAssertEqual(result, 12.5, accuracy: 0.01)
+    }
+
+    func test_noisySequence_smoothsTowardMean() {
+        var filter = KalmanFilter1D()
+        let measurements = [10.0, 12.0, 11.0, 13.0, 11.5]
+        var last = 0.0
+        for z in measurements {
+            last = filter.update(z)
+        }
+        XCTAssertEqual(last, 11.5, accuracy: 0.5)
+    }
+
+    func test_reset_clearsState() {
+        var filter = KalmanFilter1D()
+        _ = filter.update(20.0)
+        filter.reset()
+        XCTAssertEqual(filter.x, 0.0, accuracy: 0.0001)
+        XCTAssertEqual(filter.p, 9999.0, accuracy: 0.0001)
+    }
+
+    func test_stepChange_tracksWithoutSlidingWindowLag() {
+        var filter = KalmanFilter1D()
+        for _ in 0..<5 { _ = filter.update(5.0) }
+        let afterJump = filter.update(15.0)
+        XCTAssertGreaterThan(afterJump, 8.0)
+        XCTAssertLessThan(afterJump, 15.0)
     }
 }
