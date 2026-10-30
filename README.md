@@ -1,447 +1,258 @@
-# AutoHelm - GPS Navigation System
+# AutoHelm
 
-AutoHelm is a GPS-guided autonomous position-hold system for electric trolling motors. The Helm device (ESP32-S3) runs the full Spot Lock algorithm onboard — reading sensors, computing corrections, and transmitting RF motor commands without requiring a phone connection. The Waypoint iOS app provides configuration, monitoring, and manual control.
+AutoHelm holds a Watersnake Fierce bow-mount trolling motor on a GPS pin, and drives the boat to a chosen pin at one motor level. An ESP32-S3 helm reads GPS and compass, decides steering and speed, and transmits 433 MHz commands that imitate the Watersnake handset. The Waypoint iOS app configures the helm, shows its state, and sends high-level commands.
 
-## System Architecture
+The control loop runs on the helm. Once spot lock or navigation is running, the boat keeps that mode if the phone disconnects.
+
+This is a working prototype on the current parts: NEO-6M GPS, MMC5603 compass, LIS3DH accelerometer, CC1101 radio, and ESP32-S3. It has not completed a water acceptance test. [docs/design-spec.md](docs/design-spec.md) is the contract for the control behavior still to be brought in line with that test.
+
+## Architecture
 
 ```mermaid
 graph TB
-    A[iOS Waypoint App] -->|Settings / Engage / Jog| B[ESP32 Helm Device]
-    B -->|Sensor + SpotLock Telemetry| A
-
-    B --> C[GPS Module NEO-6M]
-    B --> D[MMC5603 Magnetometer]
-    B --> F[CC1101 RF Controller]
-    F -->|433.017MHz| H[Trolling Motor]
-
-    subgraph "Helm Device - Onboard Algorithm"
-        B --> SL[SpotLockController]
-        SL --> SL1[Haversine Distance]
-        SL --> SL2[Bearing Calculation]
-        SL --> SL3[Proportional Speed]
-        SL --> SL4[Heading Correction]
-        SL --> SL5[Cable Tangle Detection]
-        SL --> SL6[Position Filtering]
-        SL --> RF[RF Motor Commands]
-    end
-
-    subgraph "iOS App - Configuration & Monitoring"
-        A --> UI1[Settings UI]
-        A --> UI2[Status Display]
-        A --> UI3[Manual Control]
-        A --> UI4[Map View]
-    end
+    App[Waypoint iOS app] -->|Engage, navigate, settings, manual| Helm[ESP32-S3 helm]
+    Helm -->|Telemetry every 500 ms| App
+    Helm --> GPS[NEO-6M GPS]
+    Helm --> Compass[MMC5603 compass]
+    Helm --> Tilt[LIS3DH tilt]
+    Helm --> Mode[HelmModeManager]
+    Mode --> Spot[Spot lock]
+    Mode --> Nav[Navigate to a pin]
+    Mode --> Radio[CC1101]
+    Radio -->|433.017 MHz| Motor[Watersnake Fierce]
 ```
 
-### Component Responsibilities
+| Piece | Responsibility |
+|---|---|
+| `HelmModeManager` | One autonomous user of the radio. Sequences spot lock, navigation, ramp-down, arrival handoff, and GPS fault |
+| `SpotLockController` | Holds a coordinate. Thrust scales with distance outside a dead zone |
+| `WaypointNavController` | Steers to a waypoint, then hands off to spot lock on arrival |
+| `Remote` + `CC1101` | Manchester bursts for the handset button codes. Learns the handset id |
+| `GpsManager` | NMEA on UART2: fix, satellites, HDOP, position |
+| `CompassManager` | MMC5603 heading, hard-iron and soft-iron calibration in NVS |
+| `LIS3DHManager` | Pitch and roll, applied to heading when the accelerometer starts |
+| Waypoint | Map, waypoints, tracks, settings, and a Bluetooth central |
 
-**Helm Device (ESP32-S3):**
-- **Sensors:** Reads GPS position, compass heading, satellite count, DOP values
-- **SpotLock Algorithm:** Runs the full position-hold control loop onboard
-- **RF Control:** Transmits motor commands directly via 433MHz CC1101
-- **BLE Peripheral:** Broadcasts sensor + SpotLock telemetry every 500ms; receives configuration and high-level commands from the app
-- **Autonomous Operation:** Continues holding position if the phone disconnects
+## What the software does today
 
-**Waypoint App (iOS):**
-- **Configuration:** Edits and uploads SpotLock settings to the device
-- **Monitoring:** Displays live distance, bearing, speed level, GPS quality
-- **High-Level Commands:** Engage/disengage, jog lock position, upload calibration
-- **Manual Control:** Sends RF commands directly for manual motor operation
-- **Map View:** Shows Helm location and active lock pin with real-time updates
+- Spot lock and navigate-to-a-pin both run on the helm. The app uploads settings and a target, then renders telemetry.
+- Manual Left, Right, Up, Down, Motor, and Momentary commands are sent only while the helm is Idle or Fault.
+- A BLE disconnect starts a grace timer, default 5 seconds, clamped to 1–30 seconds. Reconnecting inside that window leaves the motor alone. If the timer expires during spot lock or navigation, that mode continues. If it expires while idle, the helm releases a manual hold and runs a safety stop.
+- Optional BLE authentication. An empty `BLE_AUTH_SECRET` leaves auth off for bench work. A non-empty secret must match the secret in Waypoint settings. Privileged commands are refused until `AUTH:` succeeds.
+- The Watersnake handset id can be captured from the app and stored on the helm. See [Handset id](#handset-id).
+- Compass calibration is stored on the helm and uploaded again from the app on connect.
+- Waypoint keeps waypoints and recorded tracks on the phone.
 
-### Data Flow
+Current spot-lock defaults are a 2 m dead zone and a 4 m activation radius. Navigation arrives inside 5 m, then slows across the last 8 m before that radius and hands off to spot lock. Short steering presses default to 200 ms. Those values are what the code ships. They are the values the design spec replaces before a water test.
 
-```
-Sensors → [ESP32] → SpotLockController → RF motor commands → Motor
-                  ↕ BLE (500ms telemetry)
-              [iOS App] → Engage / Settings / Jog
-```
+## Where this is going
 
-The control loop runs entirely on the ESP32. The phone is not in the critical path.
+The next firmware and app work is the control contract in [docs/design-spec.md](docs/design-spec.md). The radio, GPS, compass, tilt, and BLE transport stay. The control loop is what changes.
 
-## Key Features
+Target behavior on the current NEO-6M:
 
-- **Device-Side Autonomous Navigation:** Full Spot Lock algorithm runs on the ESP32, no phone required once engaged
-- **Autonomous BLE-Disconnect Survival:** Motor holds position if phone disconnects mid-session
-- **Proportional Position Hold:** Thrust and steering scale with distance error, dead-zone hysteresis prevents hunting
-- **Non-Blocking Control Loop:** Steering holds and speed steps run as state machines — main loop never blocks
-- **Cable Tangle Prevention:** Tracks cumulative rotation; automatically reverses to untangle
-- **Configurable Settings:** 20+ parameters uploaded from the iOS app and stored on device
-- **Manual Override:** Manual motor buttons immediately disengage Spot Lock
-- **Compass Calibration:** Hard-iron/soft-iron calibration with heading offset, persisted on device
+- Spot lock thrusts only outside about 12 m and stops thrusting inside about 8 m.
+- Navigation holds the motor level chosen for that trip until the boat is inside a 15 m arrival radius, then spot-locks that pin. There is no slow-down zone.
+- A motor press is a stream of bursts for at least 500 ms, normally 1 second, then one Release. A single burst is not a press.
+- Engaging from an unknown speed zeros the motor with ten 1-second Down presses before any Up.
+- A persistent heading error keeps producing steering in that direction.
+- GPS failures count once per correction cycle. One stale sample does not end the mode.
+- The app locks manual controls while `helm_state` is 1, 2, or 4, including zeroing and ramp-down.
 
-## Technology Stack
+Out of scope for that work: multi-waypoint routes, closed-loop speed in knots, a new radio protocol, and a rewrite of the iOS app. A later hardware step, only after this software holds on the water, is a small production board and ACMA compliance for 433 MHz. The first GPS improvement, if the NEO-6M antenna placement is not enough, is a clear-sky L1 antenna on the existing receiver.
 
-**ESP32 Hardware:**
-- ESP32-S3 Mini (or compatible ESP32 with SPI, UART2, I2C)
-- U-blox NEO-6M GPS Module
-- PiicoDev Magnetometer MMC5603 (I2C)
-- CC1101 433MHz RF Transceiver Module
+The December 2025 wishlist in `AutoHelm roadmap 202512.md` is not the current plan.
 
-**iOS App:**
-- Swift 5.0 / SwiftUI
-- MapKit, Core Location, Core Bluetooth
-- Combine for reactive state sync from BLE telemetry
-- iOS 17.0+ deployment target
+## Hardware
 
-## Hardware Setup
-
-**Pin Configuration:**
+All radio and sensor modules are 3.3 V. Do not feed them 5 V.
 
 | Function | GPIO | Notes |
-|----------|------|-------|
-| CC1101 CS | 5 | SPI Chip Select |
-| CC1101 GDO0 | 4 | TX Data (RMT output) |
-| CC1101 SCK | 18 | SPI Clock |
-| CC1101 MISO | 19 | SPI Data In |
-| CC1101 MOSI | 23 | SPI Data Out |
-| GPS RX | 16 | UART2 RX (from GPS TX) |
-| GPS TX | 17 | UART2 TX (to GPS RX) — optional |
-| I2C SDA | 21 | Magnetometer |
-| I2C SCL | 22 | Magnetometer |
+|---|---|---|
+| CC1101 CS | 5 | SPI chip select |
+| CC1101 GDO0 | 4 | Transmit data, and receive data during handset capture |
+| CC1101 SCK / MISO / MOSI | 18 / 19 / 23 | SPI |
+| GPS RX / TX | 16 / 17 | UART2, 9600 8N1. GPS TX goes to GPIO 16 |
+| I2C SDA / SCL | 21 / 22 | MMC5603 at `0x30`, LIS3DH at `0x19` |
 
-**Power:**
-- CC1101: 3.3V only
-- GPS Module: 3.3V (NEO-6M)
-- Magnetometer: 3.3V
-- ESP32: USB or regulated supply
+The helm does not switch the motor's power. The operator turns the motor on. Autonomy transmits Left, Right, Up, Down, and Release.
 
-**CRITICAL:** Do NOT connect 5V to 3.3V-only modules.
+Serial console: 115200 baud. `R/L/U/D/M/S` hold a button, `r/l/u/d/m/s` send one burst, `0` sends Release, `g`/`G` GPS, `c`/`C` compass, `v` sensor status. Motor keys are ignored while a handset capture is listening.
 
-## Installation
+## Firmware
 
-### Firmware
+1. Install the ESP32 board package and the **Adafruit MMC56x3** library in the Arduino IDE.
+2. Copy `Helm/secrets.h.example` to `Helm/secrets.h`. `secrets.h` is gitignored.
+3. Leave `DEVICE_ID` as `000000000000` and capture the handset from Waypoint, or paste a known 12-digit id.
+4. Leave `BLE_AUTH_SECRET` empty for bench work, or set the same 8–64 character secret the app will send.
+5. Open `Helm/Helm.ino`. Board: ESP32-S3. Upload.
 
-1. **Clone repository:**
-   ```bash
-   git clone https://github.com/brentonford/AutoHelm.git
-   cd AutoHelm/Helm
-   ```
+`000000000000` is not a valid id. Until a real id is stored, the helm will not transmit.
 
-2. **Install required library:**
-   - Arduino IDE → Library Manager → install **Adafruit MMC56x3**
+### Handset id
 
-3. **Upload:**
-   - Board: ESP32-S3 Dev Module (or ESP32 Dev Module)
-   - Upload `Helm.ino`
+Each Fierce handset has its own 48-bit id. The button codes are fixed. Waypoint learns the id:
 
-### iOS App
+1. Connect to the helm. Spot lock and navigation must be idle.
+2. **Settings → Motor Remote → Capture from handset.**
+3. Hold the handset next to the helm. Press one button until the app names it, then press a different button on the same handset.
+4. The helm stores the id in NVS under the namespace `remote`, key `devid`. That id overrides `secrets.h` on later boots.
 
-1. ```bash
-   cd AutoHelm/Waypoint
-   open Waypoint.xcodeproj
-   ```
+The handset still commands the motor while the helm is only listening, so those two presses can move the prop. Keep the prop clear. Release presses are ignored. The listen window is 45 seconds. **Forget saved handset** clears the stored id.
 
-2. Set your Development Team in Signing & Capabilities
+If the helm never reports a button, an RTL-SDR remains a fallback:
 
-3. Build and run (Cmd+R)
-
-## Bluetooth Communication
-
-**Service UUID:** `0000FFE0-0000-1000-8000-00805F9B34FB`
-**Device Name:** `Helm`
-
-### Characteristics
-
-| UUID | Properties | Purpose |
-|------|------------|---------|
-| FFE2 | Notify | Sensor + SpotLock telemetry (JSON, 500ms) |
-| FFE3 | Write | Commands from app |
-| FFE4 | Notify | Compass calibration data stream |
-| FFE5 | Notify | Command acknowledgements (JSON) |
-
-### Commands (FFE3 → Device)
-
-**SpotLock Commands:**
-```
-SPOTLOCK_ENGAGE:<lat>,<lon>         Engage at position (e.g. SPOTLOCK_ENGAGE:-33.001234,151.001234)
-SPOTLOCK_DISENGAGE                  Disengage and ramp motor to zero
-SPOTLOCK_JOG:FORWARD|BACK|LEFT|RIGHT  Move lock position by jogDistance
-SPOTLOCK_SETTINGS:<csv>             Upload 20-field settings (see below)
+```bash
+rtl_433 -f 433.017M -s 250k -g 40 -R 0 \
+  -X 'n=Watersnake,m=FSK_MC_ZEROBIT,s=52,l=104,r=200'
 ```
 
-**Manual RF Commands** (blocked while SpotLock active):
-```
-RF_LEFT_HOLD    Start continuous left steering
-RF_RIGHT_HOLD   Start continuous right steering
-RF_UP           Speed increase (1 second pulse)
-RF_DOWN         Speed decrease (1 second pulse)
-RF_MOTOR        Motor toggle
-RF_MOMENTARY    Momentary function
-RF_RELEASE      Stop hold transmission
-```
+The 12 hex digits after the sync word `d391d391` are the id. The following 7 hex digits are the button.
 
-**Calibration Commands:**
-```
-START_CAL                             Begin compass calibration
-STOP_CAL                              Stop and return calibration values
-CAL_VALUES:<ox,oy,oz,sx,sy,sz,ho>    Apply calibration to device
+## Waypoint
+
+Requirements: Xcode, iOS 18.6 or later.
+
+```bash
+cd Waypoint
+open Waypoint.xcodeproj
 ```
 
-### Settings Command Format
+Set the development team in Signing & Capabilities, then run. The app looks for a Bluetooth peripheral named `Helm`.
 
-`SPOTLOCK_SETTINGS:` followed by 20 comma-separated values in this order:
+Tabs: Map, Helm, Waypoints, Tracks, Settings.
 
-| # | Field | Default | Unit |
-|---|-------|---------|------|
-| 1 | deadZoneRadius | 2.0 | m |
-| 2 | activationThreshold | 4.0 | m |
-| 3 | jogDistance | 1.5 | m |
-| 4 | minSpeed | 3 | level |
-| 5 | maxSpeed | 10 | level |
-| 6 | proportionalGain | 1.0 | — |
-| 7 | speedChangeDelay | 2.0 | seconds |
-| 8 | headingTolerance | 10.0 | degrees |
-| 9 | correctionInterval | 1.0 | seconds |
-| 10 | smallAngleThreshold | 30.0 | degrees |
-| 11 | largeAngleThreshold | 90.0 | degrees |
-| 12 | smallSteeringDuration | 200 | ms |
-| 13 | mediumSteeringDuration | 600 | ms |
-| 14 | largeSteeringDuration | 1000 | ms |
-| 15 | maxRotationBeforeUntangle | 720.0 | degrees |
-| 16 | rotationPerMs | 0.1 | deg/ms |
-| 17 | minSatellites | 4 | count |
-| 18 | maxHDOP | 5.0 | — |
-| 19 | maxConsecutiveGpsFailures | 5 | count |
-| 20 | filterWindowSize | 5 | samples |
+On connect, Waypoint uploads spot-lock settings, navigation settings, compass calibration, and asks for the saved handset id. If a BLE secret is configured, it authenticates first.
 
-Settings are automatically uploaded to the device on every BLE connect.
+## Bluetooth
 
-### Sensor Status Format (FFE2)
+| | |
+|---|---|
+| Device name | `Helm` |
+| Service | `0000FFE0-0000-1000-8000-00805F9B34FB` |
+| FFE2 Notify | Sensor, spot-lock, and navigation telemetry, about every 500 ms |
+| FFE3 Write | Commands |
+| FFE4 Notify | Compass calibration samples |
+| FFE5 Notify | JSON acknowledgements |
 
-When SpotLock is **inactive:**
-```json
-{
-    "has_fix": true,
-    "satellites": 8,
-    "currentLat": -32.940931,
-    "currentLon": 151.718029,
-    "altitude": 45.2,
-    "hdop": 1.2,
-    "heading": 127.5,
-    "sl_active": false
-}
+### Commands
+
+Privileged commands require `AUTH:` when `BLE_AUTH_SECRET` is set.
+
+```
+AUTH:<secret>
+
+SPOTLOCK_ENGAGE:<lat>,<lon>
+SPOTLOCK_DISENGAGE
+SPOTLOCK_JOG:FORWARD|BACK|LEFT|RIGHT
+SPOTLOCK_SETTINGS:<21 fields>
+
+NAV_START:<lat>,<lon>,<level>
+NAV_CANCEL
+NAV_SETTINGS:<20 fields>
+
+PAIR_START
+PAIR_CANCEL
+PAIR_STATUS
+PAIR_CLEAR
+
+START_CAL
+STOP_CAL
+CAL_VALUES:<ox,oy,oz,sx,sy,sz,headingOffset>
+
+RF_LEFT_HOLD / RF_RIGHT_HOLD
+RF_UP / RF_DOWN / RF_MOTOR / RF_MOMENTARY
+RF_RELEASE
 ```
 
-When SpotLock is **active** (additional fields):
-```json
-{
-    "has_fix": true,
-    "satellites": 8,
-    "currentLat": -32.940931,
-    "currentLon": 151.718029,
-    "altitude": 45.2,
-    "hdop": 1.2,
-    "heading": 127.5,
-    "sl_active": true,
-    "sl_lat": -32.940950,
-    "sl_lon": 151.718010,
-    "sl_dist": 2.31,
-    "sl_bearing": 217.4,
-    "sl_speed": 4,
-    "sl_rotation": 180.0,
-    "sl_tangled": false,
-    "sl_thrust": true
-}
-```
+`SPOTLOCK_SETTINGS` fields, in order: dead zone m, activation m, jog m, min speed, max speed, gain, speed-change delay s, heading tolerance deg, correction interval s, small angle, large angle, small steering ms, medium steering ms, large steering ms, max rotation deg, rotation per ms, min satellites, max HDOP, max GPS failures, filter window, disconnect grace s. The filter window is accepted and ignored. A 20-field packet still parses, and the grace period stays at its current value.
 
-## SpotLock Algorithm
+`NAV_SETTINGS` uses the same order. Field 1 is the arrival radius. The navigation controller uses the level from `NAV_START` as the cruise level.
 
-The algorithm runs as a non-blocking state machine inside the ESP32 main loop. Each `loop()` iteration:
+`helm_state` in telemetry:
 
-1. **Steering hold processing** — retransmits the held button every 68ms; releases when duration elapses
-2. **Speed step processing** — transmits UP/DOWN for 1s per step, respects `speedChangeDelayMs` between steps
-3. **Correction logic** — runs every `correctionIntervalMs`:
-   - GPS quality check (fix, satellite count, HDOP)
-   - Filtered GPS position (rolling average of last N samples)
-   - Haversine distance + bearing to lock position
-   - Relative heading angle → steering direction + duration
-   - Cable tangle check → forced untangle if cumulative rotation exceeds limit
-   - Proportional thrust: `speed = (distance − deadZone) × gain + minSpeed`
+| Value | Meaning |
+|---|---|
+| 0 | Idle |
+| 1 | Spot lock active |
+| 2 | Navigating toward the pin |
+| 3 | Reserved. The helm does not use an arriving state |
+| 4 | Zeroing, ramping down, or handing off to spot lock |
+| 5 | Fault, usually GPS lost |
 
-**Control loops:**
+Telemetry also carries `has_fix`, `satellites`, `currentLat`, `currentLon`, `altitude`, `hdop`, `heading`, `sl_active` and `sl_*` while spot lock is active, `nav_active` and `nav_*` while navigation is active, `ble_authed`, and `disconnect_grace_s`.
 
-| Loop | Rate | Driven by |
-|------|------|-----------|
-| Hold retransmit | 68ms | `millis()` in main loop |
-| Correction | 1s (configurable) | `correctionIntervalMs` |
-| GPS update | 2Hz | NEO-6M UART |
-| BLE telemetry | 2Hz | `statusBroadcastIntervalMs` |
-
-## Usage
-
-### First-Time Setup
-
-1. Power on the ESP32 — GPS begins acquiring fix (30–60s outdoors)
-2. Open Waypoint app — connects automatically to "Helm"
-3. Go to **Settings → Compass Calibration** — rotate device through all axes, tap Stop
-4. Calibration is saved and auto-uploaded on every connect
-
-### Engaging Spot Lock
-
-1. Ensure GPS quality is Good or Excellent (status toolbar)
-2. Confirm motor is **ON** and **speed is at 0**
-3. Tap **"Engage at Current Position"** (Helm tab or Map overlay)
-4. The app uploads current settings and sends `SPOTLOCK_ENGAGE:lat,lon` to the device
-5. The device zeros the motor, then begins the position-hold loop autonomously
-
-### Jog Controls
-
-While Spot Lock is active, hold any jog arrow to move the lock point:
-- **N / Forward:** 0° (north)
-- **E / Right:** 90° (east)
-- **S / Back:** 180° (south)
-- **W / Left:** 270° (west)
-
-Each 200ms interval sends a `SPOTLOCK_JOG:direction` command; the device moves the lock point by `jogDistance` (default 1.5m) per command.
-
-### Manual Control
-
-Manual buttons (left/right hold, speed+/speed−, motor) always work. Pressing any manual control button sends `SPOTLOCK_DISENGAGE` first, then the RF command.
-
-### Phone Disconnected
-
-If BLE drops while Spot Lock is engaged, the device **continues holding position autonomously**. Reconnecting the app resumes monitoring with no intervention required. The device only performs an emergency motor ramp-down on disconnect when Spot Lock is not active.
-
-## Safety Features
-
-| Feature | Behaviour |
-|---------|-----------|
-| GPS fix lost | Auto-disengage after `maxConsecutiveGpsFailures` cycles |
-| Poor HDOP | Counted as GPS failure; disengages if sustained |
-| BLE disconnect (SpotLock active) | Algorithm continues uninterrupted |
-| BLE disconnect (SpotLock inactive) | 10× RF_DOWN emergency stop sequence |
-| Manual button press | Disengages SpotLock before executing command |
-| 30s hold timeout | Device auto-releases any stuck RF hold |
-| Cable tangle (`>720°`) | Forces reverse steering until rotation `<360°` |
-
-## RF Protocol
+## Radio
 
 | Parameter | Value |
-|-----------|-------|
+|---|---|
 | Frequency | 433.017 MHz |
 | Modulation | 2-FSK |
-| Encoding | Manchester (IEEE 802.3) |
-| Bit period | 104 µs |
-| Hold retransmit interval | 68ms |
-| Packet length | 137 bits |
+| Encoding | Manchester. Bit 0 is low then high. Bit 1 is high then low. 52 µs per half |
+| Retransmit | Every 68 ms while a button is held |
+| Reliable press | At least 500 ms of bursts, then Release |
 
-**Packet structure:**
+Packet, 35 hex digits, 140 bits, MSB first inside each nibble:
+
 ```
-Preamble   Sync Word  Device ID   Command
-32 bits    32 bits    48 bits     25 bits
-2aaaaaaa   d391d391   [unique]    [varies]
+preamble   sync       handset id    button
+2aaaaaaa   d391d391   12 hex        7 hex
 ```
 
-Device ID is unique per remote. Capture yours with an RTL-SDR.
+| Button | Code |
+|---|---|
+| Right | `08696a8` |
+| Left | `0269568` |
+| Up | `0469428` |
+| Down | `806a5a8` |
+| Motor | `4068da8` |
+| Momentary | `10693a8` |
+| Release | `00e9590` |
 
-## Project Structure
+## Repository
 
 ```
 AutoHelm/
-├── Helm/                          # ESP32 firmware
-│   ├── Helm.ino                   # Main loop
-│   ├── SpotLockController.h/.cpp  # Onboard position-hold algorithm  ← NEW
-│   ├── BleManager.h/.cpp          # BLE peripheral + command parser
-│   ├── GpsManager.h/.cpp          # NEO-6M NMEA parsing
-│   ├── CompassManager.h/.cpp      # MMC5603 magnetometer + calibration
-│   ├── Remote.h/.cpp              # 433MHz RF Manchester encoding
-│   ├── CC1101.h/.cpp              # SPI RF transceiver driver
-│   └── DataModels.h               # Shared structs (GpsData, SpotLockSettings, …)
-│
-└── Waypoint/                      # iOS companion app
-    └── Waypoint/
-        ├── Controllers/
-        │   └── SpotLockController.swift   # Thin proxy — forwards commands, syncs state
-        ├── Models/
-        │   ├── SensorData.swift           # Decodes sl_* telemetry fields
-        │   ├── SpotLockSettings.swift     # Settings + toSettingsCommand() CSV encoder
-        │   └── Models.swift               # Coordinate math, enums
-        ├── Managers/
-        │   ├── BluetoothManager.swift     # BLE central, engage/disengage/settings upload
-        │   └── DataStore.swift            # UserDefaults persistence
-        └── Views/
-            ├── ContentView.swift          # Tab root (no algorithm timer)
-            ├── MapView.swift              # Map + SpotLock pin + jog overlay
-            ├── HelmControlView.swift      # Manual controls + SpotLock status
-            ├── SpotLockSettingsView.swift  # 20+ configurable parameters
-            └── SettingsView.swift         # Calibration + device management
+├── Helm/                         ESP32 firmware
+│   ├── Helm.ino                  Main loop
+│   ├── HelmModeManager.*         Spot lock, navigation, and fault sequencing
+│   ├── SpotLockController.*      Position hold
+│   ├── WaypointNavController.*   Transit to a pin
+│   ├── AutopilotMotorController.*  Shared steering and speed presses
+│   ├── Remote.*                  Manchester encode, transmit, handset capture
+│   ├── CC1101.*                  Radio driver
+│   ├── GpsManager.*
+│   ├── CompassManager.*
+│   ├── LIS3DHManager.*
+│   ├── BleManager.*              Peripheral, commands, telemetry
+│   ├── BleAuth.*
+│   └── secrets.h.example
+├── Waypoint/                     iOS app
+├── docs/design-spec.md           Control behavior to implement next
+└── compass_calibration/          Standalone compass helper
 ```
+
+## First bench session
+
+1. Flash the helm and confirm the serial log shows the CC1101, GPS, compass, and BLE starting.
+2. Capture the handset, or confirm a real `DEVICE_ID` is loaded. A one-second Up from the serial console should move the motor one level.
+3. Calibrate the compass in Waypoint: rotate the helm through all axes, then stop. The result is stored on the device.
+4. With a GPS fix, engage spot lock only after the prop is clear and the motor is on.
+
+The control-loop items in the design spec are still open. Treat the first on-water run as a test of those changes, with the 8 m and 12 m radii, rather than as a finished hold.
 
 ## Troubleshooting
 
-**GPS not acquiring fix:**
-- Allow 30–60s outdoors with clear sky view
-- Check wiring: GPS TX → ESP32 pin 16 (UART2 RX)
-- Serial monitor: look for `[GPS] *** FIRST FIX ACQUIRED ***`
+**No GPS fix.** Give the NEO-6M 30–60 seconds of open sky. GPS TX must land on GPIO 16. The serial log prints when the first fix arrives.
 
-**SpotLock won't engage:**
-- GPS quality must be Fair or better (≥4 satellites, HDOP <5)
-- Motor must be ON and at speed 0 before engaging
-- Check serial output for `[SpotLock] ENGAGE at …`
+**The motor never moves.** The helm has no handset id, the CC1101 wiring is wrong, or the motor is off. Capture the id from **Settings → Motor Remote**, or set `DEVICE_ID`. A capture that never hears a button needs the handset closer to the helm, or the RTL-SDR fallback.
 
-**Motor not responding to SpotLock:**
-- Verify CC1101 SPI wiring
-- Use RTL-SDR to confirm 433.017 MHz signal on engage
-- Check `secrets.h` device ID matches your remote
+**Spot lock or navigation will not start.** The helm requires a fix, at least 4 satellites, and HDOP under 5. The serial log and the FFE5 error name the rejected command.
 
-**BLE connection fails:**
-- Verify iOS Bluetooth permissions
-- Use nRF Connect to confirm "Helm" is advertising
-- Power cycle ESP32; forget device on iPhone and reconnect
+**Waypoint cannot connect.** Confirm the phone's Bluetooth permission and that `Helm` is advertising. If a BLE secret is set, it has to match `BLE_AUTH_SECRET`.
 
-**Settings not taking effect:**
-- Settings are uploaded automatically on connect; reconnect if needed
-- Check serial output for `[SpotLock] Settings applied`
+**Settings look unchanged.** Settings upload on connect. Reconnect, and watch for `SPOTLOCK_SETTINGS` or `NAV_SETTINGS` in the helm log.
 
-## Reporting Issues
+## Issues
 
-**GitHub Issues:** https://github.com/brentonford/AutoHelm/issues
-
-## Version History
-
-**v3.0** (Current — March 2026)
-- **Architecture Change:** SpotLock algorithm moved from iOS app to ESP32 device
-- Device now runs full position-hold loop autonomously (no phone required once engaged)
-- Non-blocking steering and speed state machines — main loop never stalls
-- BLE disconnect while engaged no longer stops the motor
-- New BLE commands: `SPOTLOCK_ENGAGE`, `SPOTLOCK_DISENGAGE`, `SPOTLOCK_JOG`, `SPOTLOCK_SETTINGS`
-- Extended sensor status JSON with `sl_*` telemetry fields
-- Settings auto-uploaded to device on every BLE connect
-- iOS SpotLockController simplified to a thin Combine-driven view-model proxy
-- Removed app-side algorithm timer and disconnect grace timer
-
-**v2.0** (December 2024)
-- Architecture Change: All autonomous navigation moved to iOS app
-- Helm device became sensor-only (GPS/compass broadcast via BLE)
-- Spot Lock, proportional speed, cable tangle detection implemented in Swift
-- Configurable settings with validation
-- Compass hard-iron/soft-iron calibration with heading offset
-
-**v1.1** (November 2024)
-- Fixed GPS coordinate parsing
-- Added iOS waypoint list with search, sort, filter
-- Automatic geographic waypoint naming
-- Real-time status indicators
-- Enhanced safety features
-
-**v1.0** (November 2024)
-- Basic GPS navigation with waypoint guidance
-- RF motor control via CC1101 433MHz transceiver
-- BLE communication between iOS and ESP32
-- Compass calibration system
-
-## License
-
-MIT License. See LICENSE file for details.
-
-## Credits
-
-- **PiicoDev** for I2C modules and documentation
-- **Texas Instruments** for CC1101 documentation
-- **Espressif** for ESP32 platform and libraries
-- **U-blox** for GPS module documentation
-
----
-
-**AutoHelm** - Device-Side Autonomous GPS Position Hold for Electric Boats
+https://github.com/brentonford/AutoHelm/issues

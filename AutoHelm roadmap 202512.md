@@ -1,5 +1,7 @@
 # AutoHelm Recommendations
 
+This note is a December 2025 wishlist. The current plan for spot lock and navigate-to-a-pin is [docs/design-spec.md](docs/design-spec.md). The README describes the software as it is today.
+
 ## Recommended Future Improvements
 
 ### Navigation & Waypoints
