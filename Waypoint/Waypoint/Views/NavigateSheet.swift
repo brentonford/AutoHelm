@@ -65,7 +65,7 @@ struct NavigateSheet: View {
                 } header: {
                     Text("Cruising Speed")
                 } footer: {
-                    Text("The motor slows automatically within 10 m of the destination, then Spot Lock holds position on arrival. Live speed in km/hr is shown on the map during navigation.")
+                    Text("The motor holds this level until the boat is inside the arrival radius, then Spot Lock holds the pin. Live speed in km/hr is shown on the map during navigation.")
                 }
 
                 if !canNavigate {

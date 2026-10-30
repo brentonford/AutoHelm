@@ -24,6 +24,8 @@ class SpotLockController: ObservableObject {
     @Published private(set) var cableRotation: Double = 0
     @Published private(set) var isCableTangled: Bool = false
     @Published private(set) var isFaulted: Bool = false
+    /// True only while spot-lock corrections are running. Jog is limited to this state.
+    @Published private(set) var correctionsActive: Bool = false
 
     // MARK: - Supporting Types (retained for view compatibility)
 
@@ -88,7 +90,12 @@ class SpotLockController: ObservableObject {
                     self.isDisengaging = false
                 }
 
-                if active {
+                let corrections = data?.currentHelmState == .spotLockActive
+                self.correctionsActive = corrections
+                if !corrections {
+                    self.stopJog()
+                }
+                if corrections {
                     self.isEngaging = false
                     self.engageTimeoutTask?.cancel()
                     self.engageTimeoutTask = nil
@@ -128,11 +135,7 @@ class SpotLockController: ObservableObject {
                 guard let self else { return }
                 guard self.isEngaging else { return }
 
-                if response.ack == "SPOTLOCK_ENGAGED" {
-                    self.isEngaging = false
-                    self.engageTimeoutTask?.cancel()
-                    self.engageTimeoutTask = nil
-                } else if response.error != nil {
+                if response.error != nil {
                     self.isEngaging = false
                     self.engageTimeoutTask?.cancel()
                     self.engageTimeoutTask = nil
@@ -156,8 +159,8 @@ class SpotLockController: ObservableObject {
 
         engageTimeoutTask?.cancel()
         engageTimeoutTask = Task {
-            try? await Task.sleep(for: .seconds(8))
-            guard !Task.isCancelled, self.isEngaging, !self.isActive else { return }
+            try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled, self.isEngaging else { return }
             self.isEngaging = false
         }
     }
@@ -175,7 +178,7 @@ class SpotLockController: ObservableObject {
 
     /// Starts sending jog commands to the device (call on button press).
     func jogStart(direction: JogDirection) {
-        guard isActive else { return }
+        guard correctionsActive else { return }
         stopJog()
         isJogging = true
         sendJog(direction)

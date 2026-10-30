@@ -49,36 +49,36 @@ Before running any test case, confirm ALL of the following:
 4. Observe the app for 10 seconds without touching anything.
 
 **Expected / PASS:**
-- Status changes to **Active** (green dot).
-- Distance from Lock reads **< 1.5 m** immediately after engage.
-- Thrust shows **Inactive** (boat is within dead zone).
+- The app shows the engaging indicator until telemetry reports spot lock active (`helm_state` 1). That follows about 15 seconds of zeroing: ten 1-second Down presses.
+- Distance from Lock reads **< 1.5 m** once spot lock is active.
+- Thrust shows **Inactive** while the boat is inside the 8 m dead zone.
 - Log prints: `ENGAGED at [lat], [lon]`
-- No motor commands are sent in the first 10 seconds (boat is stationary within dead zone).
+- After zeroing, the motor does not thrust while the boat is stationary inside the dead zone.
 
 **FAIL indicators:**
-- Status stays Inactive.
+- Status stays Inactive after zeroing finishes.
 - Distance from Lock reads > 3 m at engage (GPS drift — wait for better fix).
-- Motor starts immediately after engage when boat is stationary.
+- The motor thrusts forward after zeroing while the boat is stationary inside 8 m.
 
 ---
 
 ### TC-02 — Dead Zone Hold (No Thrust)
 
-**Objective:** Confirm the motor stays off while the boat remains inside the 2 m dead zone.
+**Objective:** Confirm the motor stays off while the boat remains inside the 8 m dead zone.
 
 **Steps:**
 1. With Spot Lock active, allow the boat to drift naturally for 60 seconds.
 2. Watch the Distance from Lock readout continuously.
 
 **Expected / PASS:**
-- If Distance from Lock stays ≤ 2.0 m for the full 60 seconds:
+- If Distance from Lock stays ≤ 8.0 m for the full 60 seconds:
   - Thrust remains **Inactive** the entire time.
   - Motor makes no sound/movement.
 - Note the maximum drift distance observed.
 
 **FAIL indicators:**
-- Motor activates while Distance from Lock < 2.0 m.
-- Distance from Lock immediately reads > 4 m (GPS jump — retest after signal stabilises).
+- Motor activates while Distance from Lock < 8.0 m.
+- Distance from Lock immediately reads > 12 m (GPS jump — retest after signal stabilises).
 
 ---
 
@@ -87,19 +87,19 @@ Before running any test case, confirm ALL of the following:
 **Objective:** Confirm the motor activates when the boat drifts beyond the activation threshold and returns the boat to the lock point.
 
 **Steps:**
-1. With Spot Lock active, manually push the boat ~5 m away from the lock point (use a pole, paddle, or motor off-axis — not the Spot Lock motor).
+1. With Spot Lock active, manually push the boat past 12 m from the lock point (use a pole, paddle, or motor off-axis — not the Spot Lock motor).
 2. Release. Do not touch the boat.
 3. Observe for up to 90 seconds.
 
 **Expected / PASS:**
-- Once Distance from Lock exceeds **4.0 m**, Thrust changes to **Active**.
+- Once Distance from Lock exceeds **12.0 m**, Thrust changes to **Active**.
 - Motor engages and boat begins moving toward the lock point.
 - Distance from Lock decreases over time.
-- Within 90 seconds, Distance from Lock returns to **< 2.0 m**.
+- Within 90 seconds, Distance from Lock returns to **< 8.0 m**.
 - Thrust then changes back to **Inactive**.
 
 **FAIL indicators:**
-- Motor does not engage after crossing 4.0 m threshold.
+- Motor does not engage after crossing the 12.0 m activation threshold.
 - Boat moves away from lock point instead of toward it (check compass calibration).
 - Distance from Lock does not decrease after 30 seconds of active thrust.
 
@@ -110,14 +110,14 @@ Before running any test case, confirm ALL of the following:
 **Objective:** Confirm that motor speed is lower when close to the lock point and higher when far away.
 
 **Steps:**
-1. With Spot Lock active, note Speed Level when Distance from Lock is 4–5 m.
-2. Push the boat to ~8 m from lock point.
+1. With Spot Lock active, note Speed Level when Distance from Lock is 13–16 m.
+2. Push the boat to ~24 m from the lock point.
 3. Note Speed Level.
 
 **Expected / PASS:**
-- Speed Level at 4–5 m: **3–5** (near minimum).
-- Speed Level at 8 m: **higher than at 4–5 m** (proportional scaling).
-- Speed Level never exceeds **10** (maximum).
+- Speed Level at 13–16 m: **3–5** (near minimum).
+- Speed Level at 24 m: **higher than at 13–16 m** (proportional scaling).
+- Speed Level never exceeds **8** (the default maximum).
 
 **FAIL indicators:**
 - Speed Level is identical regardless of distance.

@@ -43,7 +43,7 @@ struct SpotLockSettingsView: View {
                 info: SettingInfo(
                     title: "Dead Zone Radius",
                     unit: "m",
-                    defaultValue: "2",
+                    defaultValue: "8",
                     description: "The radius around the lock point where thrust stops. When the boat is within this circle the motor is stopped.\n\nIncrease if the boat overshoots and oscillates back and forth through the lock point. Decrease if it drifts too far before stopping.\n\nMust be at least 0.5 m less than Activation Threshold."
                 ),
                 value: s.deadZoneRadius,
@@ -55,7 +55,7 @@ struct SpotLockSettingsView: View {
                 info: SettingInfo(
                     title: "Activation Threshold",
                     unit: "m",
-                    defaultValue: "4",
+                    defaultValue: "12",
                     description: "The distance from the lock point at which thrust re-activates after stopping. The gap between this and Dead Zone Radius is the hysteresis band — it prevents the motor from cycling on and off constantly.\n\nMust be at least 0.5 m greater than Dead Zone Radius."
                 ),
                 value: s.activationThreshold,
@@ -99,7 +99,7 @@ struct SpotLockSettingsView: View {
                 info: SettingInfo(
                     title: "Maximum Speed",
                     unit: "level",
-                    defaultValue: "10",
+                    defaultValue: "8",
                     description: "The ceiling speed level Spot Lock will use. Reduce in calm conditions to save battery and prevent overshoot. Use the full range in strong current or wind.\n\nMust be at least 1 greater than Minimum Speed."
                 ),
                 value: s.maxSpeed,
@@ -191,8 +191,8 @@ struct SpotLockSettingsView: View {
                 info: SettingInfo(
                     title: "Small Steering Pulse",
                     unit: "ms",
-                    defaultValue: "200",
-                    description: "Duration of the steering hold for small angle corrections (below Small Angle Threshold). This is the most critical tuning value — set it to the minimum duration that produces a noticeable turn without overshooting a small correction on your specific motor.\n\nMust be less than Medium Steering Pulse."
+                    defaultValue: "500",
+                    description: "Duration of the steering hold for small angle corrections (below Small Angle Threshold). The motor needs at least 500 ms to register a press. Set it long enough to produce a noticeable turn without overshooting a small correction.\n\nMust be less than Medium Steering Pulse."
                 ),
                 value: s.smallSteeringDuration,
                 defaultValue: SpotLockSettings.defaults.smallSteeringDuration,

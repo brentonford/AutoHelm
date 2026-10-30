@@ -21,7 +21,7 @@ class SpotLockController : public AutopilotMotorController {
 public:
     explicit SpotLockController(Remote& remote);
 
-    void engage(float lat, float lon);
+    void engage(float lat, float lon, bool knownZero);
     void disengage();
     bool jog(SpotLockJogDir dir);
     void applySettings(const SpotLockSettings& s);
@@ -31,6 +31,7 @@ public:
     const SpotLockSettings& getSettings() const { return _settings; }
     bool isActive() const { return _active || _disengaging || _zeroing; }
     bool isZeroing() const { return _zeroing; }
+    bool isDisengaging() const { return _disengaging; }
     bool wasGpsAborted() const { return _gpsAborted; }
     void clearGpsAborted() { _gpsAborted = false; }
 
@@ -51,7 +52,6 @@ private:
     uint32_t _lastJogMs   = 0;
 
     void runCorrectionLogic(const GpsData& gps, float heading, uint32_t now);
-    void processDeadReckoning(uint32_t now);
     void resetState();
     float proportionalSpeed(float distBeyondDeadZone) const;
 };

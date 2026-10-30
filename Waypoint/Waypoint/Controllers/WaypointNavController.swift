@@ -45,7 +45,7 @@ class WaypointNavController: ObservableObject {
 
                 let active = faulted ? false : (data?.isNavActive ?? false)
 
-                if active {
+                if data?.currentHelmState == .navApproaching {
                     self.isStarting = false
                     self.startTimeoutTask?.cancel()
                     self.startTimeoutTask = nil
@@ -80,11 +80,7 @@ class WaypointNavController: ObservableObject {
                 guard let self else { return }
                 guard self.isStarting else { return }
 
-                if response.ack == "NAV_STARTED" {
-                    self.isStarting = false
-                    self.startTimeoutTask?.cancel()
-                    self.startTimeoutTask = nil
-                } else if response.error != nil {
+                if response.error != nil {
                     self.isStarting = false
                     self.targetWaypoint = nil
                     self.startTimeoutTask?.cancel()
@@ -106,10 +102,12 @@ class WaypointNavController: ObservableObject {
 
             startTimeoutTask?.cancel()
             startTimeoutTask = Task {
-                try? await Task.sleep(for: .seconds(8))
-                guard !Task.isCancelled, self.isStarting, !self.isActive else { return }
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled, self.isStarting else { return }
                 self.isStarting = false
-                self.targetWaypoint = nil
+                if !self.isActive {
+                    self.targetWaypoint = nil
+                }
             }
         }
     }

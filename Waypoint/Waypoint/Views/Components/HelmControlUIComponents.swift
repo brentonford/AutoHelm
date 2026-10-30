@@ -193,7 +193,9 @@ struct SpotLockControls: View {
                     
                     Divider()
                     
-                    jogControls
+                    if spotLockController.correctionsActive {
+                        jogControls
+                    }
                     
                     Divider()
                     

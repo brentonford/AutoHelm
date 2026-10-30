@@ -37,8 +37,8 @@ struct NavSettingsView: View {
                 info: SettingInfo(
                     title: "Arrival Radius",
                     unit: "m",
-                    defaultValue: "5",
-                    description: "Distance from the waypoint at which the boat is considered to have arrived. Navigation stops and Spot Lock engages automatically when within this radius.\n\nSet larger than SpotLock's dead zone — stopping a few metres from a GPS waypoint is fine; the Spot Lock then holds the final position. Increase if arrival triggers too far out (weak GPS); decrease if you need to stop closer."
+                    defaultValue: "15",
+                    description: "Distance from the waypoint at which the boat is considered to have arrived. The motor holds the chosen level until it is inside this radius, then Spot Lock holds the pin.\n\nSet this at or above Spot Lock's 8 m dead zone. Increase if arrival triggers too far out; decrease if you need to stop closer. Valid range is 8–30 m."
                 ),
                 value: s.arrivalRadius,
                 defaultValue: NavSettings.defaults.arrivalRadius,
@@ -47,7 +47,7 @@ struct NavSettingsView: View {
         } header: {
             Text("Arrival")
         } footer: {
-            Text("The motor ramps down automatically in the final 8 m before arrival.")
+            Text("The motor holds the chosen level until it is inside this radius, then Spot Lock holds the pin.")
         }
     }
 
@@ -60,7 +60,7 @@ struct NavSettingsView: View {
                     title: "Minimum Speed",
                     unit: "level",
                     defaultValue: "2",
-                    description: "The floor speed level used during the ramp-down zone (final 8 m before arrival). Keep this low so the boat coasts in gently. The cruising speed for the full run is set per-trip in the Navigate sheet.\n\nMust be at least 1."
+                    description: "Kept for the settings packet. Navigation holds the motor level chosen in the Navigate sheet for the whole run, and this value does not raise or lower that level."
                 ),
                 value: s.minSpeed,
                 defaultValue: NavSettings.defaults.minSpeed,
@@ -139,8 +139,8 @@ struct NavSettingsView: View {
                 info: SettingInfo(
                     title: "Small Steering Pulse",
                     unit: "ms",
-                    defaultValue: "200",
-                    description: "Duration of the steering hold for small angle corrections (below Small Angle Threshold). Must be less than Medium Steering Pulse."
+                    defaultValue: "500",
+                    description: "Duration of the steering hold for small angle corrections (below Small Angle Threshold). The motor needs at least 500 ms to register a press. Must be less than Medium Steering Pulse."
                 ),
                 value: s.smallSteeringDuration,
                 defaultValue: NavSettings.defaults.smallSteeringDuration,

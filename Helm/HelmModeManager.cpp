@@ -10,6 +10,10 @@ HelmModeManager::HelmModeManager(GpsManager& gps, BleManager& ble,
 
 bool HelmModeManager::validateNavPreconditions(float targetLat, float targetLon,
                                                const char*& errorCode) const {
+    if (!_compassReady) {
+        errorCode = "COMPASS_UNAVAILABLE";
+        return false;
+    }
     if (!GpsValidation::isValidCoordinate(targetLat, targetLon)) {
         errorCode = GpsValidation::errorCodeFor(GpsReadiness::InvalidCoordinates);
         return false;
@@ -28,6 +32,10 @@ bool HelmModeManager::validateNavPreconditions(float targetLat, float targetLon,
 
 bool HelmModeManager::validateSpotLockPreconditions(float lockLat, float lockLon,
                                                     const char*& errorCode) const {
+    if (!_compassReady) {
+        errorCode = "COMPASS_UNAVAILABLE";
+        return false;
+    }
     if (!GpsValidation::isValidCoordinate(lockLat, lockLon)) {
         errorCode = GpsValidation::errorCodeFor(GpsReadiness::InvalidCoordinates);
         return false;
@@ -111,7 +119,9 @@ void HelmModeManager::requestNavStart(float lat, float lon, uint8_t speed) {
         return;
     }
 
-    _waypointNav.start(lat, lon, speed);
+    _spotLock.takeKnownZero();
+    _waypointNav.takeKnownZero();
+    _waypointNav.start(lat, lon, speed, false);
     _pendingNavStart = false;
     _mode = Mode::Nav;
     _ble.sendResponse("{\"ack\":\"NAV_STARTED\"}");
@@ -162,7 +172,9 @@ void HelmModeManager::requestSpotLockEngage(float lat, float lon) {
         return;
     }
 
-    _spotLock.engage(lat, lon);
+    _spotLock.takeKnownZero();
+    _waypointNav.takeKnownZero();
+    _spotLock.engage(lat, lon, false);
     _pendingSpotLockEngage = false;
     _mode = Mode::SpotLock;
     _ble.sendResponse("{\"ack\":\"SPOTLOCK_ENGAGED\"}");
@@ -206,6 +218,9 @@ void HelmModeManager::beginNavHandoff(float lat, float lon) {
     _pendingSpotLockEngage = false;
     _waypointNav.cancel();
     _mode = Mode::NavHandoff;
+    if (!_waypointNav.isActive()) {
+        finishNavHandoff();
+    }
 }
 
 void HelmModeManager::tryStartPendingNav() {
@@ -219,7 +234,8 @@ void HelmModeManager::tryStartPendingNav() {
         return;
     }
 
-    _waypointNav.start(_pendingNavLat, _pendingNavLon, _pendingNavSpeed);
+    bool knownZero = _spotLock.takeKnownZero() || _waypointNav.takeKnownZero();
+    _waypointNav.start(_pendingNavLat, _pendingNavLon, _pendingNavSpeed, knownZero);
     _pendingNavStart = false;
     _mode = Mode::Nav;
     _ble.sendResponse("{\"ack\":\"NAV_STARTED\"}");
@@ -236,7 +252,8 @@ void HelmModeManager::tryEngagePendingSpotLock() {
         return;
     }
 
-    _spotLock.engage(_pendingSlLat, _pendingSlLon);
+    bool knownZero = _spotLock.takeKnownZero() || _waypointNav.takeKnownZero();
+    _spotLock.engage(_pendingSlLat, _pendingSlLon, knownZero);
     _pendingSpotLockEngage = false;
     _mode = Mode::SpotLock;
     _ble.sendResponse("{\"ack\":\"SPOTLOCK_ENGAGED\"}");
@@ -250,7 +267,7 @@ void HelmModeManager::finishNavHandoff() {
         return;
     }
 
-    _spotLock.engage(_handoffLat, _handoffLon);
+    _spotLock.engage(_handoffLat, _handoffLon, _waypointNav.takeKnownZero());
     _mode = Mode::SpotLock;
     _ble.sendResponse("{\"ack\":\"NAV_ARRIVED\"}");
 }
@@ -340,12 +357,11 @@ HelmState HelmModeManager::getHelmState() const {
             return HelmState::Disengaging;
 
         case Mode::SpotLock:
-            if (_spotLock.isZeroing()) return HelmState::Disengaging;
+            if (_spotLock.isZeroing() || _spotLock.isDisengaging()) return HelmState::Disengaging;
             return HelmState::SpotLockActive;
 
         case Mode::Nav:
-            if (_waypointNav.isZeroing()) return HelmState::Disengaging;
-            if (_waypointNav.getState().arriving) return HelmState::NavArriving;
+            if (_waypointNav.isZeroing() || _waypointNav.isCancelling()) return HelmState::Disengaging;
             return HelmState::NavApproaching;
 
         case Mode::Idle:

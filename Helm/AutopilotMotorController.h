@@ -5,11 +5,13 @@
 #include "NavMath.h"
 #include "Remote.h"
 
-// Shared non-blocking motor control, GPS quality checks, and distance filtering
+// Shared non-blocking motor control and GPS quality checks
 // used by SpotLockController and WaypointNavController.
 class AutopilotMotorController {
 public:
     enum class SteerDir : uint8_t { None, Left, Right };
+
+    bool takeKnownZero();
 
 protected:
     explicit AutopilotMotorController(Remote& remote);
@@ -18,8 +20,13 @@ protected:
     SpotLockSettings _settings;
 
     bool     _zeroing             = false;
-    uint8_t  _zeroStepsRemaining   = 0;
+    bool     _zeroPressActive     = false;
+    uint8_t  _zeroStepsRemaining  = 0;
     uint32_t _lastZeroStepMs      = 0;
+    uint32_t _zeroPressStart      = 0;
+    uint32_t _zeroPressRetransmit = 0;
+    bool     _speedKnown          = false;
+    bool     _endedAtKnownZero    = false;
 
     SteerDir _holdDir             = SteerDir::None;
     bool     _holdActive          = false;
@@ -44,19 +51,17 @@ protected:
     uint8_t  _consecutiveGpsFail  = 0;
     bool     _gpsAborted          = false;
 
-    KalmanFilter1D _kalmanDist;
-    float    _lastKalmanDist      = 0.0f;
-    uint32_t _lastKalmanMs        = 0;
-    float    _bearingBias         = 0.0f;
-
     virtual int8_t maxSpeedLevel() const = 0;
     virtual bool isRampingDown() const = 0;
     virtual bool allowSpeedStepDuringSteeringHold() const = 0;
     virtual void onSpeedLevelChanged() = 0;
     virtual const char* logTag() const = 0;
+    virtual bool enforceMinSpeed() const { return true; }
 
     void beginMotorZeroing();
     void processMotorZeroing(uint32_t now);
+    void abortRadioPress();
+    void clampActuationSettings();
     void processSteeringHold(uint32_t now);
     void processSpeedStep(uint32_t now);
     void startSteeringHold(SteerDir dir, uint16_t durationMs);
@@ -70,7 +75,6 @@ protected:
     void resetGpsFailures();
     uint16_t steeringDuration(float absAngle) const;
 
-    float updateFilteredDistance(float rawDist, uint32_t now);
     bool steeringCooldownElapsed(uint32_t now) const;
     bool correctionIntervalElapsed(uint32_t now);
     void markCorrectionTime(uint32_t now);

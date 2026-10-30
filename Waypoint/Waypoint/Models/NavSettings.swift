@@ -8,12 +8,12 @@ struct NavSettings: Codable, Equatable {
     /// Navigation stops and Spot Lock engages when distance falls below this value.
     /// Larger than SpotLock's dead zone — it's acceptable to stop a few metres from
     /// a waypoint rather than trying to hold the exact GPS coordinate.
-    var arrivalRadius: Double = 5.0
+    var arrivalRadius: Double = 15.0
 
     // MARK: - Speed Control
 
-    /// Floor speed level used during the ramp-down zone (final 8 m before arrival).
-    /// Lower than SpotLock's minimum — the boat can crawl in gently.
+    /// Sent for packet compatibility. Navigation holds the Navigate-sheet motor level
+    /// for the whole run, so this floor is not applied to the cruise level.
     var minSpeed: Int = 2
 
     /// Pause between each motor speed level step during ramp-up or ramp-down.
@@ -30,7 +30,7 @@ struct NavSettings: Codable, Equatable {
 
     var smallAngleThreshold: Double = 30.0
     var largeAngleThreshold: Double = 90.0
-    var smallSteeringDuration: Int = 200
+    var smallSteeringDuration: Int = 500
     var mediumSteeringDuration: Int = 600
     var largeSteeringDuration: Int = 1000
 
@@ -47,12 +47,20 @@ struct NavSettings: Codable, Equatable {
 
     // MARK: - Position Filtering
 
-    // Deprecated – firmware uses Kalman filter; kept for BLE protocol compat
+    // Accepted on the wire and ignored by the helm.
     var filterWindowSize: Int = 5
 
     // MARK: - Defaults
 
     static let defaults = NavSettings()
+
+    /// Values stored by builds before the 15 m arrival / 500 ms steering contract.
+    static var legacyDefaults: NavSettings {
+        var settings = NavSettings()
+        settings.arrivalRadius = 5.0
+        settings.smallSteeringDuration = 200
+        return settings
+    }
 
     var isAllDefault: Bool { self == NavSettings.defaults }
 
@@ -76,14 +84,14 @@ struct NavSettings: Codable, Equatable {
     // MARK: - Validation
 
     mutating func validate() {
-        arrivalRadius             = max(1.0,   min(20.0,   arrivalRadius))
+        arrivalRadius             = max(8.0,   min(30.0,   arrivalRadius))
         minSpeed                  = max(1,     min(9,      minSpeed))
         speedChangeDelay          = max(0.5,   min(10.0,   speedChangeDelay))
         headingTolerance          = max(2.0,   min(45.0,   headingTolerance))
         correctionInterval        = max(0.5,   min(5.0,    correctionInterval))
         smallAngleThreshold       = max(5.0,   min(89.0,   smallAngleThreshold))
         largeAngleThreshold       = max(6.0,   min(180.0,  largeAngleThreshold))
-        smallSteeringDuration     = max(50,    min(2000,   smallSteeringDuration))
+        smallSteeringDuration     = max(500,   min(2000,   smallSteeringDuration))
         mediumSteeringDuration    = max(100,   min(3000,   mediumSteeringDuration))
         largeSteeringDuration     = max(200,   min(5000,   largeSteeringDuration))
         maxRotationBeforeUntangle = max(180.0, min(2160.0, maxRotationBeforeUntangle))

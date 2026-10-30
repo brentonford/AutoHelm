@@ -3,13 +3,13 @@ import Foundation
 struct SpotLockSettings: Codable, Equatable {
 
     // MARK: - Position Control
-    var deadZoneRadius: Double = 2.0
-    var activationThreshold: Double = 4.0
+    var deadZoneRadius: Double = 8.0
+    var activationThreshold: Double = 12.0
     var jogDistance: Double = 1.5
 
     // MARK: - Speed Control
     var minSpeed: Int = 3
-    var maxSpeed: Int = 10
+    var maxSpeed: Int = 8
     var proportionalGain: Double = 1.0
     var speedChangeDelay: Double = 2.0
 
@@ -18,7 +18,7 @@ struct SpotLockSettings: Codable, Equatable {
     var correctionInterval: Double = 1.0
     var smallAngleThreshold: Double = 30.0
     var largeAngleThreshold: Double = 90.0
-    var smallSteeringDuration: Int = 200
+    var smallSteeringDuration: Int = 500
     var mediumSteeringDuration: Int = 600
     var largeSteeringDuration: Int = 1000
 
@@ -34,12 +34,23 @@ struct SpotLockSettings: Codable, Equatable {
     // MARK: - Connectivity (synced to firmware via SPOTLOCK_SETTINGS field 21)
     var disconnectGracePeriodSeconds: Double = 5.0
 
-    // MARK: - Position Filtering (deprecated – firmware uses Kalman filter; kept for BLE protocol compat)
+    // MARK: - Position Filtering (accepted on the wire and ignored by the helm)
     var filterWindowSize: Int = 5
 
     // MARK: - Defaults
 
     static let defaults = SpotLockSettings()
+
+    /// Values stored by builds before the 8 m / 12 m / 500 ms contract.
+    /// Only an exact match is replaced, so a customised profile is left alone.
+    static var legacyDefaults: SpotLockSettings {
+        var settings = SpotLockSettings()
+        settings.deadZoneRadius = 2.0
+        settings.activationThreshold = 4.0
+        settings.maxSpeed = 10
+        settings.smallSteeringDuration = 200
+        return settings
+    }
 
     var isAllDefault: Bool { self == SpotLockSettings.defaults }
 
@@ -72,7 +83,7 @@ struct SpotLockSettings: Codable, Equatable {
         correctionInterval           = max(0.5,   min(5.0,   correctionInterval))
         smallAngleThreshold          = max(5.0,   min(89.0,  smallAngleThreshold))
         largeAngleThreshold          = max(6.0,   min(180.0, largeAngleThreshold))
-        smallSteeringDuration        = max(50,    min(2000,  smallSteeringDuration))
+        smallSteeringDuration        = max(500,   min(2000,  smallSteeringDuration))
         mediumSteeringDuration       = max(100,   min(3000,  mediumSteeringDuration))
         largeSteeringDuration        = max(200,   min(5000,  largeSteeringDuration))
         maxRotationBeforeUntangle    = max(180.0, min(2160.0, maxRotationBeforeUntangle))

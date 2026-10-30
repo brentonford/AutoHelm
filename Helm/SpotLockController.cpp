@@ -7,7 +7,7 @@ using namespace NavMath;
 SpotLockController::SpotLockController(Remote& remote)
     : AutopilotMotorController(remote) {}
 
-void SpotLockController::engage(float lat, float lon) {
+void SpotLockController::engage(float lat, float lon, bool knownZero) {
     Serial.printf("[SpotLock] ENGAGE at %.6f, %.6f\n", lat, lon);
     clearGpsAborted();
     resetState();
@@ -17,31 +17,49 @@ void SpotLockController::engage(float lat, float lon) {
     _state.active  = true;
     _state.lockLat = lat;
     _state.lockLon = lon;
-    Serial.println("[SpotLock] Zeroing motor speed (non-blocking)...");
-    beginMotorZeroing();
+    if (knownZero) {
+        _speedKnown   = true;
+        _currentSpeed = 0;
+        _targetSpeed  = 0;
+        Serial.println("[SpotLock] Speed already at 0");
+    } else {
+        Serial.println("[SpotLock] Zeroing motor speed (non-blocking)...");
+        beginMotorZeroing();
+    }
 }
 
 void SpotLockController::disengage() {
     if (!_active && !_disengaging) return;
+    if (_disengaging) return;
     Serial.println("[SpotLock] DISENGAGE");
 
     if (_holdActive) releaseSteeringHold();
-
+    if (_zeroPressActive) {
+        _remote.transmitSingle(Button::Release);
+        _zeroPressActive = false;
+    }
+    _zeroing = false;
     _active = false;
-    _state.active = false;
+
+    if (_speedHoldActive && _speedHoldUp) {
+        _remote.transmitSingle(Button::Release);
+        _speedHoldActive = false;
+    }
 
     if (_currentSpeed > 0 || _speedHoldActive) {
-        startSpeedStep(false);
+        if (!_speedHoldActive) startSpeedStep(false);
         _targetSpeed = 0;
         _disengaging = true;
+        _state.active = true;
     } else {
-        resetState();
+        _endedAtKnownZero = _speedKnown;
         _disengaging = false;
+        resetState();
     }
 }
 
 bool SpotLockController::jog(SpotLockJogDir dir) {
-    if (!_active) return false;
+    if (!_active || _zeroing || _disengaging) return false;
 
     uint32_t now = millis();
     constexpr uint32_t JOG_MIN_INTERVAL_MS = 200;
@@ -62,7 +80,6 @@ bool SpotLockController::jog(SpotLockJogDir dir) {
     calcDestination(_lockLat, _lockLon, headingDeg, _settings.jogDistance, newLat, newLon);
     _lockLat = newLat;
     _lockLon = newLon;
-    _kalmanDist.reset();
     _state.lockLat = _lockLat;
     _state.lockLon = _lockLon;
 
@@ -72,6 +89,7 @@ bool SpotLockController::jog(SpotLockJogDir dir) {
 
 void SpotLockController::applySettings(const SpotLockSettings& s) {
     _settings = s;
+    clampActuationSettings();
     Serial.printf("[SpotLock] Settings applied – deadZone=%.1fm activation=%.1fm\n",
                   _settings.deadZoneRadius, _settings.activationThreshold);
 }
@@ -81,7 +99,10 @@ void SpotLockController::update(const GpsData& gps, float heading) {
 
     if (_disengaging) {
         processSpeedStep(now);
+        _state.active = true;
+        _state.speedLevel = (uint8_t)max(0, (int)_currentSpeed);
         if (_currentSpeed == 0 && !_speedHoldActive && _targetSpeed == 0) {
+            _endedAtKnownZero = true;
             _disengaging = false;
             resetState();
         }
@@ -92,13 +113,28 @@ void SpotLockController::update(const GpsData& gps, float heading) {
 
     if (_zeroing) {
         processMotorZeroing(now);
+        bool gpsLost = false;
+        if (correctionIntervalElapsed(now)) {
+            markCorrectionTime(now);
+            if (!isGpsAcceptable(gps)) {
+                if (incrementGpsFailure()) gpsLost = true;
+            } else {
+                resetGpsFailures();
+            }
+        }
+        if (gpsLost) {
+            Serial.println("[SpotLock] GPS insufficient – disengaging");
+            disengage();
+            return;
+        }
+        _state.active = true;
         return;
     }
 
     processSteeringHold(now);
     processSpeedStep(now);
-    processDeadReckoning(now);
     runCorrectionLogic(gps, heading, now);
+    if (!_active && !_disengaging) return;
 
     _state.active         = true;
     _state.cableRotation  = _cumulativeRotation;
@@ -108,6 +144,9 @@ void SpotLockController::update(const GpsData& gps, float heading) {
 }
 
 void SpotLockController::runCorrectionLogic(const GpsData& gps, float heading, uint32_t now) {
+    if (!correctionIntervalElapsed(now)) return;
+    markCorrectionTime(now);
+
     if (!isGpsAcceptable(gps)) {
         if (incrementGpsFailure()) {
             Serial.println("[SpotLock] GPS insufficient – disengaging");
@@ -117,20 +156,16 @@ void SpotLockController::runCorrectionLogic(const GpsData& gps, float heading, u
     }
     resetGpsFailures();
 
-    if (!correctionIntervalElapsed(now) || _holdActive || !steeringCooldownElapsed(now)) return;
-    markCorrectionTime(now);
+    if (_holdActive || _speedHoldActive || !steeringCooldownElapsed(now)) return;
 
-    float rawDist = haversineDistance(gps.latitude, gps.longitude, _lockLat, _lockLon);
-    float dist    = updateFilteredDistance(rawDist, now);
+    float dist    = haversineDistance(gps.latitude, gps.longitude, _lockLat, _lockLon);
     float bearing = bearingTo(gps.latitude, gps.longitude, _lockLat, _lockLon);
 
     _state.distanceM  = dist;
     _state.bearingDeg = bearing;
 
     float relAngle = normalizeAngle180(bearing - heading);
-    _bearingBias = 0.95f * _bearingBias + 0.05f * relAngle;
-    float correctedRelAngle = relAngle - _bearingBias;
-    float absAngle = fabsf(correctedRelAngle);
+    float absAngle = fabsf(relAngle);
     float absRot   = fabsf(_cumulativeRotation);
 
     bool startUntangle    = absRot > _settings.maxRotationBeforeUntangle;
@@ -150,7 +185,7 @@ void SpotLockController::runCorrectionLogic(const GpsData& gps, float heading, u
 
         SteerDir dir;
         float steerAngle;
-        if (resolveSteeringDirection(correctedRelAngle, absAngle, dir, steerAngle)) {
+        if (resolveSteeringDirection(relAngle, absAngle, dir, steerAngle)) {
             Serial.printf("[SpotLock] Alt turn dir chosen – rot=%.1fdeg\n", _cumulativeRotation);
         }
         startSteeringHold(dir, steeringDuration(steerAngle));
@@ -164,7 +199,7 @@ void SpotLockController::runCorrectionLogic(const GpsData& gps, float heading, u
             _applyingThrust = true;
             _state.applyingThrust = true;
         }
-        setTargetSpeed((int8_t)proportionalSpeed(max(0.0f, dist - _settings.deadZoneRadius)));
+        setTargetSpeed((int8_t)lroundf(proportionalSpeed(max(0.0f, dist - _settings.deadZoneRadius))));
     } else if (dist < _settings.deadZoneRadius) {
         if (_applyingThrust) {
             _applyingThrust = false;
@@ -178,26 +213,14 @@ void SpotLockController::runCorrectionLogic(const GpsData& gps, float heading, u
         }
     }
 
-    Serial.printf("[SpotLock] dist=%.2fm bear=%.1f hdg=%.1f rel=%.1f bias=%.1f spd=%d/%d\n",
-                  dist, bearing, heading, relAngle, _bearingBias, _currentSpeed, _targetSpeed);
+    Serial.printf("[SpotLock] dist=%.2fm bear=%.1f hdg=%.1f rel=%.1f spd=%d/%d\n",
+                  dist, bearing, heading, relAngle, _currentSpeed, _targetSpeed);
 }
 
 float SpotLockController::proportionalSpeed(float distBeyondDeadZone) const {
     if (distBeyondDeadZone <= 0.0f) return (float)_settings.minSpeed;
     float raw = distBeyondDeadZone * _settings.proportionalGain + (float)_settings.minSpeed;
     return fminf(raw, (float)_settings.maxSpeed);
-}
-
-void SpotLockController::processDeadReckoning(uint32_t now) {
-    if (!_active || !_applyingThrust || _lastKalmanMs == 0) return;
-
-    uint32_t msSinceKalman = now - _lastKalmanMs;
-    if (msSinceKalman > 1200) return;
-
-    float elapsed  = msSinceKalman / 1000.0f;
-    float projDist = fmaxf(0.0f, _lastKalmanDist - speedLevelToMs[_currentSpeed] * elapsed);
-    float excess   = fmaxf(0.0f, projDist - _settings.deadZoneRadius);
-    setTargetSpeed((int8_t)proportionalSpeed(excess));
 }
 
 void SpotLockController::resetState() {

@@ -26,6 +26,8 @@ public:
     // Call every main-loop iteration with fresh sensor data.
     void update(const GpsData& gps, float heading);
 
+    void setCompassReady(bool ready) { _compassReady = ready; }
+
     bool allowsManualRf() const;
     bool isAutonomousActive() const;
     HelmState getHelmState() const;
@@ -40,6 +42,8 @@ private:
         NavHandoff,
         Fault
     };
+
+    bool _compassReady = false;
 
     GpsManager&             _gps;
     BleManager&             _ble;

@@ -436,10 +436,10 @@ void BleManager::parseCommand(const char* data) {
     } else if (strncmp(cmd, "NAV_START:", 10) == 0) {
         float lat = 0.0f, lon = 0.0f;
         int   spd = 5;
-        if (sscanf(cmd + 10, "%f,%f,%d", &lat, &lon, &spd) == 3) {
+        if (sscanf(cmd + 10, "%f,%f,%d", &lat, &lon, &spd) == 3 && spd >= 1 && spd <= 10) {
             _status.navTargetLat    = lat;
             _status.navTargetLon    = lon;
-            _status.navTargetSpeed  = (uint8_t)constrain(spd, 1, 10);
+            _status.navTargetSpeed  = (uint8_t)spd;
             _status.pendingNavCommand = NavCommand::Start;
             Serial.printf("[BLE] NAV_START target=%.6f,%.6f speed=%d\n", lat, lon, spd);
         } else {

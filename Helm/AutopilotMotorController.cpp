@@ -9,31 +9,85 @@ constexpr float    SAFE_ROTATION_LEVEL     = 360.0f;
 constexpr uint32_t RAMP_DOWN_DELAY_MS      = 500;
 constexpr uint32_t RESYNC_INTERVAL_MS      = 5000;
 constexpr uint8_t  MOTOR_ZERO_STEPS        = 10;
-constexpr uint32_t MOTOR_ZERO_STEP_MS      = 100;
+constexpr uint32_t ZERO_PRESS_MS           = 1000;
+constexpr uint32_t ZERO_GAP_MS             = 500;
+constexpr uint16_t MIN_PRESS_MS            = 500;
 }  // namespace
 
 AutopilotMotorController::AutopilotMotorController(Remote& remote)
     : _remote(remote) {}
 
+bool AutopilotMotorController::takeKnownZero() {
+    bool known = _endedAtKnownZero;
+    _endedAtKnownZero = false;
+    return known;
+}
+
 void AutopilotMotorController::beginMotorZeroing() {
     _zeroing            = true;
+    _zeroPressActive    = false;
     _zeroStepsRemaining = MOTOR_ZERO_STEPS;
     _lastZeroStepMs     = 0;
+    _speedKnown         = false;
+    _currentSpeed       = 0;
+    _targetSpeed        = 0;
 }
 
 void AutopilotMotorController::processMotorZeroing(uint32_t now) {
     if (!_zeroing) return;
 
-    if (_zeroStepsRemaining == 0) {
-        _zeroing = false;
-        Serial.printf("[%s] Motor zeroed\n", logTag());
+    if (_zeroPressActive) {
+        if ((now - _zeroPressStart) >= ZERO_PRESS_MS) {
+            _remote.transmitSingle(Button::Release);
+            _zeroPressActive = false;
+            _zeroStepsRemaining--;
+            _lastZeroStepMs = now;
+            if (_zeroStepsRemaining == 0) {
+                _zeroing      = false;
+                _speedKnown   = true;
+                _currentSpeed = 0;
+                _targetSpeed  = 0;
+                Serial.printf("[%s] Motor zeroed\n", logTag());
+            }
+            return;
+        }
+        if ((now - _zeroPressRetransmit) >= HOLD_RETRANSMIT_MS) {
+            _remote.transmitSingle(Button::Down);
+            _zeroPressRetransmit = now;
+        }
         return;
     }
 
-    if (_lastZeroStepMs == 0 || (now - _lastZeroStepMs) >= MOTOR_ZERO_STEP_MS) {
-        _remote.transmitSingle(Button::Down);
-        _zeroStepsRemaining--;
-        _lastZeroStepMs = now;
+    if (_lastZeroStepMs != 0 && (now - _lastZeroStepMs) < ZERO_GAP_MS) return;
+
+    _remote.transmitSingle(Button::Down);
+    _zeroPressActive     = true;
+    _zeroPressStart      = now;
+    _zeroPressRetransmit = now;
+}
+
+void AutopilotMotorController::abortRadioPress() {
+    if (_holdActive) releaseSteeringHold();
+    if (_zeroPressActive) {
+        _remote.transmitSingle(Button::Release);
+        _zeroPressActive = false;
+    }
+    if (_speedHoldActive) {
+        _remote.transmitSingle(Button::Release);
+        _speedHoldActive = false;
+    }
+    _zeroing = false;
+}
+
+void AutopilotMotorController::clampActuationSettings() {
+    if (_settings.smallSteeringDuration < MIN_PRESS_MS) _settings.smallSteeringDuration = MIN_PRESS_MS;
+    if (_settings.mediumSteeringDuration < MIN_PRESS_MS) _settings.mediumSteeringDuration = MIN_PRESS_MS;
+    if (_settings.largeSteeringDuration < MIN_PRESS_MS) _settings.largeSteeringDuration = MIN_PRESS_MS;
+    if (_settings.mediumSteeringDuration < _settings.smallSteeringDuration) {
+        _settings.mediumSteeringDuration = _settings.smallSteeringDuration;
+    }
+    if (_settings.largeSteeringDuration < _settings.mediumSteeringDuration) {
+        _settings.largeSteeringDuration = _settings.mediumSteeringDuration;
     }
 }
 
@@ -127,7 +181,7 @@ void AutopilotMotorController::startSpeedStep(bool goUp) {
 
 void AutopilotMotorController::setTargetSpeed(int8_t target) {
     int8_t clamped = max((int8_t)0, min(target, maxSpeedLevel()));
-    if (clamped != 0 && clamped < (int8_t)_settings.minSpeed) {
+    if (enforceMinSpeed() && clamped != 0 && clamped < (int8_t)_settings.minSpeed) {
         clamped = (int8_t)_settings.minSpeed;
     }
     _targetSpeed = clamped;
@@ -154,14 +208,14 @@ void AutopilotMotorController::resetMotorState() {
     _cumulativeRotation   = 0.0f;
     _isUntangling         = false;
 
-    _bearingBias    = 0.0f;
-    _lastKalmanDist = 0.0f;
-    _lastKalmanMs   = 0;
-    _kalmanDist.reset();
+    _speedKnown         = false;
 
     _zeroing            = false;
+    _zeroPressActive    = false;
     _zeroStepsRemaining = 0;
     _lastZeroStepMs     = 0;
+    _zeroPressStart     = 0;
+    _zeroPressRetransmit = 0;
 
     resetGpsFailures();
 }
@@ -192,16 +246,11 @@ void AutopilotMotorController::resetGpsFailures() {
 }
 
 uint16_t AutopilotMotorController::steeringDuration(float absAngle) const {
-    if (absAngle >= _settings.largeAngleThreshold) return _settings.largeSteeringDuration;
-    if (absAngle >= _settings.smallAngleThreshold) return _settings.mediumSteeringDuration;
-    return _settings.smallSteeringDuration;
-}
-
-float AutopilotMotorController::updateFilteredDistance(float rawDist, uint32_t now) {
-    float dist = _kalmanDist.update(rawDist);
-    _lastKalmanDist = dist;
-    _lastKalmanMs   = now;
-    return dist;
+    uint16_t duration = _settings.smallSteeringDuration;
+    if (absAngle >= _settings.largeAngleThreshold) duration = _settings.largeSteeringDuration;
+    else if (absAngle >= _settings.smallAngleThreshold) duration = _settings.mediumSteeringDuration;
+    if (duration < MIN_PRESS_MS) duration = MIN_PRESS_MS;
+    return duration;
 }
 
 bool AutopilotMotorController::steeringCooldownElapsed(uint32_t now) const {

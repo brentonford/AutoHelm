@@ -283,6 +283,14 @@ void startManualBurst(Button button) {
 }
 
 void processManualBurst() {
+    if (!helmMode.allowsManualRf()) {
+        if (manualBurst.active && remoteAvailable) {
+            remote.transmitSingle(Button::Release);
+        }
+        manualBurst.active = false;
+        return;
+    }
+
     if (!manualBurst.active || !remoteAvailable) return;
 
     uint32_t now = millis();
@@ -301,8 +309,13 @@ void processManualBurst() {
 }
 
 void processBleRfCommand() {
-    if (!helmMode.allowsManualRf())
+    if (!helmMode.allowsManualRf()) {
+        if (ble.hasRfCommandPending()) {
+            ble.consumeRfCommand();
+            ble.sendResponse("{\"error\":\"AUTONOMY_ACTIVE\"}");
+        }
         return;
+    }
 
     if (!ble.hasRfCommandPending())
         return;
@@ -359,6 +372,17 @@ void processBleRfCommand() {
 }
 
 void processHoldTransmission() {
+    if (!helmMode.allowsManualRf()) {
+        portENTER_CRITICAL(&holdStateMux);
+        bool holdActive = isHoldActive;
+        isHoldActive = false;
+        portEXIT_CRITICAL(&holdStateMux);
+        if (holdActive && remoteAvailable) {
+            remote.transmitSingle(Button::Release);
+        }
+        return;
+    }
+
     portENTER_CRITICAL(&holdStateMux);
     bool holdActive = isHoldActive;
     Button holdButton = activeHoldButton;
@@ -621,6 +645,7 @@ void setup() {
 
     Serial.print("[Compass] Initializing... ");
     compassAvailable = compass.begin();
+    helmMode.setCompassReady(compassAvailable);
     Serial.println(compassAvailable ? "SUCCESS" : "FAILED");
 
     Serial.print("[LIS3DH] Initializing... ");
@@ -696,12 +721,12 @@ void loop() {
 
     char c = Serial.read();
 
-    if (remoteAvailable && remote.isPairing()) {
+    if ((remoteAvailable && remote.isPairing()) || !helmMode.allowsManualRf()) {
         switch (c) {
             case 'R': case 'L': case 'U': case 'D': case 'M': case 'S':
             case 'r': case 'l': case 'u': case 'd': case 'm': case 's':
             case '0':
-                Serial.println("[Remote] Serial motor command ignored during handset capture");
+                Serial.println("[Remote] Serial motor command ignored while the helm is busy");
                 return;
             default:
                 break;

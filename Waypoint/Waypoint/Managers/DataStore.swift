@@ -102,6 +102,18 @@ class DataStore: ObservableObject {
         }
         do {
             spotLockSettings = try JSONDecoder().decode(SpotLockSettings.self, from: data)
+            if spotLockSettings == SpotLockSettings.legacyDefaults {
+                spotLockSettings = SpotLockSettings()
+                print("[DataStore] Migrated stored Spot Lock defaults to 8 m / 12 m")
+                saveSpotLockSettings()
+            } else {
+                var validated = spotLockSettings
+                validated.validate()
+                if validated != spotLockSettings {
+                    spotLockSettings = validated
+                    saveSpotLockSettings()
+                }
+            }
             print("[DataStore] Spot Lock settings loaded")
             return true
         } catch {
@@ -138,6 +150,18 @@ class DataStore: ObservableObject {
         }
         do {
             navSettings = try JSONDecoder().decode(NavSettings.self, from: data)
+            if navSettings == NavSettings.legacyDefaults {
+                navSettings = NavSettings()
+                print("[DataStore] Migrated stored navigation defaults to 15 m arrival")
+                saveNavSettings()
+            } else {
+                var validated = navSettings
+                validated.validate()
+                if validated != navSettings {
+                    navSettings = validated
+                    saveNavSettings()
+                }
+            }
             print("[DataStore] Nav settings loaded")
             return true
         } catch {

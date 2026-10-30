@@ -43,13 +43,13 @@ graph TB
 - Compass calibration is stored on the helm and uploaded again from the app on connect.
 - Waypoint keeps waypoints and recorded tracks on the phone.
 
-Current spot-lock defaults are a 2 m dead zone and a 4 m activation radius. Navigation arrives inside 5 m, then slows across the last 8 m before that radius and hands off to spot lock. Short steering presses default to 200 ms. Those values are what the code ships. They are the values the design spec replaces before a water test.
+Spot lock uses an 8 m dead zone and a 12 m activation radius. Navigation holds the chosen motor level until the boat is inside a 15 m arrival radius, then spot-locks that pin. Steering presses are at least 500 ms. The control contract is [docs/design-spec.md](docs/design-spec.md).
 
 ## Where this is going
 
-The next firmware and app work is the control contract in [docs/design-spec.md](docs/design-spec.md). The radio, GPS, compass, tilt, and BLE transport stay. The control loop is what changes.
+The radio, GPS, compass, tilt, and BLE transport stay. The control loop follows the contract in [docs/design-spec.md](docs/design-spec.md).
 
-Target behavior on the current NEO-6M:
+Behavior on the current NEO-6M:
 
 - Spot lock thrusts only outside about 12 m and stops thrusting inside about 8 m.
 - Navigation holds the motor level chosen for that trip until the boat is inside a 15 m arrival radius, then spot-locks that pin. There is no slow-down zone.
@@ -228,7 +228,7 @@ AutoHelm/
 │   ├── BleAuth.*
 │   └── secrets.h.example
 ├── Waypoint/                     iOS app
-├── docs/design-spec.md           Control behavior to implement next
+├── docs/design-spec.md           Control behavior the helm implements
 └── compass_calibration/          Standalone compass helper
 ```
 
@@ -239,7 +239,7 @@ AutoHelm/
 3. Calibrate the compass in Waypoint: rotate the helm through all axes, then stop. The result is stored on the device.
 4. With a GPS fix, engage spot lock only after the prop is clear and the motor is on.
 
-The control-loop items in the design spec are still open. Treat the first on-water run as a test of those changes, with the 8 m and 12 m radii, rather than as a finished hold.
+Treat the first on-water run as a test of the 8 m dead zone and 12 m activation radius, with the prop clear and the motor on.
 
 ## Troubleshooting
 

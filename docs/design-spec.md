@@ -1,9 +1,9 @@
 # AutoHelm control design specification
 
-Status: target behavior for `feature/spotlock-and-navigate`.
+Status: control contract implemented on `feature/spotlock-and-navigate`.
 Date: 30 October 2026.
 
-This document is the contract for spot lock and fixed-level navigation. It specifies what the helm must do on the water. It is the behavior to implement, including where that differs from the code in the tree today.
+This document is the contract for spot lock and fixed-level navigation. It specifies what the helm does on the water.
 
 The radio protocol, GPS parser, compass driver, tilt compensation, and BLE transport stay. The control loop is replaced against this spec. The iOS app remains a remote: it sends commands and renders device telemetry.
 
@@ -195,7 +195,7 @@ The helm does not subtract a running average of this error from the command. A p
 | At least `smallAngleThreshold` and below `largeAngleThreshold` | `mediumSteeringDuration` (default 600 ms) |
 | At least `largeAngleThreshold` | `largeSteeringDuration` (default 1000 ms) |
 
-Every steering press lasts at least 500 ms. The default small duration is 500 ms, replacing the current 200 ms default.
+Every steering press lasts at least 500 ms. The default small duration is 500 ms.
 
 After Release, the helm waits 200 ms before the next steering press.
 
@@ -505,7 +505,7 @@ Settings copy matches section 6 and section 7: dead zone 8 m, activation 12 m, a
 | GPS | 4 satellites, HDOP below 5, age under 2 s, 5 bad cycles | same |
 | After success | holds until disengage | spot-locks the waypoint |
 
-These defaults replace the current 2 m / 4 m spot-lock radii and 5 m arrival radius. Those radii sit inside the noise of a NEO-6M and will hunt a motor. The operator can tighten them in settings after a water session shows a tighter fix.
+These defaults replace the earlier 2 m / 4 m spot-lock radii and 5 m arrival radius. Those radii sit inside the noise of a NEO-6M and will hunt a motor. The operator can tighten them in settings after a water session shows a tighter fix.
 
 ## 13. Acceptance
 

@@ -11,9 +11,17 @@ struct HelmControlView: View {
         bluetooth.sensorData?.isNavigationReady == true
     }
 
+    private var helmBlocksManual: Bool {
+        switch bluetooth.sensorData?.currentHelmState {
+        case .spotLockActive, .navApproaching, .navArriving, .disengaging:
+            return true
+        default:
+            return false
+        }
+    }
+
     private var autonomousModeActive: Bool {
-        navController.isActive || navController.isStarting ||
-        spotLockController.isActive || spotLockController.isEngaging
+        helmBlocksManual || navController.isStarting || spotLockController.isEngaging
     }
 
     private var bearing: Double? {
@@ -40,16 +48,7 @@ struct HelmControlView: View {
             ManualMotorControls(
                 bluetooth: bluetooth,
                 isDisabled: autonomousModeActive || !bluetooth.isOperational,
-                onManualControl: {
-                    Task {
-                        if navController.isActive || navController.isStarting {
-                            navController.cancel()
-                        }
-                        if spotLockController.isActive || spotLockController.isEngaging {
-                            await spotLockController.disengage()
-                        }
-                    }
-                }
+                onManualControl: {}
             )
         } header: {
             Text("Manual Remote Control")
@@ -57,9 +56,9 @@ struct HelmControlView: View {
             if !bluetooth.isOperational {
                 Text("Connect and authenticate before sending motor commands.")
             } else if autonomousModeActive {
-                Text("Manual control is disabled while navigation or Spot Lock is active. Using manual control cancels autonomous modes.")
+                Text("Manual control is locked while the helm is holding position, navigating, zeroing, or stopping.")
             } else {
-                Text("Manual control cancels any active navigation or Spot Lock")
+                Text("Manual control is available while the helm is idle.")
             }
         }
     }
