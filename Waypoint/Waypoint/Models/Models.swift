@@ -1,0 +1,220 @@
+import Foundation
+import CoreLocation
+import SwiftUI
+
+enum GPSQuality {
+    case noFix
+    case poor
+    case fair
+    case good
+    case excellent
+    
+    var color: Color {
+        switch self {
+        case .noFix: return .red
+        case .poor: return .orange
+        case .fair: return .yellow
+        case .good, .excellent: return .green
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .noFix:
+            return "antenna.radiowaves.left.and.right.slash"
+        case .poor, .fair, .good, .excellent:
+            return "antenna.radiowaves.left.and.right"
+        }
+    }
+    
+    var label: String {
+        switch self {
+        case .noFix: return "No Fix"
+        case .poor: return "Poor"
+        case .fair: return "Fair"
+        case .good: return "Good"
+        case .excellent: return "Excellent"
+        }
+    }
+}
+
+enum BLESignalStrength {
+    case disconnected
+    case weak
+    case fair
+    case good
+    case excellent
+    
+    static func from(rssi: Int) -> BLESignalStrength {
+        if rssi >= -50 { return .excellent }
+        if rssi >= -60 { return .good }
+        if rssi >= -70 { return .fair }
+        if rssi >= -80 { return .weak }
+        return .disconnected
+    }
+    
+    var color: Color {
+        switch self {
+        case .disconnected: return .red
+        case .weak: return .orange
+        case .fair: return .yellow
+        case .good, .excellent: return .green
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .disconnected:
+            return "wifi.slash"
+        case .weak, .fair, .good, .excellent:
+            return "wifi"
+        }
+    }
+    
+    var label: String {
+        switch self {
+        case .disconnected: return "Disconnected"
+        case .weak: return "Weak"
+        case .fair: return "Fair"
+        case .good: return "Good"
+        case .excellent: return "Excellent"
+        }
+    }
+    
+    var bars: Int {
+        switch self {
+        case .disconnected: return 0
+        case .weak: return 1
+        case .fair: return 2
+        case .good: return 3
+        case .excellent: return 4
+        }
+    }
+}
+
+struct BleResponse: Codable, Equatable {
+    let ack: String?
+    let error: String?
+    var button: String? = nil
+    var id: String? = nil
+    var source: String? = nil
+}
+
+struct RemotePairingState: Equatable {
+    var isListening: Bool = false
+    var heardButton: String? = nil
+    var deviceId: String = ""
+    var source: String = "none"
+    var message: String? = nil
+}
+
+enum ConnectionState: String {
+    case disconnected = "Disconnected"
+    case scanning = "Scanning..."
+    case connecting = "Connecting..."
+    case reconnecting = "Reconnecting..."
+    case connected = "Connected"
+}
+
+class LocationWithSpeed {
+    var coordinate: CLLocationCoordinate2D
+    var speed: Double
+    var timestamp: Date
+
+    private var lastCoordinate: CLLocationCoordinate2D?
+    private var lastTimestamp: Date?
+
+    init(coordinate: CLLocationCoordinate2D) {
+        self.coordinate = coordinate
+        self.speed = 0
+        self.timestamp = Date()
+    }
+
+    func updateLocation(_ newCoordinate: CLLocationCoordinate2D) {
+        let now = Date()
+
+        // Calculate speed from OLD coordinate to NEW coordinate
+        if let previousCoordinate = lastCoordinate, let previousTime = lastTimestamp {
+            let timeDiff = now.timeIntervalSince(previousTime)
+
+            if timeDiff > 0 {
+                // Distance from previous position to new position
+                let distance = previousCoordinate.distance(to: newCoordinate)
+                speed = distance / timeDiff
+            }
+        }
+
+        // Store current values as "last" for next update
+        lastCoordinate = coordinate
+        lastTimestamp = timestamp
+
+        // Update current values
+        coordinate = newCoordinate
+        timestamp = now
+    }
+}
+
+extension CLLocationCoordinate2D: @retroactive Codable {
+    enum CodingKeys: String, CodingKey {
+        case latitude
+        case longitude
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let latitude = try container.decode(Double.self, forKey: .latitude)
+        let longitude = try container.decode(Double.self, forKey: .longitude)
+        self.init(latitude: latitude, longitude: longitude)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(latitude, forKey: .latitude)
+        try container.encode(longitude, forKey: .longitude)
+    }
+}
+
+extension CLLocationCoordinate2D: @retroactive Equatable {
+    public static func == (lhs: CLLocationCoordinate2D, rhs: CLLocationCoordinate2D) -> Bool {
+        lhs.latitude == rhs.latitude && lhs.longitude == rhs.longitude
+    }
+}
+
+extension CLLocationCoordinate2D: @retroactive Hashable {
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(latitude)
+        hasher.combine(longitude)
+    }
+}
+
+extension CLLocationCoordinate2D {
+    private static let earthRadiusMeters: Double = 6371000.0
+    
+    func distance(to destination: CLLocationCoordinate2D) -> Double {
+        let lat1Rad = latitude * .pi / 180
+        let lat2Rad = destination.latitude * .pi / 180
+        let deltaLat = (destination.latitude - latitude) * .pi / 180
+        let deltaLon = (destination.longitude - longitude) * .pi / 180
+        
+        let a = sin(deltaLat / 2) * sin(deltaLat / 2) +
+                cos(lat1Rad) * cos(lat2Rad) *
+                sin(deltaLon / 2) * sin(deltaLon / 2)
+        let c = 2 * atan2(sqrt(a), sqrt(1 - a))
+        
+        return Self.earthRadiusMeters * c
+    }
+    
+    func bearing(to destination: CLLocationCoordinate2D) -> Double {
+        let lat1Rad = latitude * .pi / 180
+        let lat2Rad = destination.latitude * .pi / 180
+        let deltaLon = (destination.longitude - longitude) * .pi / 180
+        
+        let x = sin(deltaLon) * cos(lat2Rad)
+        let y = cos(lat1Rad) * sin(lat2Rad) - sin(lat1Rad) * cos(lat2Rad) * cos(deltaLon)
+        
+        var bearing = atan2(x, y) * 180 / .pi
+        bearing = (bearing + 360).truncatingRemainder(dividingBy: 360)
+        
+        return bearing
+    }
+}

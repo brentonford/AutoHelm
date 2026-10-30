@@ -1,0 +1,706 @@
+#include "BleManager.h"
+#include "BleAuth.h"
+
+BleManager::BleManager()
+    : _server(nullptr)
+    , _service(nullptr)
+    , _sensorStatusChar(nullptr)
+    , _commandChar(nullptr)
+    , _calibrationChar(nullptr)
+    , _responseChar(nullptr)
+    , _lastStatusTime(0)
+    , _commandQueue(nullptr)
+    , _connected(false)
+    , _justDisconnected(false)
+    , _restartAdvertisingPending(false)
+    , _advertisingRestartAtMs(0)
+    , _authenticated(false)
+    , _authFailedAttempts(0)
+    , _disconnectGracePeriodMs(BleSecurity::defaultDisconnectGraceMs) {
+}
+
+bool BleManager::begin() {
+    BLEDevice::init(BleConfig::deviceName);
+
+    _server = BLEDevice::createServer();
+    _server->setCallbacks(this);
+
+    _service = _server->createService(BleConfig::serviceUuid);
+
+    _sensorStatusChar = _service->createCharacteristic(
+        BleConfig::sensorStatusCharUuid,
+        BLECharacteristic::PROPERTY_NOTIFY
+    );
+    _sensorStatusChar->addDescriptor(new BLE2902());
+
+    _commandChar = _service->createCharacteristic(
+        BleConfig::commandCharUuid,
+        BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR
+    );
+    _commandChar->setCallbacks(this);
+
+    _calibrationChar = _service->createCharacteristic(
+        BleConfig::calibrationCharUuid,
+        BLECharacteristic::PROPERTY_NOTIFY
+    );
+    _calibrationChar->addDescriptor(new BLE2902());
+
+    // Dedicated response characteristic for command acknowledgments
+    _responseChar = _service->createCharacteristic(
+        BleConfig::responseCharUuid,
+        BLECharacteristic::PROPERTY_NOTIFY
+    );
+    _responseChar->addDescriptor(new BLE2902());
+
+    _service->start();
+    Serial.println("[BLE] Service started");
+
+    BLEAdvertising* advertising = BLEDevice::getAdvertising();
+    advertising->addServiceUUID(BleConfig::serviceUuid);
+    advertising->setScanResponse(true);
+    advertising->setMinPreferred(0x06);
+    advertising->setMaxPreferred(0x12);
+    BLEDevice::startAdvertising();
+
+    _commandQueue = xQueueCreate(BleConfig::commandQueueDepth, sizeof(BleQueuedCommand));
+    if (!_commandQueue) {
+        Serial.println("[BLE] ERROR: Failed to create command queue");
+        return false;
+    }
+
+    if (requiresAuth()) {
+        Serial.println("[BLE] Auth required – privileged commands gated until AUTH");
+    } else {
+        Serial.println("[BLE] Auth disabled (no BLE_AUTH_SECRET configured)");
+    }
+
+    Serial.println("[BLE] Advertising as 'Helm'");
+    return true;
+}
+
+void BleManager::update() {
+    drainCommandQueue();
+
+    if (_restartAdvertisingPending && millis() >= _advertisingRestartAtMs) {
+        _restartAdvertisingPending = false;
+        BLEDevice::startAdvertising();
+        Serial.println("[BLE] Advertising restarted");
+    }
+}
+
+void BleManager::drainCommandQueue() {
+    if (!_commandQueue) return;
+
+    BleQueuedCommand queued;
+    while (xQueueReceive(_commandQueue, &queued, 0) == pdTRUE) {
+        parseCommand(queued.data);
+    }
+}
+
+void BleManager::onConnect(BLEServer* server) {
+    _connected = true;
+    _justDisconnected = false;
+    _restartAdvertisingPending = false;
+    resetAuthSession();
+    Serial.println("[BLE] Client connected");
+}
+
+void BleManager::onDisconnect(BLEServer* server) {
+    _connected = false;
+    _justDisconnected = true;
+    _restartAdvertisingPending = true;
+    _advertisingRestartAtMs = millis() + BleConfig::advertisingRestartDelayMs;
+    resetAuthSession();
+    Serial.println("[BLE] Client disconnected");
+}
+
+void BleManager::resetAuthSession() {
+    _authenticated = !requiresAuth();
+    _authFailedAttempts = 0;
+}
+
+bool BleManager::requiresAuth() const {
+    return BleAuth::isRequired();
+}
+
+bool BleManager::isAuthenticated() const {
+    return _authenticated;
+}
+
+void BleManager::setDisconnectGracePeriodMs(uint32_t graceMs) {
+    _disconnectGracePeriodMs = constrain(graceMs, 1000U, 30000U);
+}
+
+uint32_t BleManager::getDisconnectGracePeriodMs() const {
+    return _disconnectGracePeriodMs;
+}
+
+bool BleManager::isPrivilegedCommand(const char* cmd) const {
+    if (!cmd || cmd[0] == '\0') {
+        return false;
+    }
+
+    if (strncmp(cmd, "AUTH:", 5) == 0) {
+        return false;
+    }
+
+    return strncmp(cmd, "RF_", 3) == 0
+        || strncmp(cmd, "SPOTLOCK_", 9) == 0
+        || strncmp(cmd, "NAV_", 4) == 0
+        || strncmp(cmd, "PAIR_", 5) == 0
+        || strcmp(cmd, "START_CAL") == 0
+        || strcmp(cmd, "STOP_CAL") == 0
+        || strncmp(cmd, "CAL_VALUES:", 11) == 0;
+}
+
+bool BleManager::ensureAuthenticatedFor(const char* cmd) {
+    if (!requiresAuth()) {
+        return true;
+    }
+
+    if (_authenticated) {
+        return true;
+    }
+
+    if (!isPrivilegedCommand(cmd)) {
+        return true;
+    }
+
+    if (_authFailedAttempts >= BleSecurity::maxAuthFailures) {
+        sendResponse("{\"error\":\"AUTH_LOCKED\"}");
+        return false;
+    }
+
+    sendResponse("{\"error\":\"AUTH_REQUIRED\"}");
+    return false;
+}
+
+bool BleManager::wasJustDisconnected() const {
+    return _justDisconnected;
+}
+
+void BleManager::clearDisconnectFlag() {
+    _justDisconnected = false;
+}
+
+void BleManager::onWrite(BLECharacteristic* characteristic) {
+    
+    if (!characteristic) {
+        Serial.println("[BLE] ERROR: characteristic is NULL");
+        return;
+    }
+
+    if (characteristic != _commandChar) {
+        Serial.println("[BLE] Not command characteristic - ignoring");
+        return;
+    }
+
+    uint8_t* pData = characteristic->getData();
+    size_t len = characteristic->getValue().length();
+    
+    if (len == 0 || !pData) {
+        Serial.println("[BLE] Empty write or null data - ignoring");
+        return;
+    }
+    
+    if (len >= BleConfig::commandMaxLen) {
+        Serial.printf("[BLE] ERROR: Command too long (%d bytes)\n", len);
+        return;
+    }
+
+    if (!_commandQueue) {
+        Serial.println("[BLE] ERROR: Command queue not initialized");
+        return;
+    }
+
+    BleQueuedCommand queued = {};
+    memcpy(queued.data, pData, len);
+    queued.data[len] = '\0';
+
+    bool isAllNullBytes = true;
+    for (size_t i = 0; i < len; i++) {
+        if (queued.data[i] != '\0') {
+            isAllNullBytes = false;
+            break;
+        }
+    }
+
+    if (isAllNullBytes) {
+        Serial.println("[BLE] All null bytes - ignoring");
+        return;
+    }
+
+    if (xQueueSend(_commandQueue, &queued, 0) != pdTRUE) {
+        Serial.println("[BLE] WARNING: Command queue full – dropping command");
+        sendResponse("{\"error\":\"COMMAND_QUEUE_FULL\"}");
+    }
+}
+
+void BleManager::parseCommand(const char* data) {
+    if (!data) {
+        return;
+    }
+    
+    size_t dataLen = strlen(data);
+    if (dataLen == 0) {
+        return;
+    }
+    
+    if (dataLen > 127) {
+        Serial.println("[BLE] ERROR: Invalid command length");
+        return;
+    }
+
+    static char cmdBuffer[128];
+    strncpy(cmdBuffer, data, 127);
+    cmdBuffer[127] = '\0';
+    
+    char* cmd = cmdBuffer;
+    while (*cmd && (*cmd == ' ' || *cmd == '\t' || *cmd == '\r' || *cmd == '\n' || *cmd == '\0')) {
+        cmd++;
+    }
+    
+    size_t len = strlen(cmd);
+    if (len == 0) {
+        return;
+    }
+    
+    while (len > 0 && (cmd[len-1] == ' ' || cmd[len-1] == '\t' || cmd[len-1] == '\r' || cmd[len-1] == '\n')) {
+        cmd[len-1] = '\0';
+        len--;
+    }
+    
+    if (len == 0) {
+        return;
+    }
+
+    if (strncmp(cmd, "AUTH:", 5) == 0) {
+        const char* secret = cmd + 5;
+        while (*secret == ' ' || *secret == '\t') {
+            secret++;
+        }
+
+        if (_authFailedAttempts >= BleSecurity::maxAuthFailures) {
+            sendResponse("{\"error\":\"AUTH_LOCKED\"}");
+            return;
+        }
+
+        if (BleAuth::validateSecret(secret)) {
+            _authenticated = true;
+            _authFailedAttempts = 0;
+            sendResponse("{\"ack\":\"AUTH_OK\"}");
+            Serial.println("[BLE] Client authenticated");
+        } else {
+            _authFailedAttempts++;
+            sendResponse("{\"error\":\"AUTH_FAILED\"}");
+            Serial.printf("[BLE] Auth failed (%u/%u)\n",
+                          _authFailedAttempts, BleSecurity::maxAuthFailures);
+        }
+        return;
+    }
+
+    if (!ensureAuthenticatedFor(cmd)) {
+        return;
+    }
+    
+    for (char* p = cmd; *p; p++) {
+        *p = toupper(*p);
+    }
+
+    if (strcmp(cmd, "START_CAL") == 0) {
+        _status.pendingCommand = BleCommand::StartCalibration;
+        sendResponse("{\"ack\":\"START_CAL\"}");
+    } else if (strcmp(cmd, "STOP_CAL") == 0) {
+        _status.pendingCommand = BleCommand::StopCalibration;
+        sendResponse("{\"ack\":\"STOP_CAL\"}");
+    } else if (strncmp(cmd, "CAL_VALUES:", 11) == 0) {
+        float offsetX, offsetY, offsetZ, scaleX, scaleY, scaleZ, headingOffset = 0.0f;
+        int parsed = sscanf(cmd + 11, "%f,%f,%f,%f,%f,%f,%f", 
+                   &offsetX, &offsetY, &offsetZ, &scaleX, &scaleY, &scaleZ, &headingOffset);
+        
+        if (parsed >= 6) {  // headingOffset is optional (for backward compatibility)
+            _status.pendingCalibration.offsetX = offsetX;
+            _status.pendingCalibration.offsetY = offsetY;
+            _status.pendingCalibration.offsetZ = offsetZ;
+            _status.pendingCalibration.scaleX = scaleX;
+            _status.pendingCalibration.scaleY = scaleY;
+            _status.pendingCalibration.scaleZ = scaleZ;
+            _status.pendingCalibration.headingOffset = (parsed == 7) ? headingOffset : 0.0f;
+            _status.hasCalibrationPending = true;
+            Serial.printf("[BLE] Calibration values received: Offsets(%.2f,%.2f,%.2f) Scales(%.4f,%.4f,%.4f) HeadingOffset(%.1f)\n",
+                offsetX, offsetY, offsetZ, scaleX, scaleY, scaleZ, _status.pendingCalibration.headingOffset);
+            sendResponse("{\"ack\":\"CAL_VALUES\"}");
+        } else {
+            Serial.println("[BLE] ERROR: Failed to parse calibration values");
+            sendResponse("{\"error\":\"Invalid CAL_VALUES format\"}");
+        }
+    } else if (strcmp(cmd, "SPOTLOCK_DISENGAGE") == 0) {
+        _status.pendingSlCommand = SpotLockCommand::Disengage;
+        sendResponse("{\"ack\":\"SPOTLOCK_DISENGAGE\"}");
+
+    } else if (strncmp(cmd, "SPOTLOCK_ENGAGE:", 16) == 0) {
+        float lat = 0.0f, lon = 0.0f;
+        if (sscanf(cmd + 16, "%f,%f", &lat, &lon) == 2) {
+            _status.slEngageLat      = lat;
+            _status.slEngageLon      = lon;
+            _status.pendingSlCommand = SpotLockCommand::Engage;
+        } else {
+            sendResponse("{\"error\":\"Invalid SPOTLOCK_ENGAGE format\"}");
+        }
+
+    } else if (strncmp(cmd, "SPOTLOCK_JOG:", 13) == 0) {
+        const char* dirStr = cmd + 13;
+        if      (strcmp(dirStr, "FORWARD") == 0) _status.slJogDir = SpotLockJogDir::Forward;
+        else if (strcmp(dirStr, "BACK")    == 0) _status.slJogDir = SpotLockJogDir::Back;
+        else if (strcmp(dirStr, "LEFT")    == 0) _status.slJogDir = SpotLockJogDir::Left;
+        else                                      _status.slJogDir = SpotLockJogDir::Right;
+        _status.pendingSlCommand = SpotLockCommand::Jog;
+
+    } else if (strncmp(cmd, "SPOTLOCK_SETTINGS:", 18) == 0) {
+        // CSV: deadZone,activation,jog,minSpd,maxSpd,gain,spdDelayS,hdgTol,corrIntervalS,
+        //      smallAng,largeAng,smallDur,medDur,largeDur,maxRot,rotPerMs,minSat,maxHDOP,maxFail,filterWin,disconnectGraceS
+        SpotLockSettings s;
+        float spdDelaySec = 2.0f, corrIntervalSec = 1.0f;
+        float disconnectGraceSec = s.disconnectGracePeriodSec;
+        int minSpd = 3, maxSpd = 10, smallDur = 200, medDur = 600, largeDur = 1000;
+        int minSat = 4, maxFail = 5, filterWin = 5;
+        int parsed = sscanf(cmd + 18,
+            "%f,%f,%f,%d,%d,%f,%f,%f,%f,%f,%f,%d,%d,%d,%f,%f,%d,%f,%d,%d,%f",
+            &s.deadZoneRadius, &s.activationThreshold, &s.jogDistance,
+            &minSpd, &maxSpd, &s.proportionalGain,
+            &spdDelaySec, &s.headingTolerance, &corrIntervalSec,
+            &s.smallAngleThreshold, &s.largeAngleThreshold,
+            &smallDur, &medDur, &largeDur,
+            &s.maxRotationBeforeUntangle, &s.rotationPerMs,
+            &minSat, &s.maxHDOP, &maxFail, &filterWin, &disconnectGraceSec);
+
+        if (parsed == 20 || parsed == 21) {
+            s.minSpeed             = (uint8_t)minSpd;
+            s.maxSpeed             = (uint8_t)maxSpd;
+            s.speedChangeDelayMs   = spdDelaySec * 1000.0f;
+            s.correctionIntervalMs = corrIntervalSec * 1000.0f;
+            s.smallSteeringDuration= (uint16_t)smallDur;
+            s.mediumSteeringDuration=(uint16_t)medDur;
+            s.largeSteeringDuration= (uint16_t)largeDur;
+            s.minSatellites        = (uint8_t)minSat;
+            s.maxConsecutiveGpsFail= (uint8_t)maxFail;
+            (void)filterWin;  // Deprecated field – accepted for protocol compatibility
+            if (parsed == 21) {
+                s.disconnectGracePeriodSec = constrain(disconnectGraceSec, 1.0f, 30.0f);
+            }
+            setDisconnectGracePeriodMs((uint32_t)(s.disconnectGracePeriodSec * 1000.0f));
+            _status.slPendingSettings  = s;
+            _status.hasSlSettingsPending = true;
+            sendResponse("{\"ack\":\"SPOTLOCK_SETTINGS\"}");
+        } else {
+            Serial.printf("[BLE] SPOTLOCK_SETTINGS parse failed – got %d/21 fields\n", parsed);
+            sendResponse("{\"error\":\"Invalid SPOTLOCK_SETTINGS format\"}");
+        }
+
+    } else if (strncmp(cmd, "NAV_SETTINGS:", 13) == 0) {
+        // Same 20-field CSV format as SPOTLOCK_SETTINGS — reuses SpotLockSettings struct.
+        // Applied only to WaypointNavController; SpotLock settings are unaffected.
+        SpotLockSettings s;
+        float spdDelaySec = 2.0f, corrIntervalSec = 1.0f;
+        int minSpd = 2, maxSpd = 10, smallDur = 200, medDur = 600, largeDur = 1000;
+        int minSat = 4, maxFail = 5, filterWin = 5;
+        int parsed = sscanf(cmd + 13,
+            "%f,%f,%f,%d,%d,%f,%f,%f,%f,%f,%f,%d,%d,%d,%f,%f,%d,%f,%d,%d",
+            &s.deadZoneRadius, &s.activationThreshold, &s.jogDistance,
+            &minSpd, &maxSpd, &s.proportionalGain,
+            &spdDelaySec, &s.headingTolerance, &corrIntervalSec,
+            &s.smallAngleThreshold, &s.largeAngleThreshold,
+            &smallDur, &medDur, &largeDur,
+            &s.maxRotationBeforeUntangle, &s.rotationPerMs,
+            &minSat, &s.maxHDOP, &maxFail, &filterWin);
+
+        if (parsed == 20) {
+            s.minSpeed              = (uint8_t)minSpd;
+            s.maxSpeed              = (uint8_t)maxSpd;
+            s.speedChangeDelayMs    = spdDelaySec * 1000.0f;
+            s.correctionIntervalMs  = corrIntervalSec * 1000.0f;
+            s.smallSteeringDuration = (uint16_t)smallDur;
+            s.mediumSteeringDuration= (uint16_t)medDur;
+            s.largeSteeringDuration = (uint16_t)largeDur;
+            s.minSatellites         = (uint8_t)minSat;
+            s.maxConsecutiveGpsFail = (uint8_t)maxFail;
+            (void)filterWin;  // Deprecated field – accepted for protocol compatibility
+            _status.navPendingSettings     = s;
+            _status.hasNavSettingsPending  = true;
+            sendResponse("{\"ack\":\"NAV_SETTINGS\"}");
+        } else {
+            Serial.printf("[BLE] NAV_SETTINGS parse failed – got %d/20 fields\n", parsed);
+            sendResponse("{\"error\":\"Invalid NAV_SETTINGS format\"}");
+        }
+
+    } else if (strncmp(cmd, "NAV_START:", 10) == 0) {
+        float lat = 0.0f, lon = 0.0f;
+        int   spd = 5;
+        if (sscanf(cmd + 10, "%f,%f,%d", &lat, &lon, &spd) == 3 && spd >= 1 && spd <= 10) {
+            _status.navTargetLat    = lat;
+            _status.navTargetLon    = lon;
+            _status.navTargetSpeed  = (uint8_t)spd;
+            _status.pendingNavCommand = NavCommand::Start;
+            Serial.printf("[BLE] NAV_START target=%.6f,%.6f speed=%d\n", lat, lon, spd);
+        } else {
+            sendResponse("{\"error\":\"Invalid NAV_START format\"}");
+        }
+
+    } else if (strcmp(cmd, "NAV_CANCEL") == 0) {
+        _status.pendingNavCommand = NavCommand::Cancel;
+        sendResponse("{\"ack\":\"NAV_CANCEL\"}");
+
+    } else if (strcmp(cmd, "PAIR_START") == 0) {
+        _status.pendingPairCommand = PairCommand::Start;
+    } else if (strcmp(cmd, "PAIR_CANCEL") == 0) {
+        _status.pendingPairCommand = PairCommand::Cancel;
+    } else if (strcmp(cmd, "PAIR_STATUS") == 0) {
+        _status.pendingPairCommand = PairCommand::Status;
+    } else if (strcmp(cmd, "PAIR_CLEAR") == 0) {
+        _status.pendingPairCommand = PairCommand::Clear;
+
+    } else if (strncmp(cmd, "RF_", 3) == 0) {
+        if (len < 4 || len > 32) {
+            Serial.println("[BLE] ERROR: Invalid RF command length");
+            return;
+        }
+
+        static char rfCmdBuffer[32];
+        strncpy(rfCmdBuffer, cmd + 3, 31);
+        rfCmdBuffer[31] = '\0';
+        
+        size_t rfLen = strlen(rfCmdBuffer);
+
+        if (rfLen > 5 && strcmp(rfCmdBuffer + rfLen - 5, "_HOLD") == 0) {
+            rfCmdBuffer[rfLen - 5] = '\0';
+            if (strlen(rfCmdBuffer) == 0) {
+                Serial.println("[BLE] ERROR: Invalid RF_HOLD command");
+                return;
+            }
+            _status.pendingRfCommand = String(rfCmdBuffer);
+            _status.isHoldCommand = true;
+        } else {
+            _status.pendingRfCommand = String(rfCmdBuffer);
+            _status.isHoldCommand = false;
+        }
+
+        char ack[64];
+        snprintf(ack, sizeof(ack), "{\"ack\":\"%s\"}", cmd);
+        sendResponse(ack);
+    } else {
+        sendResponse("{\"error\":\"Unknown command\"}");
+    }
+}
+
+size_t BleManager::buildSensorStatusJson(const GpsData& gpsData, float heading,
+                                          const SpotLockState& sl,
+                                          const WaypointNavState& nav,
+                                          HelmState helmState) {
+    char* json = _sensorStatusBuffer;
+
+    int n = snprintf(json, sizeof(_sensorStatusBuffer),
+        "{\"has_fix\":%s,\"satellites\":%d,\"currentLat\":%.6f,\"currentLon\":%.6f"
+        ",\"altitude\":%.1f,\"hdop\":%.1f,\"heading\":%.1f",
+        gpsData.hasFix ? "true" : "false",
+        gpsData.satellites,
+        gpsData.latitude, gpsData.longitude,
+        gpsData.altitude, gpsData.hdop, heading
+    );
+
+    // SpotLock telemetry
+    if (sl.active) {
+        n += snprintf(json + n, sizeof(_sensorStatusBuffer) - n,
+            ",\"sl_active\":true,\"sl_lat\":%.6f,\"sl_lon\":%.6f"
+            ",\"sl_dist\":%.2f,\"sl_bearing\":%.1f,\"sl_speed\":%d"
+            ",\"sl_rotation\":%.1f,\"sl_tangled\":%s,\"sl_thrust\":%s",
+            sl.lockLat, sl.lockLon,
+            sl.distanceM, sl.bearingDeg, sl.speedLevel,
+            sl.cableRotation,
+            sl.cableTangled   ? "true" : "false",
+            sl.applyingThrust ? "true" : "false"
+        );
+    } else {
+        n += snprintf(json + n, sizeof(_sensorStatusBuffer) - n, ",\"sl_active\":false");
+    }
+
+    // Navigation telemetry
+    if (nav.active) {
+        n += snprintf(json + n, sizeof(_sensorStatusBuffer) - n,
+            ",\"nav_active\":true,\"nav_lat\":%.6f,\"nav_lon\":%.6f"
+            ",\"nav_dist\":%.2f,\"nav_bearing\":%.1f,\"nav_speed\":%d,\"nav_arriving\":%s",
+            nav.targetLat, nav.targetLon,
+            nav.distMetres, nav.bearingDeg, nav.speedLevel,
+            nav.arriving ? "true" : "false"
+        );
+    } else {
+        n += snprintf(json + n, sizeof(_sensorStatusBuffer) - n, ",\"nav_active\":false");
+    }
+
+    n += snprintf(json + n, sizeof(_sensorStatusBuffer) - n, ",\"helm_state\":%d", (uint8_t)helmState);
+    n += snprintf(json + n, sizeof(_sensorStatusBuffer) - n,
+        ",\"ble_authed\":%s,\"disconnect_grace_s\":%.1f",
+        _authenticated ? "true" : "false",
+        _disconnectGracePeriodMs / 1000.0f
+    );
+    n += snprintf(json + n, sizeof(_sensorStatusBuffer) - n, "}");
+
+    if (n < 0 || static_cast<size_t>(n) >= sizeof(_sensorStatusBuffer) - 1) {
+        Serial.println("[BLE] WARNING: JSON buffer truncated in buildSensorStatusJson");
+        return 0;
+    }
+    return static_cast<size_t>(n);
+}
+
+void BleManager::sendSensorStatus(const GpsData& gpsData, float heading,
+                                   const SpotLockState& slState,
+                                   const WaypointNavState& navState,
+                                   HelmState helmState) {
+    if (!_connected || !_sensorStatusChar)
+        return;
+
+    uint32_t now = millis();
+    if ((now - _lastStatusTime) < BleConfig::statusIntervalMs)
+        return;
+
+    _lastStatusTime = now;
+
+    size_t jsonLen = buildSensorStatusJson(gpsData, heading, slState, navState, helmState);
+    if (jsonLen == 0 || jsonLen >= BleConfig::jsonBufferSize) {
+        Serial.println("[BLE] WARNING: JSON invalid in sendSensorStatus");
+        return;
+    }
+
+    _sensorStatusChar->setValue((uint8_t*)_sensorStatusBuffer, jsonLen);
+    _sensorStatusChar->notify();
+}
+
+void BleManager::sendCalibrationData(const String& data) {
+    if (!_connected || !_calibrationChar)
+        return;
+
+    if (data.length() > 512) {
+        Serial.println("[BLE] ERROR: Calibration data too large");
+        return;
+    }
+
+    _calibrationChar->setValue((uint8_t*)data.c_str(), data.length());
+    _calibrationChar->notify();
+}
+
+void BleManager::sendResponse(const String& response) {
+    if (!_connected || !_responseChar)
+        return;
+
+    if (response.length() > BleConfig::jsonBufferSize) {
+        Serial.println("[BLE] ERROR: Response too large");
+        return;
+    }
+
+    _responseChar->setValue((uint8_t*)response.c_str(), response.length());
+    _responseChar->notify();
+}
+
+void BleManager::sendResponse(const char* response) {
+    if (!_connected || !_responseChar)
+        return;
+
+    size_t len = strlen(response);
+    if (len > BleConfig::jsonBufferSize) {
+        Serial.println("[BLE] ERROR: Response too large");
+        return;
+    }
+
+    _responseChar->setValue((uint8_t*)response, len);
+    _responseChar->notify();
+}
+
+bool BleManager::isConnected() const {
+    return _connected;
+}
+
+BleCommand BleManager::consumeCommand() {
+    BleCommand cmd = _status.pendingCommand;
+    _status.pendingCommand = BleCommand::None;
+    return cmd;
+}
+
+bool BleManager::hasRfCommandPending() const {
+    return _status.pendingRfCommand.length() > 0;
+}
+
+bool BleManager::isRfHoldCommand() const {
+    return _status.isHoldCommand;
+}
+
+String BleManager::consumeRfCommand() {
+    String cmd = _status.pendingRfCommand;
+    _status.pendingRfCommand = "";
+    _status.isHoldCommand = false;
+    return cmd;
+}
+
+bool BleManager::hasCalibrationPending() const {
+    return _status.hasCalibrationPending;
+}
+
+CompassCalibration BleManager::consumeCalibration() {
+    _status.hasCalibrationPending = false;
+    return _status.pendingCalibration;
+}
+
+bool BleManager::hasSpotLockCommandPending() const {
+    return _status.pendingSlCommand != SpotLockCommand::None;
+}
+
+SpotLockCommand BleManager::consumeSpotLockCommand() {
+    SpotLockCommand cmd = _status.pendingSlCommand;
+    _status.pendingSlCommand = SpotLockCommand::None;
+    return cmd;
+}
+
+float BleManager::getSlEngageLat() const  { return _status.slEngageLat; }
+float BleManager::getSlEngageLon() const  { return _status.slEngageLon; }
+SpotLockJogDir BleManager::getSlJogDir() const { return _status.slJogDir; }
+
+bool BleManager::hasSlSettingsPending() const {
+    return _status.hasSlSettingsPending;
+}
+
+SpotLockSettings BleManager::consumeSlSettings() {
+    _status.hasSlSettingsPending = false;
+    return _status.slPendingSettings;
+}
+
+bool BleManager::hasNavCommandPending() const {
+    return _status.pendingNavCommand != NavCommand::None;
+}
+
+NavCommand BleManager::consumeNavCommand() {
+    NavCommand cmd = _status.pendingNavCommand;
+    _status.pendingNavCommand = NavCommand::None;
+    return cmd;
+}
+
+float   BleManager::getNavTargetLat()   const { return _status.navTargetLat; }
+float   BleManager::getNavTargetLon()   const { return _status.navTargetLon; }
+uint8_t BleManager::getNavTargetSpeed() const { return _status.navTargetSpeed; }
+
+bool BleManager::hasNavSettingsPending() const {
+    return _status.hasNavSettingsPending;
+}
+
+SpotLockSettings BleManager::consumeNavSettings() {
+    SpotLockSettings s = _status.navPendingSettings;
+    _status.hasNavSettingsPending = false;
+    return s;
+}
+
+bool BleManager::hasPairCommandPending() const {
+    return _status.pendingPairCommand != PairCommand::None;
+}
+
+PairCommand BleManager::consumePairCommand() {
+    PairCommand cmd = _status.pendingPairCommand;
+    _status.pendingPairCommand = PairCommand::None;
+    return cmd;
+}

@@ -1,0 +1,872 @@
+import Foundation
+import CoreBluetooth
+import CoreLocation
+import Combine
+
+private enum BleUuids {
+    nonisolated static let service = CBUUID(string: "FFE0")
+    nonisolated static let sensorStatus = CBUUID(string: "FFE2")
+    nonisolated static let command = CBUUID(string: "FFE3")
+    nonisolated static let calibration = CBUUID(string: "FFE4")
+    nonisolated static let response = CBUUID(string: "FFE5")  // Dedicated response characteristic
+}
+
+private enum BleConstants {
+    nonisolated static let deviceName = "Helm"
+    static let reconnectDelaySeconds: TimeInterval = 1.0
+    static let rssiUpdateIntervalSeconds: TimeInterval = 2.0
+    static let authTimeoutSeconds: TimeInterval = 8.0
+}
+
+private struct FinalCalibrationResponse: Codable {
+    let ack: String
+    let offsetX: Double
+    let offsetY: Double
+    let offsetZ: Double
+    let scaleX: Double
+    let scaleY: Double
+    let scaleZ: Double
+    let headingOffset: Double?
+}
+
+struct BLECommandHistory: Identifiable {
+    let id = UUID()
+    let command: String
+    let timestamp: Date
+}
+
+@MainActor
+class BluetoothManager: NSObject, ObservableObject {
+
+    @Published private(set) var connectionState: ConnectionState = .disconnected
+    @Published private(set) var isAuthenticated: Bool = false
+    @Published private(set) var sensorData: SensorData?
+    @Published private(set) var lastResponse: BleResponse?
+    @Published private(set) var lastError: String?
+    @Published private(set) var rssi: Int = -100
+    @Published private(set) var signalStrength: BLESignalStrength = .disconnected
+    @Published private(set) var calibrationData: CalibrationData?
+    @Published private(set) var isCalibrating: Bool = false
+    @Published private(set) var commandHistory: [BLECommandHistory] = []
+    @Published private(set) var remotePairing = RemotePairingState()
+
+    private var centralManager: CBCentralManager?
+    private var peripheral: CBPeripheral?
+    private var sensorStatusChar: CBCharacteristic?
+    private var commandChar: CBCharacteristic?
+    private var calibrationChar: CBCharacteristic?
+    private var responseChar: CBCharacteristic?
+
+    private var reconnectTimer: Timer?
+    private var rssiTimer: Timer?
+    private var disconnectGraceTimer: Timer?
+    private var authTimeoutTask: Task<Void, Never>?
+    private var shouldReconnect = true
+    private var characteristicsReady = false
+    private var pendingCommands: [String] = []
+    private var autoUploadPending = false
+    
+    private var locationTracker: LocationWithSpeed?
+    private var lastLocationUpdate: Date?
+    private var awaitingRemotePairStart = false
+    
+    private let maxCommandHistory = 5
+
+    override init() {
+        super.init()
+    }
+
+    func initialize() {
+        guard centralManager == nil else { return }
+        centralManager = CBCentralManager(
+            delegate: self,
+            queue: nil,
+            options: [CBCentralManagerOptionShowPowerAlertKey: true]
+        )
+    }
+
+    func startScanning() {
+        guard let central = centralManager, central.state == .poweredOn else { return }
+
+        connectionState = .scanning
+        central.scanForPeripherals(withServices: [BleUuids.service], options: nil)
+    }
+
+    func stopScanning() {
+        centralManager?.stopScan()
+        if connectionState == .scanning {
+            connectionState = .disconnected
+        }
+    }
+
+    func disconnect() {
+        shouldReconnect = false
+        reconnectTimer?.invalidate()
+        disconnectGraceTimer?.invalidate()
+        rssiTimer?.invalidate()
+        authTimeoutTask?.cancel()
+
+        if let peripheral = peripheral, let central = centralManager {
+            central.cancelPeripheralConnection(peripheral)
+        }
+    }
+
+    var isOperational: Bool {
+        connectionState == .connected && isAuthenticated
+    }
+
+    func sendCommand(_ command: String) {
+        if command.hasPrefix("AUTH:") {
+            transmitCommand(command)
+            return
+        }
+
+        if DataStore.shared.requiresBleAuth && !isAuthenticated {
+            pendingCommands.append(command)
+            return
+        }
+
+        transmitCommand(command)
+    }
+
+    func sendMotorCommand(_ command: String) {
+        sendCommand(command)
+    }
+
+    // MARK: - SpotLock Commands
+
+    func engageSpotLock(at position: CLLocationCoordinate2D) {
+        let cmd = String(format: "SPOTLOCK_ENGAGE:%.6f,%.6f", position.latitude, position.longitude)
+        sendCommand(cmd)
+    }
+
+    func disengageSpotLock() {
+        sendCommand("SPOTLOCK_DISENGAGE")
+    }
+
+    func sendSpotLockSettings(_ settings: SpotLockSettings) {
+        sendCommand(settings.toSettingsCommand())
+    }
+
+    func sendNavSettings(_ settings: NavSettings) {
+        sendCommand(settings.toNavSettingsCommand())
+    }
+
+    // MARK: - Navigation Commands
+
+    func startNavigation(to coordinate: CLLocationCoordinate2D, speedLevel: Int) {
+        let cmd = String(format: "NAV_START:%.6f,%.6f,%d",
+                         coordinate.latitude, coordinate.longitude,
+                         max(1, min(10, speedLevel)))
+        sendCommand(cmd)
+    }
+
+    func cancelNavigation() {
+        sendCommand("NAV_CANCEL")
+    }
+
+    func startCalibration() {
+        sendCommand("START_CAL")
+        isCalibrating = true
+    }
+
+    func stopCalibration() {
+        sendCommand("STOP_CAL")
+    }
+
+    func sendCalibrationValues(_ calibration: CompassCalibration) {
+        print("[BLE] sendCalibrationValues called with: offset(\(calibration.offsetX),\(calibration.offsetY),\(calibration.offsetZ)) scale(\(calibration.scaleX),\(calibration.scaleY),\(calibration.scaleZ)) headingOffset(\(calibration.headingOffset)) sampleCount=\(calibration.sampleCount) isCalibrated=\(calibration.isCalibrated)")
+        
+        guard calibration.isCalibrated else {
+            print("[BLE] ERROR: Attempted to send uncalibrated values to device")
+            return
+        }
+        
+        guard abs(calibration.offsetX) > 0.01 || abs(calibration.offsetY) > 0.01 || abs(calibration.offsetZ) > 0.01 else {
+            print("[BLE] ERROR: Attempted to send zero calibration offsets to device")
+            return
+        }
+        
+        let command = calibration.toCommandString()
+        print("[BLE] Sending command: \(command)")
+        sendCommand(command)
+    }
+    
+    // MARK: - Heading Calibration Methods
+    
+    func getCurrentHeading() async -> Double? {
+        guard let sensorData = sensorData else {
+            print("[BLE] No sensor data available for heading")
+            return nil
+        }
+        return sensorData.heading
+    }
+    
+    func setHeadingOffset(_ offset: Double) {
+        var calibration = DataStore.shared.calibration
+        calibration.headingOffset = offset
+        DataStore.shared.updateCalibration(calibration)
+
+        print("[BLE] Heading offset set to \(offset)° - sending to device...")
+        // Send heading offset directly so it works even before magnetometer calibration.
+        let command = String(format: "CAL_VALUES:%.2f,%.2f,%.2f,%.4f,%.4f,%.4f,%.1f",
+                             calibration.offsetX, calibration.offsetY, calibration.offsetZ,
+                             calibration.scaleX, calibration.scaleY, calibration.scaleZ,
+                             calibration.headingOffset)
+        sendCommand(command)
+    }
+
+    private func transmitCommand(_ command: String) {
+        guard let data = command.data(using: .utf8) else { return }
+        writeToCharacteristic(commandChar, data: data)
+
+        commandHistory.insert(BLECommandHistory(command: command, timestamp: Date()), at: 0)
+        if commandHistory.count > maxCommandHistory {
+            commandHistory.removeLast()
+        }
+    }
+
+    private func writeToCharacteristic(_ characteristic: CBCharacteristic?, data: Data) {
+        guard let char = characteristic, let peripheral = peripheral else {
+            lastError = "Not connected"
+            return
+        }
+        peripheral.writeValue(data, for: char, type: .withResponse)
+    }
+
+    private func beginAuthentication() {
+        isAuthenticated = false
+        pendingCommands.removeAll()
+        authTimeoutTask?.cancel()
+
+        guard DataStore.shared.requiresBleAuth else {
+            isAuthenticated = true
+            flushPendingCommands()
+            runAutoUploadIfNeeded()
+            return
+        }
+
+        let secret = DataStore.shared.bleAuthSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !secret.isEmpty else {
+            lastError = "BLE pairing secret not configured"
+            return
+        }
+
+        print("[BLE] Sending AUTH challenge...")
+        transmitCommand("AUTH:\(secret)")
+
+        authTimeoutTask = Task {
+            try? await Task.sleep(for: .seconds(BleConstants.authTimeoutSeconds))
+            guard !Task.isCancelled, !self.isAuthenticated else { return }
+            self.lastError = "BLE authentication timed out"
+            self.disconnect()
+        }
+    }
+
+    private func flushPendingCommands() {
+        guard isAuthenticated else { return }
+        let queued = pendingCommands
+        pendingCommands.removeAll()
+        for command in queued {
+            transmitCommand(command)
+        }
+    }
+
+    private func runAutoUploadIfNeeded() {
+        guard autoUploadPending, commandChar != nil else { return }
+        autoUploadPending = false
+        autoUploadCalibration()
+        autoUploadSpotLockSettings()
+        autoUploadNavSettings()
+        requestRemotePairStatus()
+    }
+
+    func requestRemotePairStatus() {
+        guard isOperational else { return }
+        sendCommand("PAIR_STATUS")
+    }
+
+    func startRemotePairing() {
+        awaitingRemotePairStart = true
+        remotePairing.isListening = false
+        remotePairing.heardButton = nil
+        remotePairing.message = "Starting capture…"
+        sendCommand("PAIR_START")
+    }
+
+    func cancelRemotePairing() {
+        sendCommand("PAIR_CANCEL")
+    }
+
+    func clearRemotePairing() {
+        sendCommand("PAIR_CLEAR")
+    }
+
+    private func friendlyRemoteButton(_ raw: String?) -> String {
+        switch raw {
+        case "UP": return "Up"
+        case "DOWN": return "Down"
+        case "LEFT": return "Left"
+        case "RIGHT": return "Right"
+        case "MOTOR": return "Motor"
+        case "MOMENTARY": return "Momentary"
+        default: return raw ?? "a button"
+        }
+    }
+
+    /// Updates handset-capture state. Returns true when the response should not also become the global connection error.
+    private func applyRemotePairing(_ response: BleResponse) -> Bool {
+        if response.ack?.hasPrefix("PAIR_") == true || response.error?.hasPrefix("PAIR_") == true {
+            awaitingRemotePairStart = false
+        }
+
+        if let ack = response.ack {
+            switch ack {
+            case "PAIR_STARTED":
+                remotePairing.isListening = true
+                remotePairing.heardButton = nil
+                remotePairing.message = "Press and hold a button on the handset."
+                return true
+            case "PAIR_HEARD":
+                remotePairing.isListening = true
+                remotePairing.heardButton = response.button
+                if let id = response.id, !id.isEmpty {
+                    remotePairing.deviceId = id
+                }
+                let name = friendlyRemoteButton(response.button)
+                remotePairing.message = "Heard \(name). Press a different button on the same handset."
+                return true
+            case "PAIR_CONFIRMED":
+                remotePairing.isListening = false
+                remotePairing.heardButton = nil
+                remotePairing.deviceId = response.id ?? remotePairing.deviceId
+                remotePairing.source = response.source ?? "nvs"
+                remotePairing.message = "Handset saved on the Helm."
+                return true
+            case "PAIR_CANCELLED":
+                remotePairing.isListening = false
+                remotePairing.heardButton = nil
+                remotePairing.message = "Capture cancelled."
+                return true
+            case "PAIR_STATUS", "PAIR_CLEARED":
+                remotePairing.deviceId = response.id ?? ""
+                remotePairing.source = response.source ?? "none"
+                if ack == "PAIR_CLEARED" {
+                    remotePairing.isListening = false
+                    remotePairing.heardButton = nil
+                    remotePairing.message = remotePairing.deviceId.isEmpty
+                        ? "Saved handset removed."
+                        : "Saved handset removed. The Helm is using its firmware id."
+                }
+                return true
+            default:
+                break
+            }
+        }
+
+        switch response.error {
+        case "PAIR_TIMEOUT":
+            remotePairing.isListening = false
+            remotePairing.heardButton = nil
+            remotePairing.message = "No handset heard. Hold the remote next to the Helm and try again."
+            return true
+        case "PAIR_MISMATCH":
+            remotePairing.message = "That press did not match the first one. Use the same handset."
+            return true
+        case "PAIR_FAILED":
+            remotePairing.isListening = false
+            remotePairing.message = "The Helm radio could not start listening."
+            return true
+        case "AUTONOMY_ACTIVE":
+            awaitingRemotePairStart = false
+            remotePairing.isListening = false
+            remotePairing.message = "Disengage spot lock or navigation before capturing the handset."
+            return true
+        case "RF not available":
+            guard awaitingRemotePairStart else { return false }
+            awaitingRemotePairStart = false
+            remotePairing.isListening = false
+            remotePairing.message = "The Helm radio is not available."
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func handleAuthResponse(_ response: BleResponse) {
+        if response.ack == "AUTH_OK" {
+            isAuthenticated = true
+            authTimeoutTask?.cancel()
+            authTimeoutTask = nil
+            lastError = nil
+            print("[BLE] Authentication succeeded")
+            flushPendingCommands()
+            runAutoUploadIfNeeded()
+            return
+        }
+
+        if response.error == "AUTH_FAILED" {
+            lastError = "Invalid BLE pairing secret"
+            authTimeoutTask?.cancel()
+            disconnect()
+            return
+        }
+
+        if response.error == "AUTH_REQUIRED" {
+            if !isAuthenticated {
+                beginAuthentication()
+            }
+            return
+        }
+
+        if response.error == "AUTH_LOCKED" {
+            lastError = "Too many failed auth attempts – reconnect to try again"
+            disconnect()
+        }
+    }
+
+    private func startDisconnectGracePeriod() {
+        disconnectGraceTimer?.invalidate()
+        let graceSeconds = DataStore.shared.spotLockSettings.disconnectGracePeriodSeconds
+        connectionState = .reconnecting
+
+        disconnectGraceTimer = Timer.scheduledTimer(
+            withTimeInterval: graceSeconds,
+            repeats: false
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if self.connectionState == .reconnecting {
+                    self.connectionState = .disconnected
+                }
+            }
+        }
+    }
+
+    private func startRSSIMonitoring() {
+        rssiTimer?.invalidate()
+        rssiTimer = Timer.scheduledTimer(withTimeInterval: BleConstants.rssiUpdateIntervalSeconds, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.peripheral?.readRSSI()
+            }
+        }
+    }
+
+    private func stopRSSIMonitoring() {
+        rssiTimer?.invalidate()
+        rssi = -100
+        signalStrength = .disconnected
+    }
+
+    private func scheduleReconnect() {
+        guard shouldReconnect else { return }
+
+        reconnectTimer?.invalidate()
+        reconnectTimer = Timer.scheduledTimer(withTimeInterval: BleConstants.reconnectDelaySeconds, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.startScanning()
+            }
+        }
+    }
+
+    private func clearCharacteristics() {
+        sensorStatusChar = nil
+        commandChar = nil
+        calibrationChar = nil
+        responseChar = nil
+        characteristicsReady = false
+    }
+    
+    private func clearDeviceData() {
+        sensorData = nil
+        lastResponse = nil
+        locationTracker = nil
+        lastLocationUpdate = nil
+        isCalibrating = false
+        calibrationData = nil
+        isAuthenticated = false
+        awaitingRemotePairStart = false
+        if remotePairing.isListening {
+            remotePairing.message = "Disconnected before the handset was saved."
+        }
+        remotePairing.isListening = false
+        remotePairing.heardButton = nil
+        pendingCommands.removeAll()
+        autoUploadPending = false
+        authTimeoutTask?.cancel()
+        authTimeoutTask = nil
+        rssi = -100
+        signalStrength = .disconnected
+    }
+    
+    @MainActor
+    private func autoUploadSpotLockSettings() {
+        guard commandChar != nil else { return }
+        print("[BLE] Auto-uploading SpotLock settings on connect...")
+        sendSpotLockSettings(DataStore.shared.spotLockSettings)
+    }
+
+    @MainActor
+    private func autoUploadNavSettings() {
+        guard commandChar != nil else { return }
+        print("[BLE] Auto-uploading Nav settings on connect...")
+        sendNavSettings(DataStore.shared.navSettings)
+    }
+
+    @MainActor
+    private func autoUploadCalibration() {
+        let calibration = DataStore.shared.calibration
+        
+        guard calibration.isCalibrated else {
+            print("[BLE] No calibration to auto-upload")
+            return
+        }
+        
+        guard commandChar != nil else {
+            print("[BLE] Command characteristic not ready for auto-upload")
+            return
+        }
+        
+        print("[BLE] Auto-uploading calibration on connect...")
+        sendCalibrationValues(calibration)
+    }
+    
+    private func parseSensorStatus(_ data: Data) {
+        do {
+            var status = try JSONDecoder().decode(SensorData.self, from: data)
+
+            let coordinate = CLLocationCoordinate2D(
+                latitude: status.currentLat,
+                longitude: status.currentLon
+            )
+
+            if locationTracker == nil {
+                locationTracker = LocationWithSpeed(coordinate: coordinate)
+            } else {
+                locationTracker?.updateLocation(coordinate)
+            }
+
+            status.calculatedSpeed = locationTracker?.speed ?? 0
+
+            self.sensorData = status
+            lastLocationUpdate = Date()
+            lastError = nil  // Clear any previous error on success
+        } catch {
+            let dataString = String(data: data, encoding: .utf8) ?? "non-UTF8 data"
+            print("[BLE] Sensor status parse error: \(error)")
+            print("[BLE] Raw data: \(dataString)")
+            lastError = "Sensor parse error: \(error.localizedDescription)"
+        }
+    }
+
+    private func parseResponseCharacteristic(_ data: Data) {
+        // CAL_STOPPED arrives on the response characteristic with calibration values embedded.
+        // Try FinalCalibrationResponse first so the values are not discarded.
+        if let finalCal = try? JSONDecoder().decode(FinalCalibrationResponse.self, from: data),
+           finalCal.ack == "CAL_STOPPED" {
+            print("[BLE] Response ACK: \(finalCal.ack)")
+            isCalibrating = false
+            self.lastResponse = BleResponse(ack: finalCal.ack, error: nil)
+
+            // Zero offsets mean the Helm rejected the calibration (insufficient samples
+            // or duration) and returned its default/previous values — do not overwrite
+            // valid stored calibration with bad data.
+            guard abs(finalCal.offsetX) > 0.01 || abs(finalCal.offsetY) > 0.01 || abs(finalCal.offsetZ) > 0.01 else {
+                print("[BLE] CAL_STOPPED has zero offsets — Helm rejected calibration (insufficient samples/duration). Stored calibration unchanged.")
+                return
+            }
+
+            let existingHeadingOffset = DataStore.shared.calibration.headingOffset
+            let sampleCount = calibrationData?.samples ?? 0
+            let calibration = CompassCalibration(
+                offsetX: finalCal.offsetX,
+                offsetY: finalCal.offsetY,
+                offsetZ: finalCal.offsetZ,
+                scaleX: finalCal.scaleX,
+                scaleY: finalCal.scaleY,
+                scaleZ: finalCal.scaleZ,
+                headingOffset: finalCal.headingOffset ?? existingHeadingOffset,
+                dateCalibrated: Date(),
+                sampleCount: max(sampleCount, 1)
+            )
+            DataStore.shared.updateCalibration(calibration)
+            print("[BLE] Calibration saved: offset(\(calibration.offsetX),\(calibration.offsetY),\(calibration.offsetZ))")
+
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(500))
+                self.sendCalibrationValues(calibration)
+            }
+            return
+        }
+
+        // Generic command acknowledgment
+        if let response = try? JSONDecoder().decode(BleResponse.self, from: data) {
+            self.lastResponse = response
+            handleAuthResponse(response)
+            let pairingHandled = applyRemotePairing(response)
+
+            if let ack = response.ack {
+                print("[BLE] Response ACK: \(ack)")
+                if ack == "START_CAL" || ack == "CAL_STARTED" {
+                    isCalibrating = true
+                }
+            }
+
+            if let error = response.error {
+                print("[BLE] Response error: \(error)")
+                if !pairingHandled {
+                    self.lastError = error
+                }
+            }
+        } else {
+            let dataString = String(data: data, encoding: .utf8) ?? "non-UTF8 data"
+            print("[BLE] Failed to parse response: \(dataString)")
+        }
+    }
+
+    private func parseCalibrationCharacteristic(_ data: Data) {
+        // Try to decode final calibration response first (most specific)
+        if let finalCal = try? JSONDecoder().decode(FinalCalibrationResponse.self, from: data) {
+            print("[BLE] Received final calibration: offset(\(finalCal.offsetX),\(finalCal.offsetY),\(finalCal.offsetZ)) scale(\(finalCal.scaleX),\(finalCal.scaleY),\(finalCal.scaleZ)) headingOffset(\(finalCal.headingOffset ?? 0))")
+            
+            if finalCal.ack == "CAL_STOPPED" {
+                isCalibrating = false
+                self.lastResponse = BleResponse(ack: finalCal.ack, error: nil)
+
+                // Zero offsets mean the Helm rejected the calibration (insufficient
+                // samples or duration) — do not overwrite valid stored calibration.
+                guard abs(finalCal.offsetX) > 0.01 || abs(finalCal.offsetY) > 0.01 || abs(finalCal.offsetZ) > 0.01 else {
+                    print("[BLE] CAL_STOPPED has zero offsets — Helm rejected calibration. Stored calibration unchanged.")
+                    return
+                }
+
+                let sampleCount = calibrationData?.samples ?? 0
+                let existingHeadingOffset = DataStore.shared.calibration.headingOffset
+
+                let calibration = CompassCalibration(
+                    offsetX: finalCal.offsetX,
+                    offsetY: finalCal.offsetY,
+                    offsetZ: finalCal.offsetZ,
+                    scaleX: finalCal.scaleX,
+                    scaleY: finalCal.scaleY,
+                    scaleZ: finalCal.scaleZ,
+                    headingOffset: finalCal.headingOffset ?? existingHeadingOffset,
+                    dateCalibrated: Date(),
+                    sampleCount: max(sampleCount, 1)
+                )
+                DataStore.shared.updateCalibration(calibration)
+                print("[BLE] Calibration saved: offset(\(calibration.offsetX),\(calibration.offsetY),\(calibration.offsetZ))")
+
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(500))
+                    self.sendCalibrationValues(calibration)
+                }
+            }
+            return
+        }
+        
+        // Only update calibration data if we're actively calibrating
+        if isCalibrating {
+            if let calData = try? JSONDecoder().decode(CalibrationData.self, from: data) {
+                self.calibrationData = calData
+                return
+            }
+        }
+        
+        if let response = try? JSONDecoder().decode(BleResponse.self, from: data) {
+            self.lastResponse = response
+            handleAuthResponse(response)
+            
+            if let ack = response.ack {
+                if ack == "START_CAL" || ack == "CAL_STARTED" {
+                    isCalibrating = true
+                } else if ack == "STOP_CAL" || ack == "CAL_STOPPED" {
+                    isCalibrating = false
+                }
+            }
+            
+            if let error = response.error {
+                self.lastError = error
+            }
+            return
+        }
+        
+        print("[BLE] Failed to parse calibration characteristic data: \(String(data: data, encoding: .utf8) ?? "non-UTF8")")
+    }
+}
+
+extension BluetoothManager: CBCentralManagerDelegate {
+
+    nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        Task { @MainActor in
+            switch central.state {
+            case .poweredOn:
+                startScanning()
+            case .poweredOff:
+                connectionState = .disconnected
+                clearDeviceData()
+                lastError = "Bluetooth is off"
+            case .unauthorized:
+                lastError = "Bluetooth permission denied"
+            case .unsupported, .resetting, .unknown:
+                break
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    nonisolated func centralManager(
+        _ central: CBCentralManager,
+        didDiscover peripheral: CBPeripheral,
+        advertisementData: [String: Any],
+        rssi RSSI: NSNumber
+    ) {
+        let name = peripheral.name ?? "Unknown"
+        guard name == BleConstants.deviceName else { return }
+
+        central.stopScan()
+
+        Task { @MainActor in
+            self.peripheral = peripheral
+            peripheral.delegate = self
+            self.connectionState = .connecting
+            central.connect(peripheral, options: nil)
+        }
+    }
+
+    nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        Task { @MainActor in
+            disconnectGraceTimer?.invalidate()
+            connectionState = .connected
+            shouldReconnect = true
+            peripheral.discoverServices([BleUuids.service])
+            startRSSIMonitoring()
+        }
+    }
+
+    nonisolated func centralManager(
+        _ central: CBCentralManager,
+        didFailToConnect peripheral: CBPeripheral,
+        error: Error?
+    ) {
+        Task { @MainActor in
+            connectionState = .disconnected
+            lastError = error?.localizedDescription ?? "Connection failed"
+            clearCharacteristics()
+            clearDeviceData()
+            stopRSSIMonitoring()
+            scheduleReconnect()
+        }
+    }
+
+    nonisolated func centralManager(
+        _ central: CBCentralManager,
+        didDisconnectPeripheral peripheral: CBPeripheral,
+        error: Error?
+    ) {
+        Task { @MainActor in
+            clearCharacteristics()
+            clearDeviceData()
+            stopRSSIMonitoring()
+
+            if shouldReconnect {
+                startDisconnectGracePeriod()
+                scheduleReconnect()
+            } else {
+                disconnectGraceTimer?.invalidate()
+                connectionState = .disconnected
+            }
+        }
+    }
+}
+
+extension BluetoothManager: CBPeripheralDelegate {
+
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        guard let service = peripheral.services?.first(where: { $0.uuid == BleUuids.service }) else { return }
+
+        peripheral.discoverCharacteristics([
+            BleUuids.sensorStatus,
+            BleUuids.command,
+            BleUuids.calibration,
+            BleUuids.response
+        ], for: service)
+    }
+
+    nonisolated func peripheral(
+        _ peripheral: CBPeripheral,
+        didDiscoverCharacteristicsFor service: CBService,
+        error: Error?
+    ) {
+        guard let characteristics = service.characteristics else { return }
+
+        Task { @MainActor in
+            for char in characteristics {
+                switch char.uuid {
+                case BleUuids.sensorStatus:
+                    sensorStatusChar = char
+                    peripheral.setNotifyValue(true, for: char)
+                case BleUuids.command:
+                    commandChar = char
+                case BleUuids.calibration:
+                    calibrationChar = char
+                    peripheral.setNotifyValue(true, for: char)
+                case BleUuids.response:
+                    responseChar = char
+                    peripheral.setNotifyValue(true, for: char)
+                default:
+                    break
+                }
+            }
+
+            if commandChar != nil {
+                characteristicsReady = true
+                print("[BLE] All characteristics discovered - starting authentication")
+                autoUploadPending = true
+                beginAuthentication()
+            }
+        }
+    }
+
+    nonisolated func peripheral(
+        _ peripheral: CBPeripheral,
+        didUpdateValueFor characteristic: CBCharacteristic,
+        error: Error?
+    ) {
+        guard let data = characteristic.value else { return }
+
+        Task { @MainActor in
+            switch characteristic.uuid {
+            case BleUuids.sensorStatus:
+                parseSensorStatus(data)
+            case BleUuids.calibration:
+                parseCalibrationCharacteristic(data)
+            case BleUuids.response:
+                parseResponseCharacteristic(data)
+            default:
+                break
+            }
+        }
+    }
+
+    nonisolated func peripheral(
+        _ peripheral: CBPeripheral,
+        didWriteValueFor characteristic: CBCharacteristic,
+        error: Error?
+    ) {
+        guard let error else { return }
+        Task { @MainActor in
+            print("[BLE] Write failed for \(characteristic.uuid): \(error.localizedDescription)")
+            self.lastError = "Command failed: \(error.localizedDescription)"
+        }
+    }
+
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
+        guard error == nil else { return }
+        Task { @MainActor in
+            rssi = RSSI.intValue
+            signalStrength = BLESignalStrength.from(rssi: RSSI.intValue)
+        }
+    }
+}
