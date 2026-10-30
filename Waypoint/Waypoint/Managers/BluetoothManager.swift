@@ -48,6 +48,7 @@ class BluetoothManager: NSObject, ObservableObject {
     @Published private(set) var calibrationData: CalibrationData?
     @Published private(set) var isCalibrating: Bool = false
     @Published private(set) var commandHistory: [BLECommandHistory] = []
+    @Published private(set) var remotePairing = RemotePairingState()
 
     private var centralManager: CBCentralManager?
     private var peripheral: CBPeripheral?
@@ -67,6 +68,7 @@ class BluetoothManager: NSObject, ObservableObject {
     
     private var locationTracker: LocationWithSpeed?
     private var lastLocationUpdate: Date?
+    private var awaitingRemotePairStart = false
     
     private let maxCommandHistory = 5
 
@@ -276,6 +278,119 @@ class BluetoothManager: NSObject, ObservableObject {
         autoUploadCalibration()
         autoUploadSpotLockSettings()
         autoUploadNavSettings()
+        requestRemotePairStatus()
+    }
+
+    func requestRemotePairStatus() {
+        guard isOperational else { return }
+        sendCommand("PAIR_STATUS")
+    }
+
+    func startRemotePairing() {
+        awaitingRemotePairStart = true
+        remotePairing.isListening = false
+        remotePairing.heardButton = nil
+        remotePairing.message = "Starting capture…"
+        sendCommand("PAIR_START")
+    }
+
+    func cancelRemotePairing() {
+        sendCommand("PAIR_CANCEL")
+    }
+
+    func clearRemotePairing() {
+        sendCommand("PAIR_CLEAR")
+    }
+
+    private func friendlyRemoteButton(_ raw: String?) -> String {
+        switch raw {
+        case "UP": return "Up"
+        case "DOWN": return "Down"
+        case "LEFT": return "Left"
+        case "RIGHT": return "Right"
+        case "MOTOR": return "Motor"
+        case "MOMENTARY": return "Momentary"
+        default: return raw ?? "a button"
+        }
+    }
+
+    /// Updates handset-capture state. Returns true when the response should not also become the global connection error.
+    private func applyRemotePairing(_ response: BleResponse) -> Bool {
+        if response.ack?.hasPrefix("PAIR_") == true || response.error?.hasPrefix("PAIR_") == true {
+            awaitingRemotePairStart = false
+        }
+
+        if let ack = response.ack {
+            switch ack {
+            case "PAIR_STARTED":
+                remotePairing.isListening = true
+                remotePairing.heardButton = nil
+                remotePairing.message = "Press and hold a button on the handset."
+                return true
+            case "PAIR_HEARD":
+                remotePairing.isListening = true
+                remotePairing.heardButton = response.button
+                if let id = response.id, !id.isEmpty {
+                    remotePairing.deviceId = id
+                }
+                let name = friendlyRemoteButton(response.button)
+                remotePairing.message = "Heard \(name). Press a different button on the same handset."
+                return true
+            case "PAIR_CONFIRMED":
+                remotePairing.isListening = false
+                remotePairing.heardButton = nil
+                remotePairing.deviceId = response.id ?? remotePairing.deviceId
+                remotePairing.source = response.source ?? "nvs"
+                remotePairing.message = "Handset saved on the Helm."
+                return true
+            case "PAIR_CANCELLED":
+                remotePairing.isListening = false
+                remotePairing.heardButton = nil
+                remotePairing.message = "Capture cancelled."
+                return true
+            case "PAIR_STATUS", "PAIR_CLEARED":
+                remotePairing.deviceId = response.id ?? ""
+                remotePairing.source = response.source ?? "none"
+                if ack == "PAIR_CLEARED" {
+                    remotePairing.isListening = false
+                    remotePairing.heardButton = nil
+                    remotePairing.message = remotePairing.deviceId.isEmpty
+                        ? "Saved handset removed."
+                        : "Saved handset removed. The Helm is using its firmware id."
+                }
+                return true
+            default:
+                break
+            }
+        }
+
+        switch response.error {
+        case "PAIR_TIMEOUT":
+            remotePairing.isListening = false
+            remotePairing.heardButton = nil
+            remotePairing.message = "No handset heard. Hold the remote next to the Helm and try again."
+            return true
+        case "PAIR_MISMATCH":
+            remotePairing.message = "That press did not match the first one. Use the same handset."
+            return true
+        case "PAIR_FAILED":
+            remotePairing.isListening = false
+            remotePairing.message = "The Helm radio could not start listening."
+            return true
+        case "AUTONOMY_ACTIVE":
+            awaitingRemotePairStart = false
+            remotePairing.isListening = false
+            remotePairing.message = "Disengage spot lock or navigation before capturing the handset."
+            return true
+        case "RF not available":
+            guard awaitingRemotePairStart else { return false }
+            awaitingRemotePairStart = false
+            remotePairing.isListening = false
+            remotePairing.message = "The Helm radio is not available."
+            return true
+        default:
+            return false
+        }
     }
 
     private func handleAuthResponse(_ response: BleResponse) {
@@ -370,6 +485,12 @@ class BluetoothManager: NSObject, ObservableObject {
         isCalibrating = false
         calibrationData = nil
         isAuthenticated = false
+        awaitingRemotePairStart = false
+        if remotePairing.isListening {
+            remotePairing.message = "Disconnected before the handset was saved."
+        }
+        remotePairing.isListening = false
+        remotePairing.heardButton = nil
         pendingCommands.removeAll()
         autoUploadPending = false
         authTimeoutTask?.cancel()
@@ -482,6 +603,7 @@ class BluetoothManager: NSObject, ObservableObject {
         if let response = try? JSONDecoder().decode(BleResponse.self, from: data) {
             self.lastResponse = response
             handleAuthResponse(response)
+            let pairingHandled = applyRemotePairing(response)
 
             if let ack = response.ack {
                 print("[BLE] Response ACK: \(ack)")
@@ -492,7 +614,9 @@ class BluetoothManager: NSObject, ObservableObject {
 
             if let error = response.error {
                 print("[BLE] Response error: \(error)")
-                self.lastError = error
+                if !pairingHandled {
+                    self.lastError = error
+                }
             }
         } else {
             let dataString = String(data: data, encoding: .utf8) ?? "non-UTF8 data"

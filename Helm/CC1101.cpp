@@ -166,6 +166,22 @@ void CC1101::stopTx() {
     strobe(CC1101Reg::sidle);
 }
 
+bool CC1101::startRx() {
+    if (!strobe(CC1101Reg::sidle)) return false;
+    delayMicroseconds(100);
+    if (!writeReg(CC1101Reg::iocfg0, CC1101Config::iocfg0RxVal)) return false;
+    if (!strobe(CC1101Reg::scal)) return false;
+    delay(1);
+    if (!strobe(CC1101Reg::srx)) return false;
+    delayMicroseconds(500);
+    return true;
+}
+
+void CC1101::stopRx() {
+    strobe(CC1101Reg::sidle);
+    writeReg(CC1101Reg::iocfg0, CC1101Config::iocfg0Val);
+}
+
 bool CC1101::writeReg(uint8_t addr, uint8_t value) {
     SPI.beginTransaction(_spiSettings);
     select();

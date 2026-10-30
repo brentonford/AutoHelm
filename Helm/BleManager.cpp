@@ -147,6 +147,7 @@ bool BleManager::isPrivilegedCommand(const char* cmd) const {
     return strncmp(cmd, "RF_", 3) == 0
         || strncmp(cmd, "SPOTLOCK_", 9) == 0
         || strncmp(cmd, "NAV_", 4) == 0
+        || strncmp(cmd, "PAIR_", 5) == 0
         || strcmp(cmd, "START_CAL") == 0
         || strcmp(cmd, "STOP_CAL") == 0
         || strncmp(cmd, "CAL_VALUES:", 11) == 0;
@@ -449,6 +450,15 @@ void BleManager::parseCommand(const char* data) {
         _status.pendingNavCommand = NavCommand::Cancel;
         sendResponse("{\"ack\":\"NAV_CANCEL\"}");
 
+    } else if (strcmp(cmd, "PAIR_START") == 0) {
+        _status.pendingPairCommand = PairCommand::Start;
+    } else if (strcmp(cmd, "PAIR_CANCEL") == 0) {
+        _status.pendingPairCommand = PairCommand::Cancel;
+    } else if (strcmp(cmd, "PAIR_STATUS") == 0) {
+        _status.pendingPairCommand = PairCommand::Status;
+    } else if (strcmp(cmd, "PAIR_CLEAR") == 0) {
+        _status.pendingPairCommand = PairCommand::Clear;
+
     } else if (strncmp(cmd, "RF_", 3) == 0) {
         if (len < 4 || len > 32) {
             Serial.println("[BLE] ERROR: Invalid RF command length");
@@ -683,4 +693,14 @@ SpotLockSettings BleManager::consumeNavSettings() {
     SpotLockSettings s = _status.navPendingSettings;
     _status.hasNavSettingsPending = false;
     return s;
+}
+
+bool BleManager::hasPairCommandPending() const {
+    return _status.pendingPairCommand != PairCommand::None;
+}
+
+PairCommand BleManager::consumePairCommand() {
+    PairCommand cmd = _status.pendingPairCommand;
+    _status.pendingPairCommand = PairCommand::None;
+    return cmd;
 }

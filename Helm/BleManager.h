@@ -55,6 +55,14 @@ enum class NavCommand : uint8_t {
     Cancel
 };
 
+enum class PairCommand : uint8_t {
+    None,
+    Start,
+    Cancel,
+    Status,
+    Clear
+};
+
 struct BleStatus {
     bool connected;
     BleCommand pendingCommand;
@@ -79,6 +87,8 @@ struct BleStatus {
     SpotLockSettings navPendingSettings;
     bool             hasNavSettingsPending;
 
+    PairCommand      pendingPairCommand;
+
     BleStatus()
         : connected(false)
         , pendingCommand(BleCommand::None)
@@ -94,7 +104,8 @@ struct BleStatus {
         , navTargetLat(0.0f)
         , navTargetLon(0.0f)
         , navTargetSpeed(5)
-        , hasNavSettingsPending(false) {
+        , hasNavSettingsPending(false)
+        , pendingPairCommand(PairCommand::None) {
     }
 };
 
@@ -141,6 +152,9 @@ public:
     uint8_t          getNavTargetSpeed() const;
     bool             hasNavSettingsPending() const;
     SpotLockSettings consumeNavSettings();
+
+    bool        hasPairCommandPending() const;
+    PairCommand consumePairCommand();
 
     bool wasJustDisconnected() const;
     void clearDisconnectFlag();

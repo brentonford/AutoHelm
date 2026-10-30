@@ -95,6 +95,17 @@ enum BLESignalStrength {
 struct BleResponse: Codable, Equatable {
     let ack: String?
     let error: String?
+    var button: String? = nil
+    var id: String? = nil
+    var source: String? = nil
+}
+
+struct RemotePairingState: Equatable {
+    var isListening: Bool = false
+    var heardButton: String? = nil
+    var deviceId: String = ""
+    var source: String = "none"
+    var message: String? = nil
 }
 
 enum ConnectionState: String {

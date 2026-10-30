@@ -110,6 +110,98 @@ void printSensorStatus() {
     Serial.printf("  BLE Connected:     %s\n", ble.isConnected() ? "YES" : "NO");
 }
 
+void sendPairIdentity(const char* ack) {
+    const char* source = "none";
+    const char* id = "";
+    if (remote.hasDeviceId()) {
+        id = remote.deviceId();
+        source = remote.deviceIdFromNvs() ? "nvs" : "firmware";
+    }
+    char response[96];
+    snprintf(response, sizeof(response),
+             "{\"ack\":\"%s\",\"id\":\"%s\",\"source\":\"%s\"}",
+             ack, id, source);
+    ble.sendResponse(response);
+}
+
+void processPairCommand() {
+    if (!ble.hasPairCommandPending()) return;
+
+    PairCommand cmd = ble.consumePairCommand();
+    switch (cmd) {
+        case PairCommand::Start:
+            if (!remoteAvailable) {
+                ble.sendResponse("{\"error\":\"RF not available\"}");
+                return;
+            }
+            if (!helmMode.allowsManualRf()) {
+                ble.sendResponse("{\"error\":\"AUTONOMY_ACTIVE\"}");
+                return;
+            }
+            if (remote.startPairing()) {
+                ble.sendResponse("{\"ack\":\"PAIR_STARTED\"}");
+            } else {
+                ble.sendResponse("{\"error\":\"PAIR_FAILED\"}");
+            }
+            break;
+
+        case PairCommand::Cancel:
+            remote.cancelPairing();
+            ble.sendResponse("{\"ack\":\"PAIR_CANCELLED\"}");
+            break;
+
+        case PairCommand::Clear:
+            remote.clearStoredDeviceId();
+            sendPairIdentity("PAIR_CLEARED");
+            break;
+
+        case PairCommand::Status:
+            sendPairIdentity("PAIR_STATUS");
+            break;
+
+        case PairCommand::None:
+            break;
+    }
+}
+
+void pollRemotePairing() {
+    if (!remoteAvailable) return;
+
+    char button[12];
+    char id[13];
+    PairEvent event = remote.pollPairing(button, sizeof(button), id, sizeof(id));
+    char response[128];
+
+    switch (event) {
+        case PairEvent::Heard:
+            snprintf(response, sizeof(response),
+                     "{\"ack\":\"PAIR_HEARD\",\"button\":\"%s\",\"id\":\"%s\"}",
+                     button, id);
+            ble.sendResponse(response);
+            break;
+        case PairEvent::Confirmed:
+            snprintf(response, sizeof(response),
+                     "{\"ack\":\"PAIR_CONFIRMED\",\"id\":\"%s\",\"source\":\"nvs\"}",
+                     id);
+            ble.sendResponse(response);
+            break;
+        case PairEvent::Mismatch:
+            snprintf(response, sizeof(response),
+                     "{\"error\":\"PAIR_MISMATCH\",\"id\":\"%s\"}",
+                     id);
+            ble.sendResponse(response);
+            break;
+        case PairEvent::Timeout:
+            ble.sendResponse("{\"error\":\"PAIR_TIMEOUT\"}");
+            break;
+        case PairEvent::Cancelled:
+            ble.sendResponse("{\"ack\":\"PAIR_CANCELLED\"}");
+            break;
+        case PairEvent::None:
+            break;
+    }
+}
+
 void processNavCommand() {
     if (!ble.hasNavSettingsPending() && !ble.hasNavCommandPending()) return;
 
@@ -474,6 +566,11 @@ void executeBleDisconnectSafety() {
 void checkBleDisconnect() {
     uint32_t now = millis();
 
+    if (!ble.isConnected() && remoteAvailable && remote.isPairing()) {
+        remote.cancelPairing();
+        Serial.println("[Remote] Pairing stopped — BLE disconnected");
+    }
+
     if (ble.isConnected()) {
         if (disconnectSafetyPending) {
             disconnectSafetyPending = false;
@@ -567,7 +664,9 @@ void loop() {
         }
     }
 
-    if (remoteAvailable) {
+    bool pairing = remoteAvailable && remote.isPairing();
+
+    if (remoteAvailable && !pairing) {
         helmMode.update(gps.getData(), currentHeading);
     }
 
@@ -576,20 +675,38 @@ void loop() {
         processBleCommand();
         processSpotLockCommand();
         processNavCommand();
-        processBleRfCommand();
-        processManualBurst();
-        processHoldTransmission();
+        processPairCommand();
+        if (!(remoteAvailable && remote.isPairing())) {
+            processBleRfCommand();
+            processManualBurst();
+            processHoldTransmission();
+        }
         streamCalibrationData();
     }
 
     checkBleDisconnect();
     processEmergencyStop();
+    if (remoteAvailable) {
+        pollRemotePairing();
+    }
     broadcastSensorStatus();
 
     if (!Serial.available())
         return;
 
     char c = Serial.read();
+
+    if (remoteAvailable && remote.isPairing()) {
+        switch (c) {
+            case 'R': case 'L': case 'U': case 'D': case 'M': case 'S':
+            case 'r': case 'l': case 'u': case 'd': case 'm': case 's':
+            case '0':
+                Serial.println("[Remote] Serial motor command ignored during handset capture");
+                return;
+            default:
+                break;
+        }
+    }
 
     switch (c) {
         case 'R': startManualBurst(Button::Right); break;

@@ -11,6 +11,7 @@ struct SettingsView: View {
             calibrationSection
             northCalibrationSection
             bleSecuritySection
+            remotePairingSection()
             deviceSection
             spotLockSection
             dataSection
@@ -18,6 +19,94 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showingCalibrationSheet) {
             CalibrationView()
+        }
+        .onAppear {
+            bluetooth.requestRemotePairStatus()
+        }
+    }
+
+    private var helmIsAutonomous: Bool {
+        switch bluetooth.sensorData?.currentHelmState {
+        case .spotLockActive, .navApproaching, .navArriving, .disengaging:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func remotePairingSection() -> some View {
+        let pairing = bluetooth.remotePairing
+        let statusText: String = {
+            if pairing.isListening { return "Listening" }
+            switch pairing.source {
+            case "nvs": return "Captured from handset"
+            case "firmware": return "Using firmware id"
+            default: return "No handset captured"
+            }
+        }()
+
+        return Section {
+            HStack {
+                Text("Handset")
+                Spacer()
+                Text(statusText)
+                    .foregroundColor(pairing.source == "none" && !pairing.isListening ? .orange : .secondary)
+            }
+
+            if !pairing.deviceId.isEmpty {
+                HStack {
+                    Text("Device ID")
+                    Spacer()
+                    Text(pairing.deviceId)
+                        .font(.body.monospaced())
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            if pairing.isListening {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text(pairing.message ?? "Listening for the handset.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            } else if let message = pairing.message {
+                Text(message)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            if pairing.isListening {
+                Button("Cancel capture") {
+                    bluetooth.cancelRemotePairing()
+                }
+            } else {
+                Button {
+                    bluetooth.startRemotePairing()
+                } label: {
+                    HStack {
+                        Image(systemName: "wave.3.right")
+                        Text("Capture from handset")
+                    }
+                }
+                .disabled(!bluetooth.isOperational || helmIsAutonomous)
+            }
+
+            if pairing.source == "nvs" && !pairing.isListening {
+                Button(role: .destructive) {
+                    bluetooth.clearRemotePairing()
+                } label: {
+                    HStack {
+                        Image(systemName: "trash")
+                        Text("Forget saved handset")
+                    }
+                }
+                .disabled(!bluetooth.isOperational)
+            }
+        } header: {
+            Text("Motor Remote")
+        } footer: {
+            Text("Hold the Watersnake handset next to the Helm. Press one button until it is recognised, then press a different button. The Helm stores that handset and uses it for every motor command.")
         }
     }
     

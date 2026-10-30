@@ -39,6 +39,7 @@ namespace CC1101Reg {
     // Command strobes
     constexpr uint8_t sres     = 0x30;
     constexpr uint8_t scal     = 0x33;
+    constexpr uint8_t srx      = 0x34;
     constexpr uint8_t stx      = 0x35;
     constexpr uint8_t sidle    = 0x36;
 
@@ -91,8 +92,9 @@ namespace CC1101Config {
     constexpr uint8_t test1Val = 0x35;
     constexpr uint8_t test0Val = 0x09;
     
-    // GDO0: High-Z for async TX input
+    // GDO0: High-Z for async TX input. 0x0D is serial data out for async RX.
     constexpr uint8_t iocfg0Val = 0x2E;
+    constexpr uint8_t iocfg0RxVal = 0x0D;
     
     // Packet control: Async serial mode
     constexpr uint8_t pktctrl0Val = 0x32;
@@ -127,6 +129,8 @@ public:
     bool configure();
     void startTx();
     void stopTx();
+    bool startRx();
+    void stopRx();
     bool writeReg(uint8_t addr, uint8_t value);
     uint8_t readStatusReg(uint8_t addr) const;
     bool strobe(uint8_t cmd);
